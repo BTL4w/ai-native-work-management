@@ -1,0 +1,12 @@
+{
+  "metadata": {
+    "title": "AI-native Work Management",
+    "description": "A secure foundation for managing projects and tasks"
+  },
+  "home": {
+    "eyebrow": "Phase 1 · Frontend foundation",
+    "title": "Work management starts with a dependable manual flow.",
+    "description": "The application shell is ready. Authentication, projects and tasks will be implemented in later focused steps.",
+    "status": "Frontend foundation ready"
+  }
+}

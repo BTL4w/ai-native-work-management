@@ -1,0 +1,12 @@
+{
+  "metadata": {
+    "title": "Quản lý công việc AI-native",
+    "description": "Nền tảng an toàn để quản lý project và task"
+  },
+  "home": {
+    "eyebrow": "Phase 1 · Nền tảng frontend",
+    "title": "Quản lý công việc bắt đầu từ một luồng thủ công đáng tin cậy.",
+    "description": "Application shell đã sẵn sàng. Đăng nhập, project và task sẽ được triển khai trong các bước riêng tiếp theo.",
+    "status": "Frontend foundation đã sẵn sàng"
+  }
+}
