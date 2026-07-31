@@ -32,3 +32,32 @@ corepack pnpm@10 build
 The root-level `make` commands documented in `PLAN.md` will be added in a later
 tooling-focused step after the corresponding backend and local infrastructure
 exist.
+
+## Backend development
+
+The backend foundation currently provides the FastAPI application shell,
+configuration and structured error handling. It does not connect to a database
+or implement product endpoints yet.
+
+Prerequisite: install [uv](https://docs.astral.sh/uv/).
+
+Run the backend:
+
+```bash
+cd backend
+uv sync --locked
+uv run fastapi dev app/main.py
+```
+
+FastAPI runs at `http://localhost:8000`; its development API documentation is at
+`http://localhost:8000/docs`.
+
+Backend quality checks:
+
+```bash
+cd backend
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+```

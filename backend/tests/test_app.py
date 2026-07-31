@@ -1,0 +1,115 @@
+"""Smoke and transport-contract tests for the FastAPI foundation."""
+
+from collections.abc import Mapping
+from typing import Annotated
+
+import pytest
+from fastapi import FastAPI, Path
+from httpx import ASGITransport, AsyncClient, Response
+
+from app.api.errors import ApplicationError
+from app.core.config import Settings
+from app.main import create_app
+
+
+def _test_app() -> FastAPI:
+    return create_app(Settings(environment="test"))
+
+
+async def _get(
+    app: FastAPI,
+    path: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    raise_app_exceptions: bool = True,
+) -> Response:
+    transport = ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.get(path, headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_openapi_document_is_available() -> None:
+    response = await _get(_test_app(), "/openapi.json")
+
+    assert response.status_code == 200
+    assert response.json()["info"]["title"] == "Work Management API"
+    assert response.json()["paths"] == {}
+    assert response.headers["X-Request-ID"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_api_route_uses_structured_error_contract() -> None:
+    response = await _get(
+        _test_app(),
+        "/api/v1/unknown",
+        headers={"X-Request-ID": "learning-run-1"},
+    )
+
+    assert response.status_code == 404
+    assert response.headers["X-Request-ID"] == "learning-run-1"
+    assert response.json() == {
+        "error": {
+            "code": "RESOURCE_NOT_FOUND",
+            "message_key": "common.error.notFound",
+            "request_id": "learning-run-1",
+            "field_errors": [],
+            "details": {},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_request_validation_uses_structured_error_contract() -> None:
+    app = _test_app()
+
+    @app.get("/api/v1/_test/items/{item_id}")
+    async def get_test_item(  # pyright: ignore[reportUnusedFunction]
+        item_id: Annotated[int, Path(gt=0)],
+    ) -> dict[str, int]:
+        return {"item_id": item_id}
+
+    response = await _get(app, "/api/v1/_test/items/not-an-integer")
+
+    assert response.status_code == 422
+    payload = response.json()["error"]
+    assert payload["code"] == "VALIDATION_FAILED"
+    assert payload["message_key"] == "common.error.validation"
+    assert payload["field_errors"][0]["field"] == "path.item_id"
+    assert "input" not in payload
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_does_not_expose_internal_details() -> None:
+    app = _test_app()
+
+    @app.get("/api/v1/_test/failure")
+    async def fail_for_test() -> None:  # pyright: ignore[reportUnusedFunction]
+        raise RuntimeError("private failure detail")
+
+    response = await _get(app, "/api/v1/_test/failure", raise_app_exceptions=False)
+
+    assert response.status_code == 500
+    assert response.headers["X-Request-ID"]
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert "private failure detail" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_expected_application_error_keeps_safe_structured_details() -> None:
+    app = _test_app()
+
+    @app.get("/api/v1/_test/conflict")
+    async def conflict_for_test() -> None:  # pyright: ignore[reportUnusedFunction]
+        raise ApplicationError(
+            status_code=409,
+            code="RESOURCE_VERSION_MISMATCH",
+            message_key="common.error.resourceVersionMismatch",
+            details={"current_version": 2},
+        )
+
+    response = await _get(app, "/api/v1/_test/conflict")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "RESOURCE_VERSION_MISMATCH"
+    assert response.json()["error"]["details"] == {"current_version": 2}

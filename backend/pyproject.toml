@@ -1,0 +1,42 @@
+[project]
+name = "work-management-backend"
+version = "0.1.0"
+description = "FastAPI modular-monolith backend for AI-native work management"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi[standard]==0.140.3",
+    "pydantic-settings>=2.0,<3.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1.0",
+    "pyright>=1.1,<2.0",
+    "pytest>=9.0,<10.0",
+    "pytest-asyncio>=1.0,<2.0",
+    "pytest-cov>=7.0,<8.0",
+    "ruff>=0.15,<1.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["app", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+venv = ".venv"
+venvPath = "."
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
