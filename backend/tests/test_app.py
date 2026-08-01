@@ -38,11 +38,29 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
         "/api/v1/me",
+        "/api/v1/projects",
+        "/api/v1/projects/{project_id}",
     }
     login_responses = response.json()["paths"]["/api/v1/auth/login"]["post"]["responses"]
     assert login_responses["422"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ErrorResponse"
     }
+    project_collection = response.json()["paths"]["/api/v1/projects"]
+    project_resource = response.json()["paths"]["/api/v1/projects/{project_id}"]
+    assert set(project_collection) == {"get", "post"}
+    assert set(project_resource) == {"get", "patch"}
+    create_parameters = {
+        parameter["name"]: parameter for parameter in project_collection["post"]["parameters"]
+    }
+    update_parameters = {
+        parameter["name"]: parameter for parameter in project_resource["patch"]["parameters"]
+    }
+    assert create_parameters["Idempotency-Key"]["required"] is True
+    assert update_parameters["Idempotency-Key"]["required"] is True
+    assert "If-Match" in update_parameters
+    assert project_collection["post"]["responses"]["201"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/ProjectResponse"}
     assert response.headers["X-Request-ID"]
 
 

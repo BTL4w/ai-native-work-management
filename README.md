@@ -2,8 +2,9 @@
 
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
-the identity/organization schema, local demo accounts and session authentication
-API and login UI are available, but Project/Task behavior is not implemented yet.
+the identity/organization schema, local demo accounts, session authentication,
+login UI and tenant-scoped Project backend are available. Project UI and Task
+behavior are not implemented yet.
 Local Compose currently runs PostgreSQL only; frontend and backend dev servers run
 on the host.
 
@@ -115,6 +116,28 @@ The browser-facing login page is `http://localhost:3000/login`. Browser API call
 use the same-origin `/api/v1` path, which Next.js proxies to FastAPI. Configure a
 different backend origin with `API_ORIGIN` when necessary.
 
+## Project API
+
+With a Manager or Admin session in the cookie jar, create and inspect a Project:
+
+```bash
+curl -i -b /tmp/work-management.cookies \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: project-create-demo-001' \
+  -d '{"name":"Customer onboarding","description":"Standardize onboarding"}' \
+  http://localhost:8000/api/v1/projects
+
+curl -b /tmp/work-management.cookies \
+  http://localhost:8000/api/v1/projects
+```
+
+`POST /api/v1/projects` and `PATCH /api/v1/projects/{project_id}` require an
+`Idempotency-Key` of 16–128 characters. Updates also require the current version
+as `If-Match: "<version>"`; Project responses expose the matching `ETag`.
+Manager/Admin can read all Projects in their tenant. Until the Task backend is
+added, Employee Project reads return no items because no assigned Task can yet
+make a Project visible.
+
 ## Local PostgreSQL
 
 Prerequisite: Docker Desktop with WSL integration enabled for this distro.
@@ -187,8 +210,8 @@ Root commands include `make lint`, `make typecheck`, `make test` and
 
 The backend currently provides the FastAPI application shell, configuration,
 structured error handling, an async SQLAlchemy session factory, Alembic, the
-Phase 1 identity/organization tables and local session authentication. Product
-endpoints are not implemented yet.
+Phase 1 identity/organization tables, local session authentication and the
+tenant-scoped Project API. Task endpoints are the next backend slice.
 
 Prerequisite: install [uv](https://docs.astral.sh/uv/).
 

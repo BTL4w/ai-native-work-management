@@ -466,11 +466,16 @@ PLAN
 → Same-origin API proxy và typed response contracts
 → Frontend auth tests/lint/typecheck/build
 → Browser-facing auth smoke test qua port 3000
+→ Project domain/application service
+→ Project + idempotency migration 0003, FORCE RLS và composite tenant FK
+→ Project authorization, audit, optimistic concurrency và idempotent replay
+→ Project REST/OpenAPI + unit/integration tests
 ```
 
-Bước tiếp theo được đề xuất là **Project backend** của Phase 1: domain/application
-service, migration tenant-owned, RLS, authorization, audit, idempotency và API/test
-cho Project. Run đó chưa làm Project UI hoặc Task.
+Bước tiếp theo được đề xuất là **Task backend** của Phase 1: domain/application
+service, migration tenant-owned, assignment/status workflow, RLS, authorization,
+audit, idempotency và API/test cho Task/My Tasks. Project UI và Task UI vẫn chưa
+thuộc run vừa hoàn thành.
 
 ## 15. Workflow local WSL-native đã chấp nhận
 
