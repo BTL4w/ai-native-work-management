@@ -471,3 +471,59 @@ PLAN
 Bước tiếp theo được đề xuất là **Project backend** của Phase 1: domain/application
 service, migration tenant-owned, RLS, authorization, audit, idempotency và API/test
 cho Project. Run đó chưa làm Project UI hoặc Task.
+
+## 15. Workflow local WSL-native đã chấp nhận
+
+Codex và toàn bộ lệnh repository chạy trong Ubuntu WSL2 từ checkout canonical
+`/home/btl4w/code/ai-native-work-management`. PowerShell chỉ dùng cho thao tác
+host như backup hoặc quản lý WSL. Repository không còn chạy qua `/mnt/c`.
+
+### Lý do migration và runtime đã xác minh
+
+Checkout cũ trên `/mnt/c` phải đi qua lớp filesystem Windows/WSL, làm các workload
+nhiều file như pnpm, ESLint, TypeScript và test chậm. Trạng thái cũ còn từng trộn
+Windows CPython và Windows Corepack với Ubuntu. Checkout mới dùng riêng runtime
+Linux:
+
+```text
+GNU Make 4.3 và Bash /usr/bin/bash
+Node v24.18.1 + Corepack dưới ~/.nvm
+uv Linux và backend/.venv/bin/python báo Linux
+Docker client/server 28.5.1
+```
+
+`uv sync --locked` và `corepack pnpm@10 install --frozen-lockfile` đã tạo lại
+dependency trong filesystem Linux. `backend/uv.lock` và `frontend/pnpm-lock.yaml`
+không thay đổi.
+
+### Quy tắc vận hành và bảo vệ
+
+- Không copy hoặc dùng lại `.venv`, `node_modules` hay cache từ checkout Windows.
+- Không dùng `git clean` diện rộng; các planning document local đang bị Git ignore
+  và phải được backup riêng trước migration hoặc cleanup.
+- Dùng `~/code/ai-native-work-management` cho Codex, Git và mọi project command.
+- Chỉ xóa checkout Windows sau khi clone WSL, patch, tài liệu local, dependency và
+  quality gate đều được xác minh.
+
+### Evidence sau migration
+
+Trên filesystem Linux-native, các gate đã pass và nhanh hơn rõ rệt so với checkout
+`/mnt/c`:
+
+```text
+make lint      → exit 0: Ruff và ESLint pass; 3.09 giây
+make typecheck → exit 0: Pyright 0 errors, 0 warnings; tsc clean; 7.37 giây
+make test      → exit 0: 22 backend tests passed, 4 deselected;
+                  2 frontend files / 7 tests passed; 6.73 giây
+make migration-check → exit 0: Alembic ở revision 0002 (head), không phát hiện
+                       migration mới; 4 integration tests passed
+```
+
+Concern migration này không thay đổi application behavior, database schema, API
+contract, frontend feature hoặc Phase 1 business scope.
+
+### Phần vẫn chưa xác minh
+
+- Dev server, browser smoke và production frontend build chưa được chạy.
+- `pnpm` cảnh báo bỏ qua build script của `@parcel/watcher`, `@swc/core`, `sharp`
+  và `unrs-resolver`; các native path này chưa được xác minh trực tiếp.

@@ -205,6 +205,15 @@ A task is not complete merely because the happy path works. It is complete only 
 
 ## Local Commands
 
+### Accepted local environment boundary
+
+- Run Codex and all repository Git, search, edit, Make, Python, Node, pnpm,
+  Docker and test commands inside Ubuntu WSL2.
+- Use the canonical checkout at `/home/btl4w/code/ai-native-work-management`.
+- Use Windows PowerShell only for host-level operations such as backup or WSL
+  management, not for repository commands.
+- Never share or reuse `.venv` or `node_modules` between Windows and Ubuntu.
+
 When Phase 1 creates the project tooling, expose stable repository-level commands for at least:
 
 - `make dev`

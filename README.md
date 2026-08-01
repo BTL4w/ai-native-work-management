@@ -7,6 +7,55 @@ API and login UI are available, but Project/Task behavior is not implemented yet
 Local Compose currently runs PostgreSQL only; frontend and backend dev servers run
 on the host.
 
+## Accepted local environment
+
+Run Codex and all repository commands inside Ubuntu WSL2 from the Linux-native
+checkout:
+
+```bash
+cd ~/code/ai-native-work-management
+```
+
+Windows PowerShell is reserved for host-level backup or WSL management. Keeping
+the repository on the WSL filesystem avoids the `/mnt/c` filesystem overhead for
+Git, uv, pnpm, Next.js and test tooling.
+
+Prerequisites in Ubuntu are GNU Make, Linux `uv`, Node.js 24 managed by `nvm`,
+Corepack from that Node installation, and Docker Desktop with WSL integration
+enabled for the Ubuntu distro. The verified Node runtime is `v24.18.1`.
+
+In a fresh Ubuntu shell, activate the Linux Node runtime and Corepack before
+running repository commands:
+
+```bash
+source ~/.nvm/nvm.sh
+nvm install 24
+nvm alias default 24
+nvm use 24
+corepack enable
+command -v node
+command -v corepack
+node --version
+node -p process.platform
+```
+
+The two executable paths must resolve to the active `nvm` Node 24 installation,
+and `process.platform` must report `linux`.
+
+Do not copy or reuse `backend/.venv` or `frontend/node_modules` from a Windows
+checkout. Recreate both inside this Ubuntu checkout from the committed lockfiles.
+
+The stable repository commands are:
+
+```bash
+make
+make bootstrap
+make lint
+make typecheck
+make test
+make migration-check
+```
+
 ## One-command local development
 
 From the repository root, run:
