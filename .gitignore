@@ -16,7 +16,7 @@ test-results/
 *.tsbuildinfo
 
 # Python
-.venv/
+.venv
 __pycache__/
 *.py[cod]
 .pytest_cache/

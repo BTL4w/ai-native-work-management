@@ -1,8 +1,8 @@
 # End-to-End AI-Native Work Management Platform
 
 The repository is being built one focused vertical step at a time. It currently
-contains the Phase 1 frontend foundation only; authentication, backend, database
-and Docker are not implemented yet.
+contains the Phase 1 frontend, FastAPI and database code foundations;
+authentication, product data models and Docker are not implemented yet.
 
 ## Frontend development
 
@@ -36,8 +36,8 @@ exist.
 ## Backend development
 
 The backend foundation currently provides the FastAPI application shell,
-configuration and structured error handling. It does not connect to a database
-or implement product endpoints yet.
+configuration, structured error handling, an async SQLAlchemy session factory
+and Alembic configuration. It does not define product tables or endpoints yet.
 
 Prerequisite: install [uv](https://docs.astral.sh/uv/).
 
@@ -60,4 +60,5 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 uv run pytest
+uv run alembic heads
 ```

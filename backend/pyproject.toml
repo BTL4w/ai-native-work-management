@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "FastAPI modular-monolith backend for AI-native work management"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "alembic>=1.18,<2.0",
     "fastapi[standard]==0.140.3",
+    "psycopg[binary,pool]>=3.3,<4.0",
     "pydantic-settings>=2.0,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
 ]
 
 [dependency-groups]
@@ -36,6 +39,9 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["ASYNC", "B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["alembic"]
 
 [tool.ruff.format]
 quote-style = "double"
