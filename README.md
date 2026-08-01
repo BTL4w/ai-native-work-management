@@ -2,7 +2,41 @@
 
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
-authentication, product data models and Docker are not implemented yet.
+authentication and product data models are not implemented yet. Local Compose
+currently runs PostgreSQL only.
+
+## Local PostgreSQL
+
+Prerequisite: Docker Desktop with WSL integration enabled for this distro.
+
+Start PostgreSQL and wait until its health status is `healthy`:
+
+```bash
+cp .env.example .env
+docker compose up -d postgres
+docker compose ps
+```
+
+Verify the database and Alembic connection:
+
+```bash
+docker compose exec -T postgres \
+  psql -U work_management -d work_management -c "select current_database(), current_user;"
+
+cd backend
+uv run alembic upgrade head
+uv run alembic current --check-heads
+```
+
+Stop the container without deleting local database data:
+
+```bash
+docker compose down
+```
+
+The default credentials are local demonstration values only. Override them in
+the ignored root `.env` file when needed. Do not use `docker compose down -v`
+unless deleting the local database volume is intentional.
 
 ## Frontend development
 
