@@ -19,6 +19,7 @@ from app.modules.work.adapters.database_models import (
     IdempotencyRecordModel,
     IdempotencyState,
     ProjectModel,
+    TaskModel,
 )
 from app.modules.work.application.ports import (
     ProjectMutationResult,
@@ -94,10 +95,17 @@ class SqlAlchemyProjectRepository:
         self, *, actor: AuthenticatedActor, query: str | None, page: int, page_size: int
     ) -> ProjectPage:
         await self._activate_actor(actor)
-        if actor.role is MembershipRole.EMPLOYEE:
-            return ProjectPage(items=(), page=page, page_size=page_size, total=0)
-
         predicates = [ProjectModel.organization_id == actor.organization_id]
+        if actor.role is MembershipRole.EMPLOYEE:
+            predicates.append(
+                select(TaskModel.id)
+                .where(
+                    TaskModel.organization_id == ProjectModel.organization_id,
+                    TaskModel.project_id == ProjectModel.id,
+                    TaskModel.assignee_membership_id == actor.membership_id,
+                )
+                .exists()
+            )
         if query is not None:
             pattern = f"%{query}%"
             predicates.append(
@@ -122,14 +130,21 @@ class SqlAlchemyProjectRepository:
 
     async def get_project(self, *, actor: AuthenticatedActor, project_id: UUID) -> Project | None:
         await self._activate_actor(actor)
+        predicates = [
+            ProjectModel.organization_id == actor.organization_id,
+            ProjectModel.id == project_id,
+        ]
         if actor.role is MembershipRole.EMPLOYEE:
-            return None
-        model = await self._session.scalar(
-            select(ProjectModel).where(
-                ProjectModel.organization_id == actor.organization_id,
-                ProjectModel.id == project_id,
+            predicates.append(
+                select(TaskModel.id)
+                .where(
+                    TaskModel.organization_id == ProjectModel.organization_id,
+                    TaskModel.project_id == ProjectModel.id,
+                    TaskModel.assignee_membership_id == actor.membership_id,
+                )
+                .exists()
             )
-        )
+        model = await self._session.scalar(select(ProjectModel).where(*predicates))
         return _to_domain(model) if model is not None else None
 
     async def _find_replay(

@@ -3,8 +3,8 @@
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
 the identity/organization schema, local demo accounts, session authentication,
-login UI and tenant-scoped Project backend are available. Project UI and Task
-behavior are not implemented yet.
+login UI, tenant-scoped Project backend and Task backend are available. Project,
+Task and My Tasks UI are not implemented yet.
 Local Compose currently runs PostgreSQL only; frontend and backend dev servers run
 on the host.
 
@@ -138,6 +138,25 @@ Manager/Admin can read all Projects in their tenant. Until the Task backend is
 added, Employee Project reads return no items because no assigned Task can yet
 make a Project visible.
 
+## Task and member APIs
+
+Manager/Admin can list assignable members, create an assigned Task and manage it
+through the fixed Phase 1 workflow:
+
+```bash
+curl -b /tmp/work-management.cookies http://localhost:8000/api/v1/members
+
+curl -i -b /tmp/work-management.cookies \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: task-create-demo-001' \
+  -d '{"project_id":"<project-uuid>","title":"Collect documents","assignee_membership_id":"<membership-uuid>","due_date":"2026-08-12"}' \
+  http://localhost:8000/api/v1/tasks
+```
+
+Task updates and status transitions require `If-Match` plus an idempotency key.
+Employees use `/api/v1/my-tasks`, see only their assigned Tasks, and may perform
+only the documented `TO_DO ↔ IN_PROGRESS ↔ DONE` edges on those Tasks.
+
 ## Local PostgreSQL
 
 Prerequisite: Docker Desktop with WSL integration enabled for this distro.
@@ -210,8 +229,9 @@ Root commands include `make lint`, `make typecheck`, `make test` and
 
 The backend currently provides the FastAPI application shell, configuration,
 structured error handling, an async SQLAlchemy session factory, Alembic, the
-Phase 1 identity/organization tables, local session authentication and the
-tenant-scoped Project API. Task endpoints are the next backend slice.
+Phase 1 identity/organization tables, local session authentication, member
+lookup, and tenant-scoped Project/Task APIs. Product UI for these APIs is the
+next slice.
 
 Prerequisite: install [uv](https://docs.astral.sh/uv/).
 

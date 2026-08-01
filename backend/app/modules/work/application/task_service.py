@@ -1,0 +1,300 @@
+"""Task authorization, validation, fingerprints, and transaction boundaries."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import date
+from uuid import UUID
+
+from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.organization.domain.roles import MembershipRole
+from app.modules.work.application.task_ports import (
+    TaskMutationResult,
+    TaskPage,
+    TaskTransactionFactory,
+)
+from app.modules.work.domain.tasks import (
+    Task,
+    TaskDraft,
+    TaskError,
+    TaskForbiddenError,
+    TaskNotFoundError,
+    TaskPatch,
+    TaskStatus,
+)
+
+_WRITERS = frozenset({MembershipRole.ADMIN, MembershipRole.MANAGER})
+
+
+def _fingerprint(operation: str, values: dict[str, object]) -> str:
+    canonical = json.dumps(
+        {"operation": operation, "values": values},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+class TaskService:
+    def __init__(self, transaction_factory: TaskTransactionFactory) -> None:
+        self._transactions = transaction_factory
+
+    async def list_tasks(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID | None,
+        assignee_membership_id: UUID | None,
+        status: TaskStatus | None,
+        page: int,
+        page_size: int,
+    ) -> TaskPage:
+        async with self._transactions() as repository:
+            return await repository.list_tasks(
+                actor=actor,
+                project_id=project_id,
+                assignee_membership_id=assignee_membership_id,
+                status=status,
+                due_from=None,
+                due_to=None,
+                own_only=False,
+                page=page,
+                page_size=page_size,
+            )
+
+    async def my_tasks(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        status: TaskStatus | None,
+        due_from: date | None,
+        due_to: date | None,
+        page: int,
+        page_size: int,
+    ) -> TaskPage:
+        async with self._transactions() as repository:
+            return await repository.list_tasks(
+                actor=actor,
+                project_id=None,
+                assignee_membership_id=None,
+                status=status,
+                due_from=due_from,
+                due_to=due_to,
+                own_only=True,
+                page=page,
+                page_size=page_size,
+            )
+
+    async def get_task(self, *, actor: AuthenticatedActor, task_id: UUID) -> Task:
+        async with self._transactions() as repository:
+            task = await repository.get_task(actor=actor, task_id=task_id)
+        if task is None:
+            raise TaskNotFoundError
+        return task
+
+    async def _require_writer(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        idempotency_key: str,
+        resource_id: UUID | None = None,
+    ) -> None:
+        if actor.role in _WRITERS:
+            return
+        async with self._transactions() as repository:
+            await repository.audit_rejection(
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                reason_code="FORBIDDEN",
+                idempotency_key=idempotency_key,
+                resource_id=resource_id,
+            )
+        raise TaskForbiddenError
+
+    async def _audit_error(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        idempotency_key: str,
+        resource_id: UUID | None,
+        error: TaskError,
+    ) -> None:
+        async with self._transactions() as repository:
+            await repository.audit_rejection(
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                reason_code=type(error).__name__,
+                idempotency_key=idempotency_key,
+                resource_id=resource_id,
+            )
+
+    async def create_task(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        title: str,
+        description: str | None,
+        assignee_membership_id: UUID,
+        due_date: date | None,
+        request_id: str,
+        idempotency_key: str,
+    ) -> TaskMutationResult:
+        await self._require_writer(
+            actor=actor,
+            action="task.created",
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        )
+        try:
+            draft = TaskDraft.create(
+                project_id=project_id,
+                title=title,
+                description=description,
+                assignee_membership_id=assignee_membership_id,
+                due_date=due_date,
+            )
+            fingerprint = _fingerprint(
+                "task.create",
+                {
+                    "project_id": project_id,
+                    "title": draft.title,
+                    "description": draft.description,
+                    "assignee_membership_id": assignee_membership_id,
+                    "due_date": due_date,
+                },
+            )
+            async with self._transactions() as repository:
+                return await repository.create_task(
+                    actor=actor,
+                    draft=draft,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
+        except TaskError as error:
+            await self._audit_error(
+                actor=actor,
+                action="task.created",
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=None,
+                error=error,
+            )
+            raise
+
+    async def update_task(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        task_id: UUID,
+        title: str | None,
+        title_supplied: bool,
+        description: str | None,
+        description_supplied: bool,
+        assignee_membership_id: UUID | None,
+        assignee_supplied: bool,
+        due_date: date | None,
+        due_date_supplied: bool,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> TaskMutationResult:
+        await self._require_writer(
+            actor=actor,
+            action="task.updated",
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            resource_id=task_id,
+        )
+        try:
+            patch = TaskPatch.create(
+                title=title,
+                title_supplied=title_supplied,
+                description=description,
+                description_supplied=description_supplied,
+                assignee_membership_id=assignee_membership_id,
+                assignee_supplied=assignee_supplied,
+                due_date=due_date,
+                due_date_supplied=due_date_supplied,
+            )
+            patch.validate_not_empty()
+            fingerprint = _fingerprint(
+                "task.update",
+                {
+                    "task_id": task_id,
+                    "title": patch.title if patch.title_supplied else "__omitted__",
+                    "description": patch.description
+                    if patch.description_supplied
+                    else "__omitted__",
+                    "assignee": patch.assignee_membership_id
+                    if patch.assignee_supplied
+                    else "__omitted__",
+                    "due_date": patch.due_date if patch.due_date_supplied else "__omitted__",
+                    "expected_version": expected_version,
+                },
+            )
+            async with self._transactions() as repository:
+                return await repository.update_task(
+                    actor=actor,
+                    task_id=task_id,
+                    patch=patch,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
+        except TaskError as error:
+            await self._audit_error(
+                actor=actor,
+                action="task.updated",
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=task_id,
+                error=error,
+            )
+            raise
+
+    async def transition_task(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        task_id: UUID,
+        target: TaskStatus,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> TaskMutationResult:
+        fingerprint = _fingerprint(
+            "task.status",
+            {"task_id": task_id, "target": target, "expected_version": expected_version},
+        )
+        try:
+            async with self._transactions() as repository:
+                return await repository.transition_task(
+                    actor=actor,
+                    task_id=task_id,
+                    target=target,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
+        except TaskError as error:
+            await self._audit_error(
+                actor=actor,
+                action="task.status_changed",
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=task_id,
+                error=error,
+            )
+            raise

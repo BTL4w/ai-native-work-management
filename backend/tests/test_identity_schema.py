@@ -20,6 +20,8 @@ def test_identity_and_organization_tables_are_registered() -> None:
         "audit_events",
         "projects",
         "idempotency_records",
+        "tasks",
+        "task_status_transitions",
     }
 
 

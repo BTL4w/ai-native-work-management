@@ -40,6 +40,11 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/me",
         "/api/v1/projects",
         "/api/v1/projects/{project_id}",
+        "/api/v1/members",
+        "/api/v1/tasks",
+        "/api/v1/tasks/{task_id}",
+        "/api/v1/tasks/{task_id}/status",
+        "/api/v1/my-tasks",
     }
     login_responses = response.json()["paths"]["/api/v1/auth/login"]["post"]["responses"]
     assert login_responses["422"]["content"]["application/json"]["schema"] == {
@@ -61,6 +66,9 @@ async def test_openapi_document_is_available() -> None:
     assert project_collection["post"]["responses"]["201"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/ProjectResponse"}
+    assert set(response.json()["paths"]["/api/v1/tasks"]) == {"get", "post"}
+    assert set(response.json()["paths"]["/api/v1/tasks/{task_id}"]) == {"get", "patch"}
+    assert set(response.json()["paths"]["/api/v1/tasks/{task_id}/status"]) == {"post"}
     assert response.headers["X-Request-ID"]
 
 

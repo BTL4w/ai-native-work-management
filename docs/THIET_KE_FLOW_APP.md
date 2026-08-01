@@ -470,12 +470,15 @@ PLAN
 → Project + idempotency migration 0003, FORCE RLS và composite tenant FK
 → Project authorization, audit, optimistic concurrency và idempotent replay
 → Project REST/OpenAPI + unit/integration tests
+→ Task domain/application service và fixed status workflow
+→ Task + task_status_transitions migration 0004, FORCE RLS và composite tenant FK
+→ Member lookup, Task CRUD/status, My Tasks và Employee Project visibility
+→ Task authorization, assignment/reassignment, audit, idempotency và tests
 ```
 
-Bước tiếp theo được đề xuất là **Task backend** của Phase 1: domain/application
-service, migration tenant-owned, assignment/status workflow, RLS, authorization,
-audit, idempotency và API/test cho Task/My Tasks. Project UI và Task UI vẫn chưa
-thuộc run vừa hoàn thành.
+Bước tiếp theo được đề xuất là **Project/Task/My Tasks frontend** của Phase 1,
+kết nối các API manual đã có, giữ translation key Việt/Anh và hoàn thiện E2E
+Manager tạo Project/giao Task → Employee xem My Tasks và cập nhật trạng thái.
 
 ## 15. Workflow local WSL-native đã chấp nhận
 

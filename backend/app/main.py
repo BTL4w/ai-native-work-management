@@ -17,9 +17,15 @@ from app.core.database import create_database_engine, create_session_factory
 from app.modules.identity.adapters.runtime import create_auth_runtime
 from app.modules.identity.api.routes import router as auth_router
 from app.modules.identity.application.auth_service import AuthService
+from app.modules.organization.adapters.member_repository import SqlAlchemyMemberTransactionFactory
+from app.modules.organization.api.members import router as member_router
+from app.modules.organization.application.member_service import MemberService
 from app.modules.work.adapters.project_repository import SqlAlchemyProjectTransactionFactory
+from app.modules.work.adapters.task_repository import SqlAlchemyTaskTransactionFactory
 from app.modules.work.api.routes import router as project_router
+from app.modules.work.api.task_routes import router as task_router
 from app.modules.work.application.project_service import ProjectService
+from app.modules.work.application.task_service import TaskService
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -35,6 +41,8 @@ def create_app(
     settings: Settings | None = None,
     auth_service: AuthService | None = None,
     project_service: ProjectService | None = None,
+    task_service: TaskService | None = None,
+    member_service: MemberService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -49,6 +57,20 @@ def create_app(
             database_engine = create_database_engine(resolved_settings)
         resolved_project_service = ProjectService(
             SqlAlchemyProjectTransactionFactory(create_session_factory(database_engine))
+        )
+    resolved_task_service = task_service
+    if resolved_task_service is None:
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        resolved_task_service = TaskService(
+            SqlAlchemyTaskTransactionFactory(create_session_factory(database_engine))
+        )
+    resolved_member_service = member_service
+    if resolved_member_service is None:
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        resolved_member_service = MemberService(
+            SqlAlchemyMemberTransactionFactory(create_session_factory(database_engine))
         )
 
     @asynccontextmanager
@@ -68,6 +90,8 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.auth_service = resolved_auth_service
     app.state.project_service = resolved_project_service
+    app.state.task_service = resolved_task_service
+    app.state.member_service = resolved_member_service
     app.state.database_engine = database_engine
     app.add_middleware(
         CORSMiddleware,
@@ -91,6 +115,8 @@ def create_app(
     register_error_handlers(app)
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(project_router, prefix="/api/v1")
+    app.include_router(task_router, prefix="/api/v1")
+    app.include_router(member_router, prefix="/api/v1")
     return app
 
 
