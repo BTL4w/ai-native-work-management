@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _POSTGRESQL_ASYNC_URL_PREFIX = "postgresql+psycopg://"
@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://work_management:work_management@localhost:5432/work_management"
     )
+    local_auth_organization_slug: str = "demo"
+    local_auth_organization_name: str = "Demo Organization"
+    demo_seed_enabled: bool = False
+    demo_seed_password: SecretStr = SecretStr("WorkDemo123!")
 
     @field_validator("database_url")
     @classmethod

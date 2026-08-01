@@ -2,8 +2,39 @@
 
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
-authentication and product data models are not implemented yet. Local Compose
-currently runs PostgreSQL only.
+the identity/organization schema and local demo accounts are available, but the
+login API and Project/Task behavior are not implemented yet. Local Compose
+currently runs PostgreSQL only; frontend and backend dev servers run on the host.
+
+## One-command local development
+
+From the repository root, run:
+
+```bash
+make
+```
+
+The default target installs locked dependencies, starts PostgreSQL, applies
+migrations, idempotently seeds demo accounts, then runs FastAPI and Next.js in
+parallel. Stop the foreground dev servers with `Ctrl+C`; stop PostgreSQL with:
+
+```bash
+make down
+```
+
+To prepare the database and return to the shell without starting dev servers:
+
+```bash
+make bootstrap
+```
+
+Demo accounts all use the local-only password `WorkDemo123!`:
+
+| Persona | Email |
+| --- | --- |
+| Admin | `admin@example.test` |
+| Manager | `manager@example.test` |
+| Employee | `employee@example.test` |
 
 ## Local PostgreSQL
 
@@ -26,6 +57,7 @@ docker compose exec -T postgres \
 cd backend
 uv run alembic upgrade head
 uv run alembic current --check-heads
+RUN_POSTGRES_INTEGRATION=1 uv run pytest -m integration
 ```
 
 Stop the container without deleting local database data:
@@ -63,15 +95,15 @@ corepack pnpm@10 test
 corepack pnpm@10 build
 ```
 
-The root-level `make` commands documented in `PLAN.md` will be added in a later
-tooling-focused step after the corresponding backend and local infrastructure
-exist.
+Root commands include `make lint`, `make typecheck`, `make test` and
+`make migration-check`.
 
 ## Backend development
 
-The backend foundation currently provides the FastAPI application shell,
-configuration, structured error handling, an async SQLAlchemy session factory
-and Alembic configuration. It does not define product tables or endpoints yet.
+The backend currently provides the FastAPI application shell, configuration,
+structured error handling, an async SQLAlchemy session factory, Alembic, and
+the Phase 1 identity/organization tables. Login and product endpoints are not
+implemented yet.
 
 Prerequisite: install [uv](https://docs.astral.sh/uv/).
 
@@ -79,8 +111,15 @@ Run the backend:
 
 ```bash
 cd backend
-uv sync --locked
-uv run fastapi dev app/main.py
+make up
+```
+
+Database commands from `backend/`:
+
+```bash
+make migrate
+make seed
+make migration-check
 ```
 
 FastAPI runs at `http://localhost:8000`; its development API documentation is at

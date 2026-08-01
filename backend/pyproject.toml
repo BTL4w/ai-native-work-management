@@ -7,6 +7,7 @@ dependencies = [
     "alembic>=1.18,<2.0",
     "fastapi[standard]==0.140.3",
     "psycopg[binary,pool]>=3.3,<4.0",
+    "pwdlib[argon2]>=0.3,<1.0",
     "pydantic-settings>=2.0,<3.0",
     "sqlalchemy[asyncio]>=2.0,<2.1",
 ]
@@ -25,6 +26,9 @@ dev = [
 addopts = "--strict-config --strict-markers"
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "integration: requires the local PostgreSQL container",
+]
 
 [tool.pyright]
 include = ["app", "tests"]
