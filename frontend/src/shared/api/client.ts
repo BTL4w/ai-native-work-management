@@ -7,15 +7,30 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     readonly requestId?: string,
+    readonly messageKey?: string,
+    readonly fieldErrors: Array<{ field: string; code: string; messageKey: string }> = [],
+    readonly details: Record<string, unknown> = {},
   ) {
     super(code);
     this.name = "ApiError";
   }
 }
 
+export function isDefinitiveMutationRejection(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  if (error.code === "INVALID_RESPONSE" || error.code === "UNEXPECTED_RESPONSE") return false;
+  return error.status >= 400 && error.status < 500 && ![408, 425, 429].includes(error.status);
+}
+
 type RequestOptions<T> = {
   init?: RequestInit;
   schema: ZodType<T>;
+};
+
+export type ApiResult<T> = {
+  data: T;
+  etag: string | null;
+  replayed: boolean;
 };
 
 async function parseBody(response: Response): Promise<unknown> {
@@ -47,6 +62,13 @@ export async function requestJson<T>(
         response.status,
         parsedError.data.error.code,
         parsedError.data.error.request_id,
+        parsedError.data.error.message_key,
+        parsedError.data.error.field_errors.map((fieldError) => ({
+          field: fieldError.field,
+          code: fieldError.code,
+          messageKey: fieldError.message_key,
+        })),
+        parsedError.data.error.details,
       );
     }
     throw new ApiError(response.status, "UNEXPECTED_RESPONSE");
@@ -57,6 +79,45 @@ export async function requestJson<T>(
     throw new ApiError(response.status, "INVALID_RESPONSE");
   }
   return parsedBody.data;
+}
+
+export async function requestJsonWithMetadata<T>(
+  path: string,
+  options: RequestOptions<T>,
+): Promise<ApiResult<T>> {
+  const response = await fetch(path, {
+    ...options.init,
+    credentials: "include",
+    headers: { Accept: "application/json", ...options.init?.headers },
+  });
+  const body = await parseBody(response);
+  if (!response.ok) {
+    const parsedError = errorResponseSchema.safeParse(body);
+    if (parsedError.success) {
+      throw new ApiError(
+        response.status,
+        parsedError.data.error.code,
+        parsedError.data.error.request_id,
+        parsedError.data.error.message_key,
+        parsedError.data.error.field_errors.map((fieldError) => ({
+          field: fieldError.field,
+          code: fieldError.code,
+          messageKey: fieldError.message_key,
+        })),
+        parsedError.data.error.details,
+      );
+    }
+    throw new ApiError(response.status, "UNEXPECTED_RESPONSE");
+  }
+  const parsedBody = options.schema.safeParse(body);
+  if (!parsedBody.success) {
+    throw new ApiError(response.status, "INVALID_RESPONSE");
+  }
+  return {
+    data: parsedBody.data,
+    etag: response.headers.get("ETag"),
+    replayed: response.headers.get("Idempotency-Replayed") === "true",
+  };
 }
 
 export async function requestNoContent(path: string, init?: RequestInit): Promise<void> {
@@ -79,6 +140,13 @@ export async function requestNoContent(path: string, init?: RequestInit): Promis
       response.status,
       parsedError.data.error.code,
       parsedError.data.error.request_id,
+      parsedError.data.error.message_key,
+      parsedError.data.error.field_errors.map((fieldError) => ({
+        field: fieldError.field,
+        code: fieldError.code,
+        messageKey: fieldError.message_key,
+      })),
+      parsedError.data.error.details,
     );
   }
   throw new ApiError(response.status, "UNEXPECTED_RESPONSE");

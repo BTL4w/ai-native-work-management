@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import { NextIntlClientProvider } from "next-intl";
-
 import { defaultLocale, isAppLocale } from "@/shared/i18n/config";
+import { AppLocaleProvider } from "@/shared/i18n/locale-provider";
 import { getMessages } from "@/shared/i18n/messages";
 
 import "./globals.css";
@@ -20,9 +19,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang={locale}>
       <body>
-        <NextIntlClientProvider locale={locale} messages={localeMessages}>
+        <AppLocaleProvider initialLocale={locale}>
           <AppProviders>{children}</AppProviders>
-        </NextIntlClientProvider>
+        </AppLocaleProvider>
       </body>
     </html>
   );

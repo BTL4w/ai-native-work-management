@@ -1,10 +1,16 @@
+import { fileURLToPath } from "node:url";
+
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
 
 const apiOrigin = process.env.API_ORIGIN ?? "http://127.0.0.1:8000";
+const frontendRoot = fileURLToPath(new URL(".", import.meta.url));
 
 const nextConfig: NextConfig = {
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
+  outputFileTracingRoot: frontendRoot,
   reactStrictMode: true,
+  turbopack: { root: frontendRoot },
   async rewrites() {
     return [
       {

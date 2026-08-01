@@ -40,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginMutation = useMutation({
     mutationFn: loginRequest,
     onSuccess: (actor) => {
+      queryClient.removeQueries({ queryKey: ["work"] });
       queryClient.setQueryData<SessionSnapshot>(sessionQueryKey, {
         actor,
         reason: null,
@@ -48,7 +49,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const logoutMutation = useMutation({
     mutationFn: logoutRequest,
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["work"] });
+    },
     onSuccess: () => {
+      queryClient.removeQueries({ queryKey: ["work"] });
       queryClient.setQueryData<SessionSnapshot>(sessionQueryKey, {
         actor: null,
         reason: "AUTHENTICATION_REQUIRED",

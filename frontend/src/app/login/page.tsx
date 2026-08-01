@@ -7,6 +7,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { loginInputSchema } from "@/features/auth/api";
 import { useAuth } from "@/features/auth/auth-provider";
 import { ApiError } from "@/shared/api/client";
+import { LocaleSwitcher } from "@/shared/i18n/locale-switcher";
 
 type FieldErrors = {
   email?: string;
@@ -74,6 +75,7 @@ export default function LoginPage() {
 
   return (
     <main className="grid min-h-screen bg-[var(--surface)] lg:grid-cols-[1.05fr_0.95fr]">
+      <div className="absolute top-5 right-5 z-10"><LocaleSwitcher /></div>
       <section className="hidden bg-slate-950 p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <div>
           <p className="text-sm font-semibold tracking-[0.22em] text-blue-300 uppercase">

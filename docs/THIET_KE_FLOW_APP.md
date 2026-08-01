@@ -474,11 +474,39 @@ PLAN
 → Task + task_status_transitions migration 0004, FORCE RLS và composite tenant FK
 → Member lookup, Task CRUD/status, My Tasks và Employee Project visibility
 → Task authorization, assignment/reassignment, audit, idempotency và tests
+→ Typed frontend API boundary cho Project, Member, Task và mutation metadata
+→ Manager Projects UI: tạo/sửa Project, tạo/sửa/giao Task
+→ Employee My Tasks UI: lọc Task và status transition theo fixed workflow
+→ Role-aware workspace, conflict/error state và translation key Việt/Anh
+→ Actor-scoped frontend cache, logout cache purge và regression test chống lộ dữ liệu chéo account
+→ Idempotent network retry, structured field error, reload conflict và filtered-cache invalidation
+→ Locale switch VI/EN persisted, timezone-safe due date và accessible pagination
+→ Frontend runtime schema ↔ manifest ↔ FastAPI OpenAPI compatibility tests
+→ Playwright production-build E2E trên PostgreSQL thật
+→ Manager tạo Project/giao Task → Employee hoàn thành → Manager xác nhận DONE
 ```
 
-Bước tiếp theo được đề xuất là **Project/Task/My Tasks frontend** của Phase 1,
-kết nối các API manual đã có, giữ translation key Việt/Anh và hoàn thiện E2E
-Manager tạo Project/giao Task → Employee xem My Tasks và cập nhật trạng thái.
+Bước tiếp theo là **audit Definition of Done cuối Phase 1**: chạy lại toàn bộ
+lint/typecheck/unit/integration/migration/OpenAPI/E2E gate, rà negative
+authorization/RLS/audit/idempotency evidence và xác nhận không có Explicit
+non-goal nào lọt vào slice. Chỉ sau khi gate này pass mới đề xuất đóng Phase 1;
+không tự động bắt đầu Phase 2.
+
+### Evidence frontend workspace và E2E mới nhất
+
+```text
+Frontend focused suite → Vitest component/contract tests passed
+Frontend typecheck      → tsc --noEmit exit 0
+Frontend lint           → ESLint exit 0
+E2E production build    → Next.js build exit 0, routes / và /login
+Playwright Chromium     → Manager/Employee acceptance flow passed
+Database bootstrap      → PostgreSQL healthy, Alembic head, demo seed idempotent
+```
+
+`make test-e2e` recreate database riêng `work_management_e2e`, dùng backend
+`8100`, frontend `3100` và `.next-e2e`; nó không ghi dữ liệu test vào database
+local thông thường và không can thiệp dev server trên `8000`/`3000`. Máy mới cần
+cài Chromium và Ubuntu runtime dependencies của Playwright một lần trước khi chạy.
 
 ## 15. Workflow local WSL-native đã chấp nhận
 

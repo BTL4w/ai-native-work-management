@@ -3,8 +3,10 @@
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
 the identity/organization schema, local demo accounts, session authentication,
-login UI, tenant-scoped Project backend and Task backend are available. Project,
-Task and My Tasks UI are not implemented yet.
+login UI, tenant-scoped Project/Task APIs, and the bilingual Project, Task and
+My Tasks workspace are available. The workspace includes actor-scoped caches,
+server-confirmed mutations, structured errors, pagination and a persisted VI/EN
+selector.
 Local Compose currently runs PostgreSQL only; frontend and backend dev servers run
 on the host.
 
@@ -54,6 +56,7 @@ make bootstrap
 make lint
 make typecheck
 make test
+make test-e2e
 make migration-check
 ```
 
@@ -134,9 +137,8 @@ curl -b /tmp/work-management.cookies \
 `POST /api/v1/projects` and `PATCH /api/v1/projects/{project_id}` require an
 `Idempotency-Key` of 16–128 characters. Updates also require the current version
 as `If-Match: "<version>"`; Project responses expose the matching `ETag`.
-Manager/Admin can read all Projects in their tenant. Until the Task backend is
-added, Employee Project reads return no items because no assigned Task can yet
-make a Project visible.
+Manager/Admin can read all Projects in their tenant. Employees see only Projects
+that contain a Task assigned to them.
 
 ## Task and member APIs
 
@@ -225,13 +227,32 @@ corepack pnpm@10 build
 Root commands include `make lint`, `make typecheck`, `make test` and
 `make migration-check`.
 
+For the browser acceptance test, install Playwright Chromium and its Ubuntu
+runtime dependencies once:
+
+```bash
+cd frontend
+corepack pnpm@10 exec playwright install chromium
+sudo corepack pnpm@10 exec playwright install-deps chromium
+```
+
+Then run the production-build E2E flow from the repository root:
+
+```bash
+make test-e2e
+```
+
+The command recreates a dedicated `work_management_e2e` database, then uses
+isolated ports `3100` and `8100` plus `.next-e2e`. It neither mutates the normal
+local database nor stops/reuses a development server on ports `3000`/`8000`.
+
 ## Backend development
 
 The backend currently provides the FastAPI application shell, configuration,
 structured error handling, an async SQLAlchemy session factory, Alembic, the
 Phase 1 identity/organization tables, local session authentication, member
 lookup, and tenant-scoped Project/Task APIs. Product UI for these APIs is the
-next slice.
+current Phase 1 workspace.
 
 Prerequisite: install [uv](https://docs.astral.sh/uv/).
 

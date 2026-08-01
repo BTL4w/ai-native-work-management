@@ -72,3 +72,26 @@ select {
   cursor: not-allowed;
   opacity: 0.6;
 }
+
+.secondary-button {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: white;
+  padding: 0.7rem 1rem;
+  color: var(--foreground);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary-button:hover:not(:disabled) { background: #f8fafc; }
+.secondary-button:disabled { cursor: not-allowed; opacity: 0.6; }
+.text-button { color: var(--accent); font-weight: 600; cursor: pointer; }
+.eyebrow { color: var(--accent); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.page-title { margin-top: 0.5rem; font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.15; font-weight: 700; }
+.resource-card { border: 1px solid var(--border); border-radius: 1rem; background: white; padding: 1.25rem; cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.resource-card:hover { border-color: #aab7df; box-shadow: 0 8px 24px rgb(23 32 51 / 8%); }
+.status-pill { display: inline-flex; border-radius: 999px; padding: 0.3rem 0.65rem; font-size: 0.72rem; font-weight: 700; }
+.status-to_do { background: #f1f5f9; color: #475569; }
+.status-in_progress { background: #dbeafe; color: #1d4ed8; }
+.status-done { background: #dcfce7; color: #166534; }
+.error-message { margin-top: 1rem; border-radius: 0.75rem; background: #fef2f2; padding: 0.75rem 1rem; color: #b91c1c; font-size: 0.875rem; }

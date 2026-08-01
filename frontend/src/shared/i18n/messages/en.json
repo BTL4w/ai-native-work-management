@@ -8,7 +8,8 @@
     "redirectingToLogin": "Redirecting to sign in…",
     "sessionUnavailableTitle": "We could not check your session",
     "sessionUnavailableDescription": "The backend may not be ready. Check the server and try again.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "languageLabel": "Language"
   },
   "auth": {
     "login": {
@@ -46,5 +47,57 @@
     "logout": "Sign out",
     "loggingOut": "Signing out…",
     "logoutError": "We could not sign you out. Please try again."
+  },
+  "work": {
+    "product": "Work Management",
+    "navigationLabel": "Work navigation",
+    "nav": { "projects": "Projects", "myTasks": "My Tasks" },
+    "role": { "ADMIN": "Administrator", "MANAGER": "Manager", "EMPLOYEE": "Employee" },
+    "common": { "loading": "Loading…", "saving": "Saving…", "noDescription": "No description" },
+    "project": {
+      "eyebrow": "Workspace",
+      "title": "Projects",
+      "create": "Create project",
+      "empty": "There are no projects yet.",
+      "detailEyebrow": "Project",
+      "edit": "Edit project",
+      "name": "Project name",
+      "description": "Project description",
+      "save": "Save project"
+    },
+    "task": {
+      "sectionTitle": "Tasks",
+      "create": "Create task",
+      "myEyebrow": "Assigned work",
+      "myTitle": "My Tasks",
+      "filterStatus": "Filter by status",
+      "allStatuses": "All statuses",
+      "emptyMyTasks": "You have no matching tasks.",
+      "empty": "This project has no tasks yet.",
+      "noDueDate": "No due date",
+      "edit": "Edit task",
+      "title": "Task title",
+      "description": "Task description",
+      "assignee": "Assignee",
+      "dueDate": "Due date",
+      "selectAssignee": "Select an assignee",
+      "save": "Save task",
+      "start": "Start task",
+      "returnToDo": "Return to do",
+      "complete": "Complete",
+      "reopen": "Reopen task",
+      "availableActions": "Status actions"
+    },
+    "status": { "TO_DO": "To do", "IN_PROGRESS": "In progress", "DONE": "Done" },
+    "pagination": { "label": "Pagination", "previous": "Previous page", "next": "Next page", "page": "Page {page}" },
+    "action": { "backToProjects": "Back to Projects", "back": "Back", "cancel": "Cancel", "close": "Close", "retry": "Try again", "reload": "Reload data" },
+    "validation": { "nameRequired": "Project name is required.", "taskRequired": "Title and assignee are required.", "titleRequired": "Task title is required.", "assigneeRequired": "Select an assignee." },
+    "error": {
+      "conflict": "This data changed. Reload and try again.",
+      "forbidden": "You do not have permission to perform this action.",
+      "notFound": "This data was not found or is no longer available.",
+      "unexpected": "We could not complete the request right now.",
+      "invalidField": "One or more fields are invalid."
+    }
   }
 }

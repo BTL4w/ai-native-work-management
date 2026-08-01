@@ -8,7 +8,8 @@
     "redirectingToLogin": "Đang chuyển đến trang đăng nhập…",
     "sessionUnavailableTitle": "Chưa thể kiểm tra phiên đăng nhập",
     "sessionUnavailableDescription": "Backend có thể chưa sẵn sàng. Hãy kiểm tra server và thử lại.",
-    "retry": "Thử lại"
+    "retry": "Thử lại",
+    "languageLabel": "Ngôn ngữ"
   },
   "auth": {
     "login": {
@@ -46,5 +47,57 @@
     "logout": "Đăng xuất",
     "loggingOut": "Đang đăng xuất…",
     "logoutError": "Không thể đăng xuất. Vui lòng thử lại."
+  },
+  "work": {
+    "product": "Work Management",
+    "navigationLabel": "Điều hướng công việc",
+    "nav": { "projects": "Projects", "myTasks": "My Tasks" },
+    "role": { "ADMIN": "Quản trị viên", "MANAGER": "Quản lý", "EMPLOYEE": "Nhân viên" },
+    "common": { "loading": "Đang tải…", "saving": "Đang lưu…", "noDescription": "Chưa có mô tả" },
+    "project": {
+      "eyebrow": "Không gian làm việc",
+      "title": "Projects",
+      "create": "Tạo project",
+      "empty": "Chưa có project nào.",
+      "detailEyebrow": "Project",
+      "edit": "Sửa project",
+      "name": "Tên project",
+      "description": "Mô tả project",
+      "save": "Lưu project"
+    },
+    "task": {
+      "sectionTitle": "Tasks",
+      "create": "Tạo task",
+      "myEyebrow": "Công việc được giao",
+      "myTitle": "My Tasks",
+      "filterStatus": "Lọc theo trạng thái",
+      "allStatuses": "Tất cả trạng thái",
+      "emptyMyTasks": "Bạn chưa có task nào phù hợp.",
+      "empty": "Project này chưa có task nào.",
+      "noDueDate": "Không có hạn chót",
+      "edit": "Sửa task",
+      "title": "Tiêu đề task",
+      "description": "Mô tả task",
+      "assignee": "Người thực hiện",
+      "dueDate": "Hạn chót",
+      "selectAssignee": "Chọn người thực hiện",
+      "save": "Lưu task",
+      "start": "Bắt đầu task",
+      "returnToDo": "Đưa về cần làm",
+      "complete": "Hoàn thành",
+      "reopen": "Mở lại task",
+      "availableActions": "Hành động trạng thái"
+    },
+    "status": { "TO_DO": "Cần làm", "IN_PROGRESS": "Đang thực hiện", "DONE": "Hoàn thành" },
+    "pagination": { "label": "Phân trang", "previous": "Trang trước", "next": "Trang sau", "page": "Trang {page}" },
+    "action": { "backToProjects": "Quay lại Projects", "back": "Quay lại", "cancel": "Hủy", "close": "Đóng", "retry": "Thử lại", "reload": "Tải lại dữ liệu" },
+    "validation": { "nameRequired": "Tên project không được để trống.", "taskRequired": "Tiêu đề và người thực hiện là bắt buộc.", "titleRequired": "Tiêu đề task không được để trống.", "assigneeRequired": "Hãy chọn người thực hiện." },
+    "error": {
+      "conflict": "Dữ liệu đã thay đổi. Hãy tải lại và thử lại.",
+      "forbidden": "Bạn không có quyền thực hiện hành động này.",
+      "notFound": "Không tìm thấy dữ liệu hoặc dữ liệu không còn khả dụng.",
+      "unexpected": "Không thể hoàn tất yêu cầu lúc này.",
+      "invalidField": "Một hoặc nhiều trường chưa hợp lệ."
+    }
   }
 }

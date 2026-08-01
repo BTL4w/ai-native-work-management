@@ -1,11 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
-import { NextIntlClientProvider } from "next-intl";
 import type { ReactElement } from "react";
 
 import { AuthProvider } from "@/features/auth/auth-provider";
 import type { AppLocale } from "@/shared/i18n/config";
-import { getMessages } from "@/shared/i18n/messages";
+import { AppLocaleProvider } from "@/shared/i18n/locale-provider";
 
 export function renderWithAppProviders(ui: ReactElement, locale: AppLocale = "vi") {
   const queryClient = new QueryClient({
@@ -16,11 +15,11 @@ export function renderWithAppProviders(ui: ReactElement, locale: AppLocale = "vi
   });
 
   return render(
-    <NextIntlClientProvider locale={locale} messages={getMessages(locale)}>
+    <AppLocaleProvider initialLocale={locale}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>{ui}</AuthProvider>
       </QueryClientProvider>
-    </NextIntlClientProvider>,
+    </AppLocaleProvider>,
   );
 }
 

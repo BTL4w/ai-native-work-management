@@ -18,18 +18,20 @@ export const meResponseSchema = z.object({
 
 export type MeResponse = z.infer<typeof meResponseSchema>;
 
-export const errorResponseSchema = z.object({
-  error: z.object({
+export const fieldErrorSchema = z.object({
+  field: z.string(),
+  code: z.string(),
+  message_key: z.string(),
+});
+
+export const errorDetailSchema = z.object({
     code: z.string(),
     message_key: z.string(),
     request_id: z.string(),
-    field_errors: z.array(
-      z.object({
-        field: z.string(),
-        code: z.string(),
-        message_key: z.string(),
-      }),
-    ),
-    details: z.record(z.string(), z.unknown()),
-  }),
+    field_errors: z.array(fieldErrorSchema).default([]),
+    details: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const errorResponseSchema = z.object({
+  error: errorDetailSchema,
 });

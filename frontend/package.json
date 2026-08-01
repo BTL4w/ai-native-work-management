@@ -10,11 +10,13 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build",
+    "build:e2e": "node scripts/build-e2e.mjs",
     "start": "next start",
-    "lint": "eslint src next.config.ts vitest.config.ts",
+    "lint": "eslint src e2e scripts next.config.ts playwright.config.ts vitest.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.0.0",
