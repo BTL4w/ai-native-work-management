@@ -353,7 +353,48 @@ với runtime; lỗi parse JSON trỏ tới `field: body` thay vì vị trí ký
 Run này chưa làm login UI, member API, Project hoặc Task. Bước frontend login vẫn
 là một run riêng để giữ ranh giới học tập.
 
-## 11. Flow chuẩn cho mỗi run tiếp theo
+## 11. Frontend authentication UI — implementation thứ tám
+
+Run này nối giao diện với authentication API đã có, không thêm behavior Project
+hoặc Task:
+
+```text
+Mở ứng dụng
+→ GET /api/v1/me để bootstrap session
+→ chưa đăng nhập thì chuyển tới /login
+→ POST /api/v1/auth/login qua same-origin proxy
+→ browser tự giữ HttpOnly cookie
+→ vào application shell và hiển thị actor/organization/role
+→ POST /api/v1/auth/logout rồi quay lại /login
+```
+
+Frontend dùng TanStack Query để quản lý server state, Zod để kiểm tra contract
+response và một `AuthProvider` để chia sẻ trạng thái actor. Browser chỉ gọi
+`/api/v1`; Next.js proxy request sang FastAPI `:8000`. Cách này giữ cookie cùng
+origin và JavaScript không cần, cũng không được, đọc raw session token.
+
+Form và các trạng thái loading, sai credentials, session hết hạn, backend không
+sẵn sàng đều dùng translation key Việt/Anh. Trang chính mới chỉ là authenticated
+shell; nhãn Project/My Tasks là thông báo bước sau, chưa phải business feature.
+
+Quality gate của concern gồm 7 frontend test, lint, TypeScript và production
+build. Smoke test thật qua port `3000` xác nhận chuỗi `login 200 → me 200 → logout
+204 → me 401`; cookie có `HttpOnly` và `SameSite=Lax`.
+
+### Lưu ý WSL, `/mnt/c` và OOM khi chạy dev
+
+Next.js 16 mặc định dùng Turbopack. Trong môi trường WSL giới hạn 6 GB của project
+này, lần compile `/login` đầu tiên bằng Turbopack đã làm WSL bị OOM. Lệnh dev được
+đổi sang `next dev --webpack`; đây chỉ là bundler cho development, không thay đổi
+production build hoặc behavior ứng dụng.
+
+Webpack đã compile `/login` thành công với RAM toàn WSL khoảng 1.6/5.8 GB, không
+dùng swap. Lần compile đầu mất khoảng 40 giây nhưng lần tải đã cache chỉ khoảng
+0.1 giây. Phần chậm còn lại đến từ I/O qua `p9_client_rpc` vì repository nằm trên
+filesystem Windows `/mnt/c`; đặt project trên filesystem Linux của WSL sẽ nhanh
+hơn nếu cần tối ưu vòng lặp development.
+
+## 12. Flow chuẩn cho mỗi run tiếp theo
 
 Mỗi run áp dụng chu trình:
 
@@ -385,7 +426,7 @@ Mỗi run áp dụng chu trình:
 Ranh giới này không có nghĩa các tầng độc lập về thiết kế. Chúng được kết nối bởi
 contract đã chốt, nhưng được implement và giải thích ở các run riêng.
 
-## 12. Cách đọc các artifact
+## 13. Cách đọc các artifact
 
 | Artifact | Câu hỏi nó trả lời |
 | --- | --- |
@@ -396,7 +437,7 @@ contract đã chốt, nhưng được implement và giải thích ở các run r
 | Tests | Bằng chứng nào cho thấy behavior và invariant đúng? |
 | Commit | Một mốc thay đổi nhỏ có thể đọc, demo và hoàn tác |
 
-## 13. Trạng thái hiện tại và bước kế tiếp
+## 14. Trạng thái hiện tại và bước kế tiếp
 
 Đã hoàn thành:
 
@@ -421,8 +462,12 @@ PLAN
 → Backend login/session/me/logout API
 → Audit event migration 0002 + auth/RLS integration tests
 → Swagger/curl login flow verified
+→ Frontend login/session/logout UI bằng translation key Việt/Anh
+→ Same-origin API proxy và typed response contracts
+→ Frontend auth tests/lint/typecheck/build
+→ Browser-facing auth smoke test qua port 3000
 ```
 
-Bước tiếp theo được đề xuất là **frontend authentication UI**: form đăng nhập,
-session bootstrap qua `GET /api/v1/me`, logout và các trạng thái loading/error bằng
-translation key Việt/Anh. Run đó chưa làm Project hoặc Task.
+Bước tiếp theo được đề xuất là **Project backend** của Phase 1: domain/application
+service, migration tenant-owned, RLS, authorization, audit, idempotency và API/test
+cho Project. Run đó chưa làm Project UI hoặc Task.

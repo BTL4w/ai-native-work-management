@@ -3,9 +3,9 @@
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
 the identity/organization schema, local demo accounts and session authentication
-API are available, but the login UI and Project/Task behavior are not implemented
-yet. Local Compose currently runs PostgreSQL only; frontend and backend dev
-servers run on the host.
+API and login UI are available, but Project/Task behavior is not implemented yet.
+Local Compose currently runs PostgreSQL only; frontend and backend dev servers run
+on the host.
 
 ## One-command local development
 
@@ -62,6 +62,10 @@ PostgreSQL stores only the token's SHA-256 hash. The organization value is not
 trusted as authorization: the token must resolve to an active membership inside
 the same RLS tenant context.
 
+The browser-facing login page is `http://localhost:3000/login`. Browser API calls
+use the same-origin `/api/v1` path, which Next.js proxies to FastAPI. Configure a
+different backend origin with `API_ORIGIN` when necessary.
+
 ## Local PostgreSQL
 
 Prerequisite: Docker Desktop with WSL integration enabled for this distro.
@@ -110,6 +114,12 @@ cd frontend
 corepack pnpm@10 install --frozen-lockfile
 corepack pnpm@10 dev
 ```
+
+Development uses Next.js with Webpack because Turbopack's first route compilation
+can exceed the memory available to this WSL setup. On `/mnt/c`, the first compile
+can still take tens of seconds due to Windows/WSL filesystem I/O; later requests
+are cached. Keeping the repository on the WSL Linux filesystem gives a faster dev
+loop.
 
 Frontend quality checks:
 

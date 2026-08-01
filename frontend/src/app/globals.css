@@ -30,3 +30,45 @@ textarea,
 select {
   font: inherit;
 }
+
+.form-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: white;
+  padding: 0.75rem 0.875rem;
+  color: var(--foreground);
+  outline: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(49 87 213 / 14%);
+}
+
+.form-input[aria-invalid="true"] {
+  border-color: #b91c1c;
+}
+
+.primary-button {
+  border: 0;
+  border-radius: 0.75rem;
+  background: var(--accent);
+  padding: 0.75rem 1rem;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #2548bd;
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

@@ -3,10 +3,48 @@
     "title": "AI-native Work Management",
     "description": "A secure foundation for managing projects and tasks"
   },
+  "common": {
+    "loadingSession": "Checking your session…",
+    "redirectingToLogin": "Redirecting to sign in…",
+    "sessionUnavailableTitle": "We could not check your session",
+    "sessionUnavailableDescription": "The backend may not be ready. Check the server and try again.",
+    "retry": "Try again"
+  },
+  "auth": {
+    "login": {
+      "product": "Work Management",
+      "heroTitle": "A clear sign-in boundary before every business action.",
+      "heroDescription": "Identity, organization, and role are always verified by the backend session. The UI never stores tokens or decides permissions.",
+      "localOnly": "Local authentication is for learning and the Phase 1 portfolio demo only.",
+      "eyebrow": "Phase 1 · Local authentication",
+      "title": "Sign in",
+      "description": "Use one of the three demo accounts seeded in PostgreSQL.",
+      "email": "Email",
+      "password": "Password",
+      "submit": "Sign in",
+      "submitting": "Signing in…",
+      "invalidCredentials": "The email or password is incorrect.",
+      "unexpectedError": "Sign in is unavailable right now. Please try again.",
+      "sessionExpired": "Your session has expired. Please sign in again.",
+      "demoTitle": "Demo accounts",
+      "demoDescription": "Admin, Manager, and Employee share the local password: WorkDemo123!",
+      "validation": {
+        "email": "Enter a valid email address.",
+        "password": "Password is required."
+      }
+    }
+  },
   "home": {
-    "eyebrow": "Phase 1 · Frontend foundation",
-    "title": "Work management starts with a dependable manual flow.",
-    "description": "The application shell is ready. Authentication, projects and tasks will be implemented in later focused steps.",
-    "status": "Frontend foundation ready"
+    "product": "Work Management",
+    "navigationLabel": "Primary navigation",
+    "projectsComingSoon": "Projects · next step",
+    "myTasksComingSoon": "My Tasks · not implemented",
+    "eyebrow": "Phase 1 · Authentication ready",
+    "title": "Welcome, {name}.",
+    "description": "The frontend bootstrapped the backend session and only displays the verified user, organization, and role.",
+    "status": "Authenticated with the {role} role",
+    "logout": "Sign out",
+    "loggingOut": "Signing out…",
+    "logoutError": "We could not sign you out. Please try again."
   }
 }

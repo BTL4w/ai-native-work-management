@@ -3,10 +3,48 @@
     "title": "Quản lý công việc AI-native",
     "description": "Nền tảng an toàn để quản lý project và task"
   },
+  "common": {
+    "loadingSession": "Đang kiểm tra phiên đăng nhập…",
+    "redirectingToLogin": "Đang chuyển đến trang đăng nhập…",
+    "sessionUnavailableTitle": "Chưa thể kiểm tra phiên đăng nhập",
+    "sessionUnavailableDescription": "Backend có thể chưa sẵn sàng. Hãy kiểm tra server và thử lại.",
+    "retry": "Thử lại"
+  },
+  "auth": {
+    "login": {
+      "product": "Work Management",
+      "heroTitle": "Một phiên đăng nhập rõ ràng trước mọi hành động nghiệp vụ.",
+      "heroDescription": "Danh tính, organization và role luôn được backend xác minh từ session. Giao diện không lưu token và không tự quyết định quyền.",
+      "localOnly": "Local authentication chỉ phục vụ học tập và portfolio demo trong Phase 1.",
+      "eyebrow": "Phase 1 · Local authentication",
+      "title": "Đăng nhập",
+      "description": "Dùng một trong ba tài khoản demo đã được seed vào PostgreSQL.",
+      "email": "Email",
+      "password": "Mật khẩu",
+      "submit": "Đăng nhập",
+      "submitting": "Đang đăng nhập…",
+      "invalidCredentials": "Email hoặc mật khẩu không đúng.",
+      "unexpectedError": "Không thể đăng nhập lúc này. Vui lòng thử lại.",
+      "sessionExpired": "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
+      "demoTitle": "Tài khoản demo",
+      "demoDescription": "Admin, Manager và Employee dùng chung mật khẩu local: WorkDemo123!",
+      "validation": {
+        "email": "Nhập một địa chỉ email hợp lệ.",
+        "password": "Mật khẩu không được để trống."
+      }
+    }
+  },
   "home": {
-    "eyebrow": "Phase 1 · Nền tảng frontend",
-    "title": "Quản lý công việc bắt đầu từ một luồng thủ công đáng tin cậy.",
-    "description": "Application shell đã sẵn sàng. Đăng nhập, project và task sẽ được triển khai trong các bước riêng tiếp theo.",
-    "status": "Frontend foundation đã sẵn sàng"
+    "product": "Work Management",
+    "navigationLabel": "Điều hướng chính",
+    "projectsComingSoon": "Projects · bước kế tiếp",
+    "myTasksComingSoon": "My Tasks · chưa triển khai",
+    "eyebrow": "Phase 1 · Authentication ready",
+    "title": "Xin chào, {name}.",
+    "description": "Frontend đã bootstrap session từ backend và chỉ hiển thị user, organization, role đã được xác minh.",
+    "status": "Đã xác thực với role {role}",
+    "logout": "Đăng xuất",
+    "loggingOut": "Đang đăng xuất…",
+    "logoutError": "Không thể đăng xuất. Vui lòng thử lại."
   }
 }
