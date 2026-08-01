@@ -11,10 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
 from app.core.database import Base, create_database_engine
+from app.modules.audit.adapters import database_models as audit_models
 from app.modules.identity.adapters import database_models as identity_models
 from app.modules.organization.adapters import database_models as organization_models
 
-_MODEL_MODULES = (identity_models, organization_models)
+_MODEL_MODULES = (audit_models, identity_models, organization_models)
 
 config = context.config
 

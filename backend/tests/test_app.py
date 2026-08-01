@@ -34,7 +34,15 @@ async def test_openapi_document_is_available() -> None:
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "Work Management API"
-    assert response.json()["paths"] == {}
+    assert set(response.json()["paths"]) == {
+        "/api/v1/auth/login",
+        "/api/v1/auth/logout",
+        "/api/v1/me",
+    }
+    login_responses = response.json()["paths"]["/api/v1/auth/login"]["post"]["responses"]
+    assert login_responses["422"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
     assert response.headers["X-Request-ID"]
 
 
@@ -77,6 +85,28 @@ async def test_request_validation_uses_structured_error_contract() -> None:
     assert payload["message_key"] == "common.error.validation"
     assert payload["field_errors"][0]["field"] == "path.item_id"
     assert "input" not in payload
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_reports_body_in_structured_error_contract() -> None:
+    app = _test_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/v1/auth/login",
+            content='{"email":"manager@example.test","password":"missing-quote}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert response.json()["error"]["field_errors"] == [
+        {
+            "field": "body",
+            "code": "JSON_INVALID",
+            "message_key": "validation.invalid",
+        }
+    ]
 
 
 @pytest.mark.asyncio

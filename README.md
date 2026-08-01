@@ -2,9 +2,10 @@
 
 The repository is being built one focused vertical step at a time. It currently
 contains the Phase 1 frontend, FastAPI and database code foundations;
-the identity/organization schema and local demo accounts are available, but the
-login API and Project/Task behavior are not implemented yet. Local Compose
-currently runs PostgreSQL only; frontend and backend dev servers run on the host.
+the identity/organization schema, local demo accounts and session authentication
+API are available, but the login UI and Project/Task behavior are not implemented
+yet. Local Compose currently runs PostgreSQL only; frontend and backend dev
+servers run on the host.
 
 ## One-command local development
 
@@ -35,6 +36,31 @@ Demo accounts all use the local-only password `WorkDemo123!`:
 | Admin | `admin@example.test` |
 | Manager | `manager@example.test` |
 | Employee | `employee@example.test` |
+
+## Local authentication API
+
+After `make` has started the application, log in and store the HttpOnly session
+cookie in a temporary cookie jar:
+
+```bash
+curl -i -c /tmp/work-management.cookies \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"manager@example.test","password":"WorkDemo123!"}' \
+  http://localhost:8000/api/v1/auth/login
+```
+
+Resolve the current authenticated actor, then revoke the session:
+
+```bash
+curl -b /tmp/work-management.cookies http://localhost:8000/api/v1/me
+curl -i -X POST -b /tmp/work-management.cookies \
+  http://localhost:8000/api/v1/auth/logout
+```
+
+The cookie contains an opaque random credential and an organization locator.
+PostgreSQL stores only the token's SHA-256 hash. The organization value is not
+trusted as authorization: the token must resolve to an active membership inside
+the same RLS tenant context.
 
 ## Local PostgreSQL
 
@@ -101,9 +127,9 @@ Root commands include `make lint`, `make typecheck`, `make test` and
 ## Backend development
 
 The backend currently provides the FastAPI application shell, configuration,
-structured error handling, an async SQLAlchemy session factory, Alembic, and
-the Phase 1 identity/organization tables. Login and product endpoints are not
-implemented yet.
+structured error handling, an async SQLAlchemy session factory, Alembic, the
+Phase 1 identity/organization tables and local session authentication. Product
+endpoints are not implemented yet.
 
 Prerequisite: install [uv](https://docs.astral.sh/uv/).
 

@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _POSTGRESQL_ASYNC_URL_PREFIX = "postgresql+psycopg://"
@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     local_auth_organization_name: str = "Demo Organization"
     demo_seed_enabled: bool = False
     demo_seed_password: SecretStr = SecretStr("WorkDemo123!")
+    session_cookie_name: str = "work_management_session"
+    session_ttl_seconds: int = Field(default=28_800, ge=300, le=604_800)
+    session_secure_cookie: bool = False
+    frontend_origin: str = "http://localhost:3000"
 
     @field_validator("database_url")
     @classmethod
@@ -39,6 +43,15 @@ class Settings(BaseSettings):
             msg = f"database_url must start with {_POSTGRESQL_ASYNC_URL_PREFIX}"
             raise ValueError(msg)
         return value
+
+    @model_validator(mode="after")
+    def require_secure_production_cookie(self) -> "Settings":
+        """Refuse a production configuration that sends the session cookie over HTTP."""
+
+        if self.environment == "production" and not self.session_secure_cookie:
+            msg = "session_secure_cookie must be true in production"
+            raise ValueError(msg)
+        return self
 
 
 @lru_cache

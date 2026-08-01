@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.api.errors import register_error_handlers
 from app.core.config import Settings, get_settings
+from app.modules.identity.adapters.runtime import create_auth_runtime
+from app.modules.identity.api.routes import router as auth_router
+from app.modules.identity.application.auth_service import AuthService
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -21,14 +27,41 @@ def _resolve_request_id(request: Request) -> str:
     return uuid4().hex
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    auth_service: AuthService | None = None,
+) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
     resolved_settings = settings or get_settings()
+    database_engine: AsyncEngine | None = None
+    resolved_auth_service = auth_service
+    if resolved_auth_service is None:
+        resolved_auth_service, database_engine = create_auth_runtime(resolved_settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+        try:
+            yield
+        finally:
+            if database_engine is not None:
+                await database_engine.dispose()
+
     app = FastAPI(
         title=resolved_settings.name,
         version=resolved_settings.version,
         debug=resolved_settings.debug,
+        lifespan=lifespan,
+    )
+    app.state.settings = resolved_settings
+    app.state.auth_service = resolved_auth_service
+    app.state.database_engine = database_engine
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[resolved_settings.frontend_origin],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-Request-ID"],
     )
 
     @app.middleware("http")
@@ -43,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     register_error_handlers(app)
+    app.include_router(auth_router, prefix="/api/v1")
     return app
 
 

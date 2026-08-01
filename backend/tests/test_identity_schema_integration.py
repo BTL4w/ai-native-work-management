@@ -137,7 +137,8 @@ async def test_runtime_and_owner_roles_do_not_bypass_rls() -> None:
                 text(
                     "SELECT tablename, tableowner FROM pg_tables "
                     "WHERE schemaname = 'public' "
-                    "AND tablename IN ('organizations', 'users', 'memberships', 'auth_sessions')"
+                    "AND tablename IN "
+                    "('organizations', 'users', 'memberships', 'auth_sessions', 'audit_events')"
                 )
             )
             assert {row.tablename: row.tableowner for row in table_owners} == {
@@ -145,12 +146,14 @@ async def test_runtime_and_owner_roles_do_not_bypass_rls() -> None:
                 "users": "migration_owner",
                 "memberships": "migration_owner",
                 "auth_sessions": "migration_owner",
+                "audit_events": "migration_owner",
             }
 
             rls_flags = await connection.execute(
                 text(
                     "SELECT relname, relrowsecurity, relforcerowsecurity "
-                    "FROM pg_class WHERE relname IN ('memberships', 'auth_sessions')"
+                    "FROM pg_class "
+                    "WHERE relname IN ('memberships', 'auth_sessions', 'audit_events')"
                 )
             )
             assert {
@@ -158,6 +161,15 @@ async def test_runtime_and_owner_roles_do_not_bypass_rls() -> None:
             } == {
                 "memberships": (True, True),
                 "auth_sessions": (True, True),
+                "audit_events": (True, True),
             }
+
+            audit_privileges = await connection.execute(
+                text(
+                    "SELECT privilege_type FROM information_schema.role_table_grants "
+                    "WHERE grantee = 'app_runtime' AND table_name = 'audit_events'"
+                )
+            )
+            assert {row.privilege_type for row in audit_privileges} == {"INSERT", "SELECT"}
     finally:
         await engine.dispose()

@@ -22,7 +22,13 @@ def test_seed_is_disabled_by_default() -> None:
 
 def test_seed_is_forbidden_outside_local_environment() -> None:
     with pytest.raises(RuntimeError, match="APP_ENVIRONMENT=local"):
-        ensure_demo_seed_allowed(Settings(environment="production", demo_seed_enabled=True))
+        ensure_demo_seed_allowed(
+            Settings(
+                environment="production",
+                demo_seed_enabled=True,
+                session_secure_cookie=True,
+            )
+        )
 
 
 def test_seed_is_allowed_only_when_local_and_explicitly_enabled() -> None:

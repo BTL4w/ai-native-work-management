@@ -61,6 +61,12 @@ def _request_id(request: Request) -> str:
     return str(request.state.request_id)
 
 
+def _validation_field(error: Mapping[str, Any]) -> str:
+    if error.get("type") == "json_invalid":
+        return "body"
+    return ".".join(str(part) for part in error["loc"] if part not in {"body", "query"})
+
+
 def _response(
     *,
     request: Request,
@@ -117,7 +123,7 @@ def register_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         field_errors = [
             FieldError(
-                field=".".join(str(part) for part in error["loc"] if part not in {"body", "query"}),
+                field=_validation_field(error),
                 code=str(error["type"]).upper(),
                 message_key="validation.invalid",
             )
