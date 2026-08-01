@@ -563,3 +563,23 @@ contract, frontend feature hoặc Phase 1 business scope.
 - Dev server, browser smoke và production frontend build chưa được chạy.
 - `pnpm` cảnh báo bỏ qua build script của `@parcel/watcher`, `@swc/core`, `sharp`
   và `unrs-resolver`; các native path này chưa được xác minh trực tiếp.
+
+## 16. Workspace visual polish — app shell hiện đại
+
+Sau khi flow Phase 1 và E2E đã ổn định, workspace được polish lại mà không thay
+đổi API hay business behavior:
+
+- App shell toàn màn hình dùng nền sáng, khoảng trắng rộng và typography hiện đại.
+- Sidebar trắng bên trái chứa Projects, Task của tôi, Giao task và khu vực tài
+  khoản; sidebar có thể thu gọn để chỉ còn icon.
+- Manager chọn **Giao task** sẽ được hướng dẫn chọn project rồi mở đúng form tạo
+  và giao task hiện có. Employee không thấy action vượt quyền.
+- Tài khoản, role, ngôn ngữ và đăng xuất được gom vào cuối sidebar; mobile vẫn
+  giữ các action thiết yếu trong header gọn.
+- Card, status, form, dialog, focus state và hover state dùng cùng một visual
+  system, đồng thời tôn trọng `prefers-reduced-motion`.
+- Trợ lý AI/Chat xuất hiện dưới dạng mục disabled có nhãn **Phase 2**. Không có
+  AI behavior, endpoint hoặc dữ liệu giả nào bị đưa sớm vào Phase 1.
+
+Visual polish vẫn giữ nguyên accessible name của các action chính để contract
+component test và Playwright E2E tiếp tục kiểm tra cùng một user flow.

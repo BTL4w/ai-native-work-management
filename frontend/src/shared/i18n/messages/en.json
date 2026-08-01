@@ -51,7 +51,15 @@
   "work": {
     "product": "Work Management",
     "navigationLabel": "Work navigation",
-    "nav": { "projects": "Projects", "myTasks": "My Tasks" },
+    "nav": { "chat": "AI Assistant", "projects": "Projects", "myTasks": "My Tasks", "assignTask": "Assign task" },
+    "sidebar": {
+      "workspace": "Workspace",
+      "account": "Account",
+      "collapse": "Collapse sidebar",
+      "expand": "Expand sidebar",
+      "soon": "Phase 2",
+      "phase": "Phase 1 live"
+    },
     "role": { "ADMIN": "Administrator", "MANAGER": "Manager", "EMPLOYEE": "Employee" },
     "common": { "loading": "Loading…", "saving": "Saving…", "noDescription": "No description" },
     "project": {
@@ -81,6 +89,7 @@
       "assignee": "Assignee",
       "dueDate": "Due date",
       "selectAssignee": "Select an assignee",
+      "selectProjectToAssign": "Choose a project to create and assign a new task.",
       "save": "Save task",
       "start": "Start task",
       "returnToDo": "Return to do",

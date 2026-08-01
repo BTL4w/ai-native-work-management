@@ -43,6 +43,24 @@ describe("WorkWorkspace", () => {
     expect(formatCalendarDate("2026-08-12", "en-US")).toBe("8/12/2026");
   });
 
+  it("provides a collapsible, phase-aware workspace sidebar", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/v1/projects") return response(page([]));
+      throw new Error(`Unexpected request: ${String(input)}`);
+    }));
+
+    const { container } = renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
+
+    expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Giao task" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Giao task" }));
+    expect(screen.getByText("Chọn một project để tạo và giao task mới.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Thu gọn thanh bên" }));
+
+    expect(container.querySelector(".workspace-shell-collapsed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mở rộng thanh bên" })).toBeVisible();
+  });
+
   it("lets a Manager create a Project and assign a Task", async () => {
     let projects = [] as typeof project[];
     let tasks = [] as typeof task[];

@@ -51,7 +51,15 @@
   "work": {
     "product": "Work Management",
     "navigationLabel": "Điều hướng công việc",
-    "nav": { "projects": "Projects", "myTasks": "My Tasks" },
+    "nav": { "chat": "Trợ lý AI", "projects": "Projects", "myTasks": "Task của tôi", "assignTask": "Giao task" },
+    "sidebar": {
+      "workspace": "Không gian làm việc",
+      "account": "Tài khoản",
+      "collapse": "Thu gọn thanh bên",
+      "expand": "Mở rộng thanh bên",
+      "soon": "Phase 2",
+      "phase": "Phase 1 đang hoạt động"
+    },
     "role": { "ADMIN": "Quản trị viên", "MANAGER": "Quản lý", "EMPLOYEE": "Nhân viên" },
     "common": { "loading": "Đang tải…", "saving": "Đang lưu…", "noDescription": "Chưa có mô tả" },
     "project": {
@@ -81,6 +89,7 @@
       "assignee": "Người thực hiện",
       "dueDate": "Hạn chót",
       "selectAssignee": "Chọn người thực hiện",
+      "selectProjectToAssign": "Chọn một project để tạo và giao task mới.",
       "save": "Lưu task",
       "start": "Bắt đầu task",
       "returnToDo": "Đưa về cần làm",

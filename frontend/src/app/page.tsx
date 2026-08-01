@@ -8,7 +8,6 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { WorkWorkspace } from "@/features/work/workspace";
 
 export default function HomePage() {
-  const t = useTranslations("home");
   const common = useTranslations("common");
   const router = useRouter();
   const {
@@ -60,14 +59,14 @@ export default function HomePage() {
   }
 
   return (
-    <main className="min-h-screen bg-[var(--background)] p-4 sm:p-6">
-      <div className="mx-auto mb-3 flex max-w-6xl items-center justify-end gap-4">
-        {logoutFailed ? <p className="text-sm text-red-700" role="alert">{t("logoutError")}</p> : null}
-        <button className="secondary-button" disabled={isLoggingOut} type="button" onClick={handleLogout}>
-          {isLoggingOut ? t("loggingOut") : t("logout")}
-        </button>
-      </div>
-      <div className="mx-auto max-w-6xl"><WorkWorkspace key={`${actor.membership.organization_id}:${actor.membership.id}`} actor={actor} /></div>
+    <main className="min-h-screen bg-[var(--background)]">
+      <WorkWorkspace
+        key={`${actor.membership.organization_id}:${actor.membership.id}`}
+        actor={actor}
+        isLoggingOut={isLoggingOut}
+        logoutError={logoutFailed}
+        onLogout={handleLogout}
+      />
     </main>
   );
 }

@@ -15,6 +15,24 @@ async function signOut(page: Page) {
   await expect(page).toHaveURL(/\/login$/);
 }
 
+test("invalid credentials can be corrected without losing the login flow", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill("manager@example.test");
+  await page.getByLabel("Mật khẩu").fill("incorrect-password");
+  await page.getByRole("button", { name: "Đăng nhập" }).click();
+
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Email hoặc mật khẩu không đúng." }),
+  ).toHaveText("Email hoặc mật khẩu không đúng.");
+  await expect(page).toHaveURL(/\/login$/);
+
+  await page.getByLabel("Mật khẩu").fill(password);
+  await page.getByRole("button", { name: "Đăng nhập" }).click();
+
+  await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+});
+
 test("Manager assigns a Task and Employee completes it", async ({ page }) => {
   const suffix = `${Date.now()}`;
   const projectName = `E2E Project ${suffix}`;

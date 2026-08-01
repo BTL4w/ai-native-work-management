@@ -60,8 +60,19 @@ function useMutationAttempt() {
   };
 }
 
-export function WorkWorkspace({ actor }: { actor: MeResponse }) {
+export function WorkWorkspace({
+  actor,
+  isLoggingOut = false,
+  logoutError = false,
+  onLogout,
+}: {
+  actor: MeResponse;
+  isLoggingOut?: boolean;
+  logoutError?: boolean;
+  onLogout?: () => void | Promise<void>;
+}) {
   const t = useTranslations("work");
+  const home = useTranslations("home");
   const locale = useLocale();
   const queryClient = useQueryClient();
   const workQueryKey: WorkQueryKey = [
@@ -79,6 +90,8 @@ export function WorkWorkspace({ actor }: { actor: MeResponse }) {
   const [projectsPage, setProjectsPage] = useState(1);
   const [tasksPage, setTasksPage] = useState(1);
   const [myTasksPage, setMyTasksPage] = useState(1);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [assignmentMode, setAssignmentMode] = useState(false);
 
   const projects = useQuery({
     queryKey: [...workQueryKey, "projects", projectsPage],
@@ -97,14 +110,26 @@ export function WorkWorkspace({ actor }: { actor: MeResponse }) {
   });
 
   function openProjects() {
+    setAssignmentMode(false);
     setView("projects");
     setSelectedTask(null);
   }
 
   function openMyTasks() {
+    setAssignmentMode(false);
     setView("myTasks");
     setSelectedProject(null);
     setSelectedTask(null);
+  }
+
+  function openAssignmentFlow() {
+    setView("projects");
+    setSelectedTask(null);
+    if (selectedProject) {
+      setTaskForm({ task: null });
+    } else {
+      setAssignmentMode(true);
+    }
   }
 
   function updateCachedTask(updated: Task) {
@@ -118,26 +143,77 @@ export function WorkWorkspace({ actor }: { actor: MeResponse }) {
     setSelectedTask(updated);
   }
 
+  const pageTitle = assignmentMode
+    ? t("nav.assignTask")
+    : view === "myTasks"
+    ? t("task.myTitle")
+    : selectedProject?.name ?? t("project.title");
+
   return (
-    <div className="grid min-h-[calc(100vh-3rem)] overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)] shadow-sm lg:grid-cols-[240px_1fr]">
-      <aside className="flex flex-col border-b border-[var(--border)] bg-slate-950 p-6 text-white lg:border-r lg:border-b-0">
-        <div>
-          <p className="text-xs font-semibold tracking-[0.2em] text-blue-300 uppercase">{t("product")}</p>
-          <h1 className="mt-3 text-xl font-semibold">{actor.membership.organization_name}</h1>
+    <div className={`workspace-shell ${sidebarCollapsed ? "workspace-shell-collapsed" : ""}`}>
+      <aside className="workspace-sidebar">
+        <div className="sidebar-brand">
+          <span aria-hidden="true" className="brand-mark"><AppIcon name="spark" /></span>
+          <div className="sidebar-copy min-w-0">
+            <p className="brand-name">{t("product")}</p>
+            <p className="truncate text-xs text-slate-500">{actor.membership.organization_name}</p>
+          </div>
+          <button
+            aria-label={sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+            className="sidebar-collapse-button"
+            title={sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+            type="button"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+          >
+            <AppIcon name={sidebarCollapsed ? "chevronRight" : "chevronLeft"} />
+          </button>
         </div>
-        <nav aria-label={t("navigationLabel")} className="mt-8 space-y-2">
-          <button aria-current={view === "projects" ? "page" : undefined} className={navClass(view === "projects")} type="button" onClick={openProjects}>{t("nav.projects")}</button>
-          <button aria-current={view === "myTasks" ? "page" : undefined} className={navClass(view === "myTasks")} type="button" onClick={openMyTasks}>{t("nav.myTasks")}</button>
+
+        <nav aria-label={t("navigationLabel")} className="sidebar-navigation">
+          <p className="sidebar-section-label sidebar-copy">{t("sidebar.workspace")}</p>
+          <SidebarItem disabled icon="chat" label={t("nav.chat")} meta={t("sidebar.soon")} />
+          <SidebarItem active={view === "projects"} icon="grid" label={t("nav.projects")} onClick={openProjects} />
+          <SidebarItem active={view === "myTasks"} icon="check" label={t("nav.myTasks")} onClick={openMyTasks} />
+          {canManage ? <SidebarItem icon="plus" label={t("nav.assignTask")} onClick={openAssignmentFlow} /> : null}
         </nav>
-        <div className="mt-8 border-t border-white/10 pt-5 lg:mt-auto">
-          <LocaleSwitcher inverse />
-          <p className="text-sm font-medium">{actor.user.display_name}</p>
-          <p className="mt-1 text-xs text-slate-400">{actor.user.email}</p>
-          <p className="mt-3 text-xs font-semibold tracking-wide text-blue-300 uppercase">{t(`role.${actor.membership.role}`)} · {locale.toUpperCase()}</p>
+
+        <div className="sidebar-account">
+          <p className="sidebar-section-label sidebar-copy">{t("sidebar.account")}</p>
+          <div className="account-summary">
+            <span aria-hidden="true" className="account-avatar">{initials(actor.user.display_name)}</span>
+            <div className="sidebar-copy min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-900">{actor.user.display_name}</p>
+              <p className="truncate text-xs text-slate-500">{actor.user.email}</p>
+            </div>
+          </div>
+          <p className="sidebar-copy account-role">{t(`role.${actor.membership.role}`)} · {locale.toUpperCase()}</p>
+          <div className="sidebar-copy sidebar-locale mt-3"><LocaleSwitcher /></div>
+          {logoutError ? <p className="sidebar-copy error-message mt-3" role="alert">{home("logoutError")}</p> : null}
+          {onLogout ? (
+            <button
+              aria-label={isLoggingOut ? home("loggingOut") : home("logout")}
+              className="sidebar-logout"
+              disabled={isLoggingOut}
+              title={home("logout")}
+              type="button"
+              onClick={() => void onLogout()}
+            >
+              <AppIcon name="logout" />
+              <span className="sidebar-copy">{isLoggingOut ? home("loggingOut") : home("logout")}</span>
+            </button>
+          ) : null}
         </div>
       </aside>
 
-      <main className="min-w-0 p-5 sm:p-8">
+      <div className="workspace-main">
+        <header className="workspace-topbar">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold tracking-[0.12em] text-slate-400 uppercase">{actor.membership.organization_name}</p>
+            <p className="truncate text-base font-semibold text-slate-900">{pageTitle}</p>
+          </div>
+          <span className="phase-badge"><span aria-hidden="true" className="phase-dot" />{t("sidebar.phase")}</span>
+        </header>
+        <main className="workspace-content">
         {view === "projects" ? (
           <ProjectsView
             canManage={canManage}
@@ -149,7 +225,16 @@ export function WorkWorkspace({ actor }: { actor: MeResponse }) {
             tasksLoading={projectTasks.isPending}
             tasksError={projectTasks.error}
             selectedTask={selectedTask}
-            onSelectProject={(project) => { setSelectedProject(project); setSelectedTask(null); setTasksPage(1); }}
+            assignmentMode={assignmentMode}
+            onSelectProject={(project) => {
+              setSelectedProject(project);
+              setSelectedTask(null);
+              setTasksPage(1);
+              if (project && assignmentMode) {
+                setAssignmentMode(false);
+                setTaskForm({ task: null });
+              }
+            }}
             onSelectTask={setSelectedTask}
             onNewProject={() => setProjectForm({ project: null })}
             onEditProject={(project) => setProjectForm({ project })}
@@ -185,7 +270,8 @@ export function WorkWorkspace({ actor }: { actor: MeResponse }) {
             onPage={setMyTasksPage}
           />
         )}
-      </main>
+        </main>
+      </div>
 
       {projectForm ? (
         <ProjectForm
@@ -219,9 +305,50 @@ export function WorkWorkspace({ actor }: { actor: MeResponse }) {
   );
 }
 
+type IconName = "spark" | "chat" | "grid" | "check" | "plus" | "logout" | "chevronLeft" | "chevronRight";
+
+function SidebarItem({ active = false, disabled = false, icon, label, meta, onClick }: {
+  active?: boolean; disabled?: boolean; icon: IconName; label: string; meta?: string; onClick?: () => void;
+}) {
+  return (
+    <button
+      aria-current={active ? "page" : undefined}
+      aria-label={label}
+      className={`sidebar-item ${active ? "sidebar-item-active" : ""}`}
+      disabled={disabled}
+      title={label}
+      type="button"
+      onClick={onClick}
+    >
+      <span aria-hidden="true" className="sidebar-item-icon"><AppIcon name={icon} /></span>
+      <span className="sidebar-copy sidebar-item-label">{label}</span>
+      {meta ? <span className="sidebar-copy sidebar-item-meta">{meta}</span> : null}
+    </button>
+  );
+}
+
+function AppIcon({ name }: { name: IconName }) {
+  const paths: Record<IconName, ReactNode> = {
+    spark: <><path d="M12 2.75 13.55 8.45 19.25 10 13.55 11.55 12 17.25l-1.55-5.7L4.75 10l5.7-1.55L12 2.75Z" /><path d="m18.25 15 .65 2.1 2.1.65-2.1.65-.65 2.1-.65-2.1-2.1-.65 2.1-.65.65-2.1Z" /></>,
+    chat: <><path d="M7 18.5 3.5 21v-5A8 8 0 1 1 7 18.5Z" /><path d="M8 10h.01M12 10h.01M16 10h.01" /></>,
+    grid: <><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></>,
+    check: <><path d="M9 11.5 11 13.5 15.5 9" /><rect x="3" y="3" width="18" height="18" rx="5" /></>,
+    plus: <><path d="M12 5v14M5 12h14" /><circle cx="12" cy="12" r="9" /></>,
+    logout: <><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M9 12h9" /></>,
+    chevronLeft: <path d="m14 7-5 5 5 5" />,
+    chevronRight: <path d="m10 7 5 5-5 5" />,
+  };
+  return <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8">{paths[name]}</svg>;
+}
+
+function initials(displayName: string) {
+  return displayName.split(/\s+/).filter(Boolean).slice(-2).map((part) => part[0]?.toUpperCase()).join("");
+}
+
 function ProjectsView(props: {
   canManage: boolean; projects: ProjectPage; isLoading: boolean; error: Error | null;
   selectedProject: Project | null; tasks: TaskPage; tasksLoading: boolean; tasksError: Error | null;
+  assignmentMode: boolean;
   selectedTask: Task | null; onSelectProject: (p: Project | null) => void; onSelectTask: (t: Task | null) => void;
   onNewProject: () => void; onEditProject: (p: Project) => void; onNewTask: () => void;
   onEditTask: (task: Task) => void; onTaskUpdated: (task: Task) => void;
@@ -247,6 +374,7 @@ function ProjectsView(props: {
   return (
     <section>
       <div className="flex items-center justify-between gap-4"><div><p className="eyebrow">{t("project.eyebrow")}</p><h2 className="page-title">{t("project.title")}</h2></div>{props.canManage ? <button className="primary-button" type="button" onClick={props.onNewProject}>{t("project.create")}</button> : null}</div>
+      {props.assignmentMode ? <div className="assignment-hint" role="status"><span aria-hidden="true">↳</span><p>{t("task.selectProjectToAssign")}</p></div> : null}
       {props.isLoading ? <Status text={t("common.loading")} /> : props.error ? <ErrorState error={props.error} onRetry={props.onRetryProjects} /> : props.projects.items.length === 0 ? <EmptyState text={t("project.empty")} /> : <><div className="mt-8 grid gap-4 sm:grid-cols-2">{props.projects.items.map((project) => <button key={project.id} className="resource-card text-left" type="button" onClick={() => props.onSelectProject(project)}><h3 className="font-semibold">{project.name}</h3><p className="mt-2 line-clamp-2 text-sm text-slate-600">{project.description || t("common.noDescription")}</p></button>)}</div><Pagination page={props.projects} onPage={props.onProjectsPage} /></>}
     </section>
   );
@@ -399,7 +527,6 @@ function Status({ text }: { text: string }) { return <p className="mt-8 text-sm 
 function EmptyState({ text, action }: { text: string; action?: ReactNode }) { return <div className="mt-8 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-600"><p>{text}</p>{action}</div>; }
 function ErrorState({ error, onRetry }: { error: Error; onRetry: () => void }) { const t = useTranslations("work"); return <div className="error-message mt-8" role="alert"><p>{errorMessage(error, t)}</p><button className="mt-3 font-semibold underline" type="button" onClick={onRetry}>{t("action.retry")}</button></div>; }
 function Detail({ label, value }: { label: string; value: string }) { return <div><dt className="text-xs font-semibold tracking-wide text-slate-500 uppercase">{label}</dt><dd className="mt-2 text-sm">{value}</dd></div>; }
-function navClass(active: boolean) { return `block w-full rounded-xl px-4 py-3 text-left text-sm ${active ? "bg-white/15 text-white" : "text-slate-400 hover:bg-white/10 hover:text-white"}`; }
 type FormIssue = { message: string; fields: Record<string, string>; conflict: boolean };
 type ErrorTranslationKey = "error.conflict" | "error.forbidden" | "error.notFound" | "error.unexpected" | "error.invalidField";
 function errorMessage(error: unknown, t: (key: ErrorTranslationKey) => string) { if (error instanceof ApiError) { if (error.code === "RESOURCE_VERSION_MISMATCH") return t("error.conflict"); if (error.code === "FORBIDDEN") return t("error.forbidden"); if (error.code === "RESOURCE_NOT_FOUND") return t("error.notFound"); return `${t("error.unexpected")} (${error.requestId ?? error.code})`; } return t("error.unexpected"); }
