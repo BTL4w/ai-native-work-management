@@ -8,6 +8,7 @@ const frontendRoot = fileURLToPath(new URL(".", import.meta.url));
 
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
+  output: "standalone",
   outputFileTracingRoot: frontendRoot,
   reactStrictMode: true,
   turbopack: { root: frontendRoot },

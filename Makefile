@@ -6,7 +6,7 @@ E2E_DATABASE_URL := postgresql+psycopg://work_management:work_management@localho
 
 .DEFAULT_GOAL := dev
 
-.PHONY: dev up bootstrap install db-up backend-dev frontend-dev migrate seed down lint typecheck test test-ai test-e2e e2e-db-reset migration-check
+.PHONY: dev up bootstrap install db-up backend-dev frontend-dev migrate seed down ai ai-sync ai-lint ai-typecheck ai-test containers-build containers-up containers-down containers-config-check ai-image-check lint typecheck test test-ai test-e2e e2e-db-reset migration-check
 
 dev: bootstrap
 	$(MAKE) --no-print-directory -j2 backend-dev frontend-dev
@@ -40,6 +40,36 @@ seed:
 down:
 	docker compose down
 
+ai:
+	$(MAKE) --no-print-directory -C ai check
+
+ai-sync:
+	$(MAKE) --no-print-directory -C ai sync
+
+ai-lint:
+	$(MAKE) --no-print-directory -C ai lint
+
+ai-typecheck:
+	$(MAKE) --no-print-directory -C ai typecheck
+
+ai-test:
+	$(MAKE) --no-print-directory -C ai test
+
+containers-build:
+	docker compose --profile tools build backend-api frontend ai-check
+
+containers-up:
+	docker compose up -d --build --wait --wait-timeout 60 postgres backend-api frontend
+
+containers-down:
+	docker compose --profile tools down
+
+containers-config-check:
+	docker compose --profile tools config --quiet
+
+ai-image-check:
+	docker compose --profile tools run --rm --build ai-check
+
 lint:
 	$(MAKE) --no-print-directory -C backend lint
 	$(PNPM) --dir frontend lint
@@ -52,8 +82,7 @@ test:
 	$(MAKE) --no-print-directory -C backend test
 	$(PNPM) --dir frontend test --pool=threads
 
-test-ai:
-	$(MAKE) --no-print-directory -C backend test-ai
+test-ai: ai-test
 
 e2e-db-reset: db-up
 	docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U work_management -d postgres -c "DROP DATABASE IF EXISTS $(E2E_DB_NAME) WITH (FORCE);"

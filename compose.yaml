@@ -21,5 +21,79 @@ services:
       start_period: 5s
     stop_grace_period: 10s
 
+  backend-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_AI_PROVIDER: ${APP_AI_PROVIDER:-disabled}
+      APP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-work_management}:${POSTGRES_PASSWORD:-work_management}@postgres:5432/${POSTGRES_DB:-work_management}
+      APP_DEBUG: "false"
+      APP_DEMO_SEED_ENABLED: "true"
+      APP_DEMO_SEED_PASSWORD: ${APP_DEMO_SEED_PASSWORD:-WorkDemo123!}
+      APP_ENVIRONMENT: local
+      APP_FRONTEND_ORIGIN: http://localhost:${FRONTEND_PORT:-3000}
+      APP_SESSION_SECURE_COOKIE: "false"
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        alembic upgrade head &&
+        python -m app.scripts.seed_demo &&
+        exec fastapi run app/main.py --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2).close()
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+      args:
+        API_ORIGIN: http://backend-api:8000
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/')
+          .then(response => process.exit(response.ok ? 0 : 1))
+          .catch(() => process.exit(1))
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+  ai-check:
+    profiles:
+      - tools
+    build:
+      context: ai
+      dockerfile: Dockerfile
+
 volumes:
   postgres_data:

@@ -11,6 +11,42 @@ dependencies = [
     "pydantic>=2,<3",
 ]
 
+[dependency-groups]
+dev = [
+    "pyright>=1.1,<2.0",
+    "pytest>=9.0,<10.0",
+    "pytest-asyncio>=1.0,<2.0",
+    "ruff>=0.15,<1.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "live_provider: requires explicit provider credentials and network access",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+venv = ".venv"
+venvPath = "."
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["work_management_ai"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
