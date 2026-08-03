@@ -58,7 +58,7 @@
       "collapse": "Collapse sidebar",
       "expand": "Expand sidebar",
       "soon": "Phase 2",
-      "phase": "Phase 1 live"
+      "phase": "Phase 2 · Manual planning"
     },
     "role": { "ADMIN": "Administrator", "MANAGER": "Manager", "EMPLOYEE": "Employee" },
     "common": { "loading": "Loading…", "saving": "Saving…", "noDescription": "No description" },
@@ -71,7 +71,10 @@
       "edit": "Edit project",
       "name": "Project name",
       "description": "Project description",
-      "save": "Save project"
+      "save": "Save project",
+      "sections": "Project sections",
+      "tasksTab": "Tasks",
+      "planTab": "Plan"
     },
     "task": {
       "sectionTitle": "Tasks",
@@ -95,7 +98,8 @@
       "returnToDo": "Return to do",
       "complete": "Complete",
       "reopen": "Reopen task",
-      "availableActions": "Status actions"
+      "availableActions": "Status actions",
+      "acceptanceCriteria": "Acceptance Criteria"
     },
     "status": { "TO_DO": "To do", "IN_PROGRESS": "In progress", "DONE": "Done" },
     "pagination": { "label": "Pagination", "previous": "Previous page", "next": "Next page", "page": "Page {page}" },
@@ -108,5 +112,17 @@
       "unexpected": "We could not complete the request right now.",
       "invalidField": "One or more fields are invalid."
     }
+  },
+  "planning": {
+    "title": "Project plan",
+    "readOnly": "Read only",
+    "common": { "loading": "Loading plan…", "saving": "Saving…", "targetDate": "Target date", "noTargetDate": "Unavailable", "position": "Position", "positionValue": "Position: {position}", "selectTask": "Select a task" },
+    "goal": { "title": "Project Goal", "add": "Add goal", "edit": "Edit goal", "empty": "No project goal yet.", "noOutcomes": "No expected outcomes.", "save": "Save goal", "fields": { "title": "Goal title", "description": "Goal description", "outcomes": "Expected outcomes" } },
+    "milestone": { "title": "Milestones", "add": "Add milestone", "edit": "Edit milestone", "empty": "No milestones yet.", "save": "Save milestone", "fields": { "name": "Milestone name", "description": "Milestone description" } },
+    "dependency": { "title": "Dependencies", "add": "Add dependency", "edit": "Edit dependency", "empty": "No dependencies yet.", "save": "Save dependency", "fields": { "predecessor": "Predecessor task", "successor": "Successor task" } },
+    "criteria": { "title": "Acceptance Criteria", "add": "Add criterion", "edit": "Edit criterion", "delete": "Delete criterion", "empty": "No acceptance criteria yet.", "emptyProject": "No task acceptance criteria yet.", "save": "Save criterion", "fields": { "text": "Criterion text" } },
+    "delete": { "title": "Delete planning item", "description": "This action cannot be undone.", "confirm": "Confirm delete" },
+    "action": { "edit": "Edit", "delete": "Delete", "cancel": "Cancel", "close": "Close", "retry": "Try again", "reload": "Reload plan" },
+    "error": { "load": "The project plan is unavailable.", "required": "Complete the required fields.", "mutation": "We could not complete this planning change.", "dependency": "The dependency is invalid or would create a cycle.", "stale": "This planning data changed. Reload it before trying again." }
   }
 }

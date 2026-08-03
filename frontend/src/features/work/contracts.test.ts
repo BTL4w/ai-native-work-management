@@ -24,6 +24,22 @@ import {
   taskStatusSchema,
   taskUpdateSchema,
 } from "./contracts";
+import {
+  acceptanceCriterionCreateSchema,
+  acceptanceCriterionSchema,
+  acceptanceCriterionUpdateSchema,
+  deleteResultSchema,
+  dependencyCreateSchema,
+  dependencyUpdateSchema,
+  goalCreateSchema,
+  goalSchema,
+  goalUpdateSchema,
+  milestoneCreateSchema,
+  milestoneSchema,
+  milestoneUpdateSchema,
+  planningPageSchema,
+  taskDependencySchema,
+} from "@/features/planning/contracts";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -40,6 +56,20 @@ const runtimeSchemas: Record<string, ZodType> = {
   AssigneeResponse: assigneeSchema,
   TaskResponse: taskSchema,
   TaskPageResponse: taskPageSchema,
+  GoalCreateRequest: goalCreateSchema,
+  GoalUpdateRequest: goalUpdateSchema,
+  GoalResponse: goalSchema,
+  MilestoneCreateRequest: milestoneCreateSchema,
+  MilestoneUpdateRequest: milestoneUpdateSchema,
+  MilestoneResponse: milestoneSchema,
+  DependencyCreateRequest: dependencyCreateSchema,
+  DependencyUpdateRequest: dependencyUpdateSchema,
+  DependencyResponse: taskDependencySchema,
+  AcceptanceCriterionCreateRequest: acceptanceCriterionCreateSchema,
+  AcceptanceCriterionUpdateRequest: acceptanceCriterionUpdateSchema,
+  AcceptanceCriterionResponse: acceptanceCriterionSchema,
+  PlanningPageResponse: planningPageSchema,
+  DeleteResponse: deleteResultSchema,
   FieldError: fieldErrorSchema,
   ErrorDetail: errorDetailSchema,
   ErrorResponse: errorResponseSchema,

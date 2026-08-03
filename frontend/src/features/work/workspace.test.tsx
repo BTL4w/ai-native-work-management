@@ -54,6 +54,7 @@ describe("WorkWorkspace", () => {
 
     expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Giao task" })).toBeEnabled();
+    expect(screen.getByText("Phase 2 · Manual planning")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Giao task" }));
     expect(screen.getByText("Chọn một project để tạo và giao task mới.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Thu gọn thanh bên" }));
@@ -346,6 +347,30 @@ describe("WorkWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Lưu project" }));
 
     expect(await screen.findByRole("button", { name: "Tải lại dữ liệu" })).toBeVisible();
+  });
+
+  it("opens the inline Project Plan and Task Acceptance Criteria from work details", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/projects") return response(page([project]));
+      if (path === `/api/v1/tasks?project_id=${project.id}&page=1&page_size=20`) return response(page([task]));
+      if (path.startsWith("/api/v1/goals?")) return response({ ...page([]), page_size: 100 });
+      if (path.startsWith("/api/v1/milestones?")) return response({ ...page([]), page_size: 100 });
+      if (path.startsWith("/api/v1/task-dependencies?")) return response({ ...page([]), page_size: 100 });
+      if (path === `/api/v1/tasks?project_id=${project.id}&page=1&page_size=100`) return response({ ...page([task]), page_size: 100 });
+      if (path === `/api/v1/acceptance-criteria?task_id=${task.id}&page=1&page_size=100`) return response({ ...page([]), page_size: 100 });
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(project.name) }));
+    fireEvent.click(screen.getByRole("tab", { name: "Kế hoạch" }));
+    expect(await screen.findByRole("heading", { name: "Kế hoạch project" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
+    fireEvent.click(await screen.findByText(task.title));
+    fireEvent.click(screen.getByRole("button", { name: "Tiêu chí chấp nhận" }));
+    expect(await screen.findByRole("heading", { name: "Tiêu chí chấp nhận" })).toBeVisible();
   });
 });
 

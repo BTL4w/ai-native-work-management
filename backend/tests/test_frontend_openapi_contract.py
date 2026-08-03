@@ -50,6 +50,23 @@ def test_frontend_work_contract_manifest_matches_openapi() -> None:
         app.openapi()["components"]["schemas"],
     )
 
+    assert {
+        "GoalCreateRequest",
+        "GoalUpdateRequest",
+        "GoalResponse",
+        "MilestoneCreateRequest",
+        "MilestoneUpdateRequest",
+        "MilestoneResponse",
+        "DependencyCreateRequest",
+        "DependencyUpdateRequest",
+        "DependencyResponse",
+        "AcceptanceCriterionCreateRequest",
+        "AcceptanceCriterionUpdateRequest",
+        "AcceptanceCriterionResponse",
+        "PlanningPageResponse",
+        "DeleteResponse",
+    }.issubset(manifest["schemas"])
+
     for enum_name, expected in manifest["enums"].items():
         schema = schemas[enum_name]
         assert isinstance(schema, dict)

@@ -58,7 +58,7 @@
       "collapse": "Thu gọn thanh bên",
       "expand": "Mở rộng thanh bên",
       "soon": "Phase 2",
-      "phase": "Phase 1 đang hoạt động"
+      "phase": "Phase 2 · Manual planning"
     },
     "role": { "ADMIN": "Quản trị viên", "MANAGER": "Quản lý", "EMPLOYEE": "Nhân viên" },
     "common": { "loading": "Đang tải…", "saving": "Đang lưu…", "noDescription": "Chưa có mô tả" },
@@ -71,7 +71,10 @@
       "edit": "Sửa project",
       "name": "Tên project",
       "description": "Mô tả project",
-      "save": "Lưu project"
+      "save": "Lưu project",
+      "sections": "Các phần của project",
+      "tasksTab": "Tasks",
+      "planTab": "Kế hoạch"
     },
     "task": {
       "sectionTitle": "Tasks",
@@ -95,7 +98,8 @@
       "returnToDo": "Đưa về cần làm",
       "complete": "Hoàn thành",
       "reopen": "Mở lại task",
-      "availableActions": "Hành động trạng thái"
+      "availableActions": "Hành động trạng thái",
+      "acceptanceCriteria": "Tiêu chí chấp nhận"
     },
     "status": { "TO_DO": "Cần làm", "IN_PROGRESS": "Đang thực hiện", "DONE": "Hoàn thành" },
     "pagination": { "label": "Phân trang", "previous": "Trang trước", "next": "Trang sau", "page": "Trang {page}" },
@@ -108,5 +112,17 @@
       "unexpected": "Không thể hoàn tất yêu cầu lúc này.",
       "invalidField": "Một hoặc nhiều trường chưa hợp lệ."
     }
+  },
+  "planning": {
+    "title": "Kế hoạch project",
+    "readOnly": "Chỉ đọc",
+    "common": { "loading": "Đang tải kế hoạch…", "saving": "Đang lưu…", "targetDate": "Ngày mục tiêu", "noTargetDate": "Chưa có", "position": "Vị trí", "positionValue": "Vị trí: {position}", "selectTask": "Chọn task" },
+    "goal": { "title": "Mục tiêu project", "add": "Thêm mục tiêu", "edit": "Sửa mục tiêu", "empty": "Chưa có mục tiêu project.", "noOutcomes": "Chưa có kết quả mong đợi.", "save": "Lưu mục tiêu", "fields": { "title": "Tiêu đề mục tiêu", "description": "Mô tả mục tiêu", "outcomes": "Kết quả mong đợi" } },
+    "milestone": { "title": "Milestones", "add": "Thêm milestone", "edit": "Sửa milestone", "empty": "Chưa có milestone.", "save": "Lưu milestone", "fields": { "name": "Tên milestone", "description": "Mô tả milestone" } },
+    "dependency": { "title": "Dependencies", "add": "Thêm dependency", "edit": "Sửa dependency", "empty": "Chưa có dependency.", "save": "Lưu dependency", "fields": { "predecessor": "Task trước", "successor": "Task sau" } },
+    "criteria": { "title": "Tiêu chí chấp nhận", "add": "Thêm tiêu chí", "edit": "Sửa tiêu chí", "delete": "Xóa tiêu chí", "empty": "Chưa có tiêu chí chấp nhận.", "emptyProject": "Các task chưa có tiêu chí chấp nhận.", "save": "Lưu tiêu chí", "fields": { "text": "Nội dung tiêu chí" } },
+    "delete": { "title": "Xóa nội dung kế hoạch", "description": "Không thể hoàn tác hành động này.", "confirm": "Xác nhận xóa" },
+    "action": { "edit": "Sửa", "delete": "Xóa", "cancel": "Hủy", "close": "Đóng", "retry": "Thử lại", "reload": "Tải lại kế hoạch" },
+    "error": { "load": "Chưa thể tải kế hoạch project.", "required": "Hãy điền các trường bắt buộc.", "mutation": "Không thể hoàn tất thay đổi kế hoạch.", "dependency": "Dependency không hợp lệ hoặc tạo chu trình.", "stale": "Dữ liệu kế hoạch đã thay đổi. Hãy tải lại trước khi thử lại." }
   }
 }
