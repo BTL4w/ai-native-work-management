@@ -22,6 +22,7 @@ def _task(status: TaskStatus = TaskStatus.TO_DO) -> Task:
         id=uuid4(),
         organization_id=uuid4(),
         project_id=uuid4(),
+        milestone_id=None,
         title="Collect documents",
         description="Checklist",
         assignee_membership_id=uuid4(),
@@ -35,8 +36,10 @@ def _task(status: TaskStatus = TaskStatus.TO_DO) -> Task:
 
 
 def test_task_draft_normalizes_text_and_always_starts_to_do() -> None:
+    milestone_id = uuid4()
     draft = TaskDraft.create(
         project_id=uuid4(),
+        milestone_id=milestone_id,
         title="  Collect documents  ",
         description="  Checklist  ",
         assignee_membership_id=uuid4(),
@@ -45,6 +48,7 @@ def test_task_draft_normalizes_text_and_always_starts_to_do() -> None:
 
     assert draft.title == "Collect documents"
     assert draft.description == "Checklist"
+    assert draft.milestone_id == milestone_id
     assert draft.initial_status is TaskStatus.TO_DO
 
 
@@ -53,6 +57,7 @@ def test_task_draft_rejects_invalid_title(title: str) -> None:
     with pytest.raises(InvalidTaskFieldError) as error:
         TaskDraft.create(
             project_id=uuid4(),
+            milestone_id=None,
             title=title,
             description=None,
             assignee_membership_id=uuid4(),
@@ -66,12 +71,18 @@ def test_task_patch_preserves_omitted_and_explicit_null_fields() -> None:
         TaskPatch.create().validate_not_empty()
 
     patch = TaskPatch.create(
-        description=None, description_supplied=True, due_date=None, due_date_supplied=True
+        description=None,
+        description_supplied=True,
+        due_date=None,
+        due_date_supplied=True,
+        milestone_id=None,
+        milestone_supplied=True,
     )
     updated = _task().apply(patch, updated_at=datetime(2026, 8, 2, tzinfo=UTC))
 
     assert updated.description is None
     assert updated.due_date is None
+    assert updated.milestone_id is None
     assert updated.version == 2
 
 

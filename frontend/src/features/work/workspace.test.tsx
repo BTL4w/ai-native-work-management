@@ -19,6 +19,7 @@ const employeeId = "44444444-4444-4444-8444-444444444444";
 const task = {
   id: "22222222-2222-4222-8222-222222222222",
   project_id: project.id,
+  milestone_id: null,
   title: "Collect documents",
   description: "Collect required documents",
   assignee: { membership_id: employeeId, display_name: "Demo Employee" },

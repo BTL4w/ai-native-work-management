@@ -13,6 +13,7 @@ from app.modules.work.domain.tasks import Task, TaskStatus
 class TaskCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: UUID
+    milestone_id: UUID | None = None
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=10_000)
     assignee_membership_id: UUID
@@ -32,6 +33,7 @@ class TaskUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=10_000)
     assignee_membership_id: UUID | None = None
     due_date: date | None = None
+    milestone_id: UUID | None = None
 
 
 class TaskStatusRequest(BaseModel):
@@ -47,6 +49,7 @@ class AssigneeResponse(BaseModel):
 class TaskResponse(BaseModel):
     id: UUID
     project_id: UUID
+    milestone_id: UUID | None
     title: str
     description: str | None
     assignee: AssigneeResponse
@@ -61,6 +64,7 @@ class TaskResponse(BaseModel):
         return cls(
             id=task.id,
             project_id=task.project_id,
+            milestone_id=task.milestone_id,
             title=task.title,
             description=task.description,
             assignee=AssigneeResponse(

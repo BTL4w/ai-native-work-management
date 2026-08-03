@@ -26,6 +26,11 @@ from app.modules.work.api.routes import router as project_router
 from app.modules.work.api.task_routes import router as task_router
 from app.modules.work.application.project_service import ProjectService
 from app.modules.work.application.task_service import TaskService
+from app.modules.work.planning.adapters.manual_repository import (
+    SqlAlchemyManualPlanningTransactionFactory,
+)
+from app.modules.work.planning.api.routes import router as planning_router
+from app.modules.work.planning.application.manual_service import ManualPlanningService
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -43,6 +48,7 @@ def create_app(
     project_service: ProjectService | None = None,
     task_service: TaskService | None = None,
     member_service: MemberService | None = None,
+    manual_planning_service: ManualPlanningService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -72,6 +78,13 @@ def create_app(
         resolved_member_service = MemberService(
             SqlAlchemyMemberTransactionFactory(create_session_factory(database_engine))
         )
+    resolved_manual_planning_service = manual_planning_service
+    if resolved_manual_planning_service is None:
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        resolved_manual_planning_service = ManualPlanningService(
+            SqlAlchemyManualPlanningTransactionFactory(create_session_factory(database_engine))
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
@@ -92,12 +105,13 @@ def create_app(
     app.state.project_service = resolved_project_service
     app.state.task_service = resolved_task_service
     app.state.member_service = resolved_member_service
+    app.state.manual_planning_service = resolved_manual_planning_service
     app.state.database_engine = database_engine
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[resolved_settings.frontend_origin],
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key", "If-Match"],
     )
 
@@ -117,6 +131,7 @@ def create_app(
     app.include_router(project_router, prefix="/api/v1")
     app.include_router(task_router, prefix="/api/v1")
     app.include_router(member_router, prefix="/api/v1")
+    app.include_router(planning_router, prefix="/api/v1")
     return app
 
 

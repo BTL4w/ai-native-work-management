@@ -37,6 +37,7 @@ from app.modules.work.domain.tasks import (
     TaskStatus,
     TaskVersionMismatchError,
 )
+from app.modules.work.planning.adapters.database_models import MilestoneModel
 
 _TTL = timedelta(hours=24)
 
@@ -46,6 +47,7 @@ def _task_from_row(model: TaskModel, display_name: str) -> Task:
         id=model.id,
         organization_id=model.organization_id,
         project_id=model.project_id,
+        milestone_id=model.milestone_id,
         title=model.title,
         description=model.description,
         assignee_membership_id=model.assignee_membership_id,
@@ -63,6 +65,7 @@ def _json(task: Task) -> dict[str, Any]:
         "id": str(task.id),
         "organization_id": str(task.organization_id),
         "project_id": str(task.project_id),
+        "milestone_id": str(task.milestone_id) if task.milestone_id else None,
         "title": task.title,
         "description": task.description,
         "assignee_membership_id": str(task.assignee_membership_id),
@@ -81,6 +84,7 @@ def _from_json(value: dict[str, Any]) -> Task:
         id=UUID(str(value["id"])),
         organization_id=UUID(str(value["organization_id"])),
         project_id=UUID(str(value["project_id"])),
+        milestone_id=(UUID(str(value["milestone_id"])) if value.get("milestone_id") else None),
         title=str(value["title"]),
         description=str(value["description"]) if value["description"] is not None else None,
         assignee_membership_id=UUID(str(value["assignee_membership_id"])),
@@ -202,6 +206,32 @@ class SqlAlchemyTaskRepository:
         if found is None:
             raise TaskReferenceError("project_id")
 
+    async def _validate_milestone(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        project_id: UUID,
+        milestone_id: UUID | None,
+        due_date: date | None,
+    ) -> None:
+        if milestone_id is None:
+            return
+        milestone = await self._session.scalar(
+            select(MilestoneModel).where(
+                MilestoneModel.organization_id == actor.organization_id,
+                MilestoneModel.id == milestone_id,
+                MilestoneModel.project_id == project_id,
+            )
+        )
+        if milestone is None:
+            raise TaskReferenceError("milestone_id")
+        if (
+            due_date is not None
+            and milestone.target_date is not None
+            and due_date > milestone.target_date
+        ):
+            raise TaskReferenceError("due_date")
+
     async def _replay(
         self, *, actor: AuthenticatedActor, operation: str, key: str, fingerprint: str
     ) -> TaskMutationResult | None:
@@ -292,6 +322,12 @@ class SqlAlchemyTaskRepository:
         if replay:
             return replay
         await self._require_project(actor, draft.project_id)
+        await self._validate_milestone(
+            actor,
+            project_id=draft.project_id,
+            milestone_id=draft.milestone_id,
+            due_date=draft.due_date,
+        )
         display_name = await self._assignee_name(actor, draft.assignee_membership_id)
         now = datetime.now(UTC)
         record = self._record(
@@ -305,6 +341,7 @@ class SqlAlchemyTaskRepository:
             id=uuid4(),
             organization_id=actor.organization_id,
             project_id=draft.project_id,
+            milestone_id=draft.milestone_id,
             title=draft.title,
             description=draft.description,
             assignee_membership_id=draft.assignee_membership_id,
@@ -377,6 +414,12 @@ class SqlAlchemyTaskRepository:
             if patch.assignee_supplied and patch.assignee_membership_id
             else model.assignee_membership_id,
         )
+        await self._validate_milestone(
+            actor,
+            project_id=model.project_id,
+            milestone_id=patch.milestone_id if patch.milestone_supplied else model.milestone_id,
+            due_date=patch.due_date if patch.due_date_supplied else model.due_date,
+        )
         now = datetime.now(UTC)
         record = self._record(
             actor=actor,
@@ -392,6 +435,7 @@ class SqlAlchemyTaskRepository:
             ("description", patch.description_supplied, patch.description),
             ("assignee_membership_id", patch.assignee_supplied, patch.assignee_membership_id),
             ("due_date", patch.due_date_supplied, patch.due_date),
+            ("milestone_id", patch.milestone_supplied, patch.milestone_id),
         ):
             if supplied:
                 old = getattr(model, field)

@@ -28,6 +28,10 @@ def test_tasks_use_tenant_qualified_project_assignee_and_actor_references() -> N
         "memberships.organization_id",
         "memberships.id",
     )
+    assert foreign_keys[("organization_id", "milestone_id")] == (
+        "milestones.organization_id",
+        "milestones.id",
+    )
     assert ("organization_id", "id") in {
         tuple(c.columns.keys()) for c in tasks.constraints if isinstance(c, UniqueConstraint)
     }
@@ -38,6 +42,7 @@ def test_task_indexes_start_with_tenant_and_transition_is_append_only_shaped() -
     indexes = {tuple(index.columns.keys()) for index in tasks.indexes}
     assert ("organization_id", "project_id", "status", "id") in indexes
     assert ("organization_id", "assignee_membership_id", "status", "due_date", "id") in indexes
+    assert ("organization_id", "milestone_id", "id") in indexes
 
     transitions = Base.metadata.tables["task_status_transitions"]
     assert "updated_at" not in transitions.c

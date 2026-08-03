@@ -22,6 +22,9 @@ from sqlalchemy.sql import func
 
 from app.core.database import Base
 from app.modules.work.domain.tasks import TaskStatus
+from app.modules.work.planning.adapters import database_models as _planning_models
+
+_PLANNING_METADATA_LOADED = _planning_models.MilestoneModel.__table__
 
 
 class IdempotencyState(StrEnum):
@@ -104,6 +107,11 @@ class TaskModel(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["organization_id", "milestone_id"],
+            ["milestones.organization_id", "milestones.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["organization_id", "created_by_membership_id"],
             ["memberships.organization_id", "memberships.id"],
             ondelete="RESTRICT",
@@ -115,6 +123,7 @@ class TaskModel(Base):
         ),
         UniqueConstraint("organization_id", "id"),
         Index("ix_tasks_project_status", "organization_id", "project_id", "status", "id"),
+        Index("ix_tasks_milestone", "organization_id", "milestone_id", "id"),
         Index(
             "ix_tasks_assignee_status_due",
             "organization_id",
@@ -128,6 +137,7 @@ class TaskModel(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True)
     organization_id: Mapped[UUID]
     project_id: Mapped[UUID]
+    milestone_id: Mapped[UUID | None]
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     assignee_membership_id: Mapped[UUID]

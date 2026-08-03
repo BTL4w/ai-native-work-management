@@ -11,7 +11,7 @@ from app.modules.work.adapters import database_models as work_models
 _MODEL_MODULES = (audit_models, identity_models, organization_models, work_models)
 
 
-def test_identity_and_organization_tables_are_registered() -> None:
+def test_active_phase_tables_are_registered() -> None:
     assert set(Base.metadata.tables) == {
         "organizations",
         "users",
@@ -22,6 +22,10 @@ def test_identity_and_organization_tables_are_registered() -> None:
         "idempotency_records",
         "tasks",
         "task_status_transitions",
+        "goals",
+        "milestones",
+        "task_dependencies",
+        "acceptance_criteria",
     }
 
 

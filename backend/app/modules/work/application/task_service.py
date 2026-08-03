@@ -147,6 +147,7 @@ class TaskService:
         due_date: date | None,
         request_id: str,
         idempotency_key: str,
+        milestone_id: UUID | None = None,
     ) -> TaskMutationResult:
         await self._require_writer(
             actor=actor,
@@ -157,6 +158,7 @@ class TaskService:
         try:
             draft = TaskDraft.create(
                 project_id=project_id,
+                milestone_id=milestone_id,
                 title=title,
                 description=description,
                 assignee_membership_id=assignee_membership_id,
@@ -170,6 +172,7 @@ class TaskService:
                     "description": draft.description,
                     "assignee_membership_id": assignee_membership_id,
                     "due_date": due_date,
+                    "milestone_id": milestone_id,
                 },
             )
             async with self._transactions() as repository:
@@ -207,6 +210,8 @@ class TaskService:
         expected_version: int,
         request_id: str,
         idempotency_key: str,
+        milestone_id: UUID | None = None,
+        milestone_supplied: bool = False,
     ) -> TaskMutationResult:
         await self._require_writer(
             actor=actor,
@@ -225,6 +230,8 @@ class TaskService:
                 assignee_supplied=assignee_supplied,
                 due_date=due_date,
                 due_date_supplied=due_date_supplied,
+                milestone_id=milestone_id,
+                milestone_supplied=milestone_supplied,
             )
             patch.validate_not_empty()
             fingerprint = _fingerprint(
@@ -239,6 +246,9 @@ class TaskService:
                     if patch.assignee_supplied
                     else "__omitted__",
                     "due_date": patch.due_date if patch.due_date_supplied else "__omitted__",
+                    "milestone_id": (
+                        patch.milestone_id if patch.milestone_supplied else "__omitted__"
+                    ),
                     "expected_version": expected_version,
                 },
             )

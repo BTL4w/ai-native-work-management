@@ -85,6 +85,7 @@ def _normalize_description(value: str | None) -> str | None:
 @dataclass(frozen=True, slots=True)
 class TaskDraft:
     project_id: UUID
+    milestone_id: UUID | None
     title: str
     description: str | None
     assignee_membership_id: UUID
@@ -96,6 +97,7 @@ class TaskDraft:
         cls,
         *,
         project_id: UUID,
+        milestone_id: UUID | None,
         title: str,
         description: str | None,
         assignee_membership_id: UUID,
@@ -103,6 +105,7 @@ class TaskDraft:
     ) -> TaskDraft:
         return cls(
             project_id=project_id,
+            milestone_id=milestone_id,
             title=_normalize_title(title),
             description=_normalize_description(description),
             assignee_membership_id=assignee_membership_id,
@@ -120,6 +123,8 @@ class TaskPatch:
     assignee_supplied: bool = False
     due_date: date | None = None
     due_date_supplied: bool = False
+    milestone_id: UUID | None = None
+    milestone_supplied: bool = False
 
     @classmethod
     def create(
@@ -133,6 +138,8 @@ class TaskPatch:
         assignee_supplied: bool = False,
         due_date: date | None = None,
         due_date_supplied: bool = False,
+        milestone_id: UUID | None = None,
+        milestone_supplied: bool = False,
     ) -> TaskPatch:
         effective_title_supplied = title_supplied or title is not None
         if effective_title_supplied and title is None:
@@ -148,6 +155,8 @@ class TaskPatch:
             assignee_supplied=assignee_supplied,
             due_date=due_date,
             due_date_supplied=due_date_supplied,
+            milestone_id=milestone_id,
+            milestone_supplied=milestone_supplied,
         )
 
     def validate_not_empty(self) -> None:
@@ -157,6 +166,7 @@ class TaskPatch:
                 self.description_supplied,
                 self.assignee_supplied,
                 self.due_date_supplied,
+                self.milestone_supplied,
             )
         ):
             raise EmptyTaskPatchError
@@ -167,6 +177,7 @@ class Task:
     id: UUID
     organization_id: UUID
     project_id: UUID
+    milestone_id: UUID | None
     title: str
     description: str | None
     assignee_membership_id: UUID
@@ -189,6 +200,7 @@ class Task:
                 else self.assignee_membership_id
             ),
             due_date=patch.due_date if patch.due_date_supplied else self.due_date,
+            milestone_id=patch.milestone_id if patch.milestone_supplied else self.milestone_id,
             version=self.version + 1,
             updated_at=updated_at,
         )

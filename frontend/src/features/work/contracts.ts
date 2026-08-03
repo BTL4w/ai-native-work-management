@@ -16,6 +16,7 @@ export const projectUpdateSchema = z.object({
 
 export const taskCreateSchema = z.object({
   project_id: z.uuid(),
+  milestone_id: z.uuid().nullable().optional(),
   title: z.string().min(1).max(200),
   description: z.string().max(10000).nullable().optional(),
   assignee_membership_id: z.uuid(),
@@ -27,6 +28,7 @@ export const taskUpdateSchema = z.object({
   description: z.string().max(10000).nullable().optional(),
   assignee_membership_id: z.uuid().nullable().optional(),
   due_date: z.iso.date().nullable().optional(),
+  milestone_id: z.uuid().nullable().optional(),
 });
 export const taskStatusRequestSchema = z.object({ to_status: taskStatusSchema });
 
@@ -68,6 +70,7 @@ export const assigneeSchema = z.object({
 export const taskSchema = z.object({
   id: z.uuid(),
   project_id: z.uuid(),
+  milestone_id: z.uuid().nullable(),
   title: z.string(),
   description: z.string().nullable(),
   assignee: assigneeSchema,

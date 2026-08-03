@@ -16,6 +16,7 @@ const project = {
 const task = {
   id: "22222222-2222-4222-8222-222222222222",
   project_id: project.id,
+  milestone_id: null,
   title: "Collect documents",
   description: null,
   assignee: {

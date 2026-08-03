@@ -166,6 +166,7 @@ async def create_task(
             description=payload.description,
             assignee_membership_id=payload.assignee_membership_id,
             due_date=payload.due_date,
+            milestone_id=payload.milestone_id,
             request_id=str(request.state.request_id),
             idempotency_key=idempotency_key,
         )
@@ -211,6 +212,8 @@ async def update_task(
             assignee_supplied="assignee_membership_id" in supplied,
             due_date=payload.due_date,
             due_date_supplied="due_date" in supplied,
+            milestone_id=payload.milestone_id,
+            milestone_supplied="milestone_id" in supplied,
             expected_version=_version(if_match),
             request_id=str(request.state.request_id),
             idempotency_key=idempotency_key,

@@ -1,0 +1,1 @@
+"""Manual planning HTTP contracts."""
