@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = Field(default=28_800, ge=300, le=604_800)
     session_secure_cookie: bool = False
     frontend_origin: str = "http://localhost:3000"
+    ai_provider: Literal["disabled", "mock", "openai"] = "disabled"
+    ai_model: str = ""
+    openai_api_key: SecretStr | None = None
+    langsmith_tracing: bool = False
+    langsmith_api_key: SecretStr | None = None
+    ai_raw_context_retention_days: int = Field(default=30, ge=0, le=30)
+    ai_redacted_trace_retention_days: int = Field(default=90, ge=0, le=90)
 
     @field_validator("database_url")
     @classmethod
@@ -50,6 +57,21 @@ class Settings(BaseSettings):
 
         if self.environment == "production" and not self.session_secure_cookie:
             msg = "session_secure_cookie must be true in production"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def require_complete_production_openai_configuration(self) -> "Settings":
+        """Require hosted-model identity and credentials only when activated."""
+
+        api_key = self.openai_api_key
+        has_api_key = api_key is not None and bool(api_key.get_secret_value().strip())
+        if (
+            self.environment == "production"
+            and self.ai_provider == "openai"
+            and (not self.ai_model.strip() or not has_api_key)
+        ):
+            msg = "OpenAI production configuration requires a model and API key"
             raise ValueError(msg)
         return self
 

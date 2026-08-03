@@ -10,7 +10,11 @@ dependencies = [
     "pwdlib[argon2]>=0.3,<1.0",
     "pydantic-settings>=2.0,<3.0",
     "sqlalchemy[asyncio]>=2.0,<2.1",
+    "work-management-ai",
 ]
+
+[tool.uv.sources]
+work-management-ai = { path = "../ai", editable = true }
 
 [dependency-groups]
 dev = [
@@ -25,13 +29,15 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
 pythonpath = ["."]
-testpaths = ["tests"]
+testpaths = ["tests", "../ai/tests"]
 markers = [
     "integration: requires the local PostgreSQL container",
+    "live_provider: requires explicit provider credentials and network access",
 ]
 
 [tool.pyright]
-include = ["app", "tests"]
+include = ["app", "tests", "../ai/src", "../ai/tests"]
+extraPaths = ["../ai/src"]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
 venv = ".venv"
@@ -46,6 +52,7 @@ select = ["ASYNC", "B", "E", "F", "I", "RUF", "SIM", "UP"]
 
 [tool.ruff.lint.isort]
 known-third-party = ["alembic"]
+known-first-party = ["app", "work_management_ai"]
 
 [tool.ruff.format]
 quote-style = "double"

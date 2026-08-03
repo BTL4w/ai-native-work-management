@@ -6,7 +6,7 @@ E2E_DATABASE_URL := postgresql+psycopg://work_management:work_management@localho
 
 .DEFAULT_GOAL := dev
 
-.PHONY: dev up bootstrap install db-up backend-dev frontend-dev migrate seed down lint typecheck test test-e2e e2e-db-reset migration-check
+.PHONY: dev up bootstrap install db-up backend-dev frontend-dev migrate seed down lint typecheck test test-ai test-e2e e2e-db-reset migration-check
 
 dev: bootstrap
 	$(MAKE) --no-print-directory -j2 backend-dev frontend-dev
@@ -51,6 +51,9 @@ typecheck:
 test:
 	$(MAKE) --no-print-directory -C backend test
 	$(PNPM) --dir frontend test --pool=threads
+
+test-ai:
+	$(MAKE) --no-print-directory -C backend test-ai
 
 e2e-db-reset: db-up
 	docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U work_management -d postgres -c "DROP DATABASE IF EXISTS $(E2E_DB_NAME) WITH (FORCE);"

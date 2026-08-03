@@ -1,0 +1,50 @@
+"""Deterministic Model Gateway used by local development and automated tests."""
+
+from collections.abc import Mapping
+from copy import deepcopy
+from types import MappingProxyType
+
+from pydantic import BaseModel, ValidationError
+
+from work_management_ai.model_gateway.contracts import (
+    StructuredModelRequest,
+    StructuredModelResponse,
+)
+from work_management_ai.model_gateway.errors import (
+    ModelInvalidOutputError,
+    ModelUnavailableError,
+    normalize_model_error,
+)
+
+
+class MockModelGateway:
+    """Select immutable fixtures deterministically by invocation key."""
+
+    def __init__(
+        self,
+        *,
+        fixtures: Mapping[str, object],
+        model_ref: str = "mock:planning-v1",
+    ) -> None:
+        self._fixtures = MappingProxyType(deepcopy(dict(fixtures)))
+        self._model_ref = model_ref
+
+    async def generate_structured[StructuredOutputT: BaseModel](
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+    ) -> StructuredModelResponse[StructuredOutputT]:
+        """Return a typed fixture or a normalized deterministic failure."""
+
+        if request.invocation_key not in self._fixtures:
+            raise ModelUnavailableError("model fixture unavailable")
+
+        fixture = self._fixtures[request.invocation_key]
+        if isinstance(fixture, Exception):
+            raise normalize_model_error(fixture) from fixture
+
+        try:
+            parsed = request.output_schema.model_validate(fixture)
+        except (TypeError, ValidationError, ValueError) as error:
+            raise ModelInvalidOutputError("model output failed schema validation") from error
+
+        return StructuredModelResponse(parsed=parsed, model_ref=self._model_ref)

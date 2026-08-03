@@ -4,7 +4,7 @@ UV := uv
 
 .DEFAULT_GOAL := up
 
-.PHONY: up dev sync migrate seed lint format-check typecheck test test-integration migration-check
+.PHONY: up dev sync migrate seed lint format-check typecheck test test-ai test-integration migration-check
 
 up: sync
 	$(UV) run fastapi dev app/main.py
@@ -21,16 +21,19 @@ seed: sync
 	APP_DEMO_SEED_ENABLED=true $(UV) run python -m app.scripts.seed_demo
 
 lint:
-	$(UV) run ruff check app tests alembic
+	$(UV) run ruff check app tests alembic ../ai/src ../ai/tests
 
 format-check:
-	$(UV) run ruff format --check app tests alembic
+	$(UV) run ruff format --check app tests alembic ../ai/src ../ai/tests
 
 typecheck:
 	$(UV) run pyright
 
 test:
-	$(UV) run pytest -m "not integration"
+	$(UV) run pytest -m "not integration and not live_provider"
+
+test-ai:
+	$(UV) run pytest ../ai/tests -m "not live_provider"
 
 test-integration:
 	RUN_POSTGRES_INTEGRATION=1 $(UV) run pytest -m integration
