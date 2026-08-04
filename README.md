@@ -1,7 +1,8 @@
 # End-to-End AI-Native Work Management Platform
 
-The repository is being built one focused vertical step at a time. It currently
-contains the Phase 1 frontend, FastAPI and database code foundations;
+The repository is being built one focused vertical step at a time. Phase 1 —
+Manual Project/Task Core — is complete. The repository contains its frontend,
+FastAPI and database foundations;
 the identity/organization schema, local demo accounts, session authentication,
 login UI, tenant-scoped Project/Task APIs, and the bilingual Project, Task and
 My Tasks workspace are available. The workspace includes actor-scoped caches,
@@ -9,6 +10,9 @@ server-confirmed mutations, structured errors, pagination and a persisted VI/EN
 selector.
 Local Compose currently runs PostgreSQL only; frontend and backend dev servers run
 on the host.
+
+Phase 2 has not started. Its AI Planning Proposal scope must be explicitly
+authorized before implementation.
 
 ## Accepted local environment
 

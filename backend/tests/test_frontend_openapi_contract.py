@@ -77,9 +77,6 @@ def test_frontend_work_contract_manifest_matches_openapi() -> None:
         properties = cast(dict[str, dict[str, object]], schema["properties"])
         actual = {
             "required": cast(list[str], schema.get("required", [])),
-            "properties": {
-                name: _describe(value, schemas)
-                for name, value in properties.items()
-            },
+            "properties": {name: _describe(value, schemas) for name, value in properties.items()},
         }
         assert actual == expected, schema_name

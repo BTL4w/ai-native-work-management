@@ -354,9 +354,7 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
                 ),
                 {"organization_id": organization_id},
             )
-            actions = Counter(
-                (row.action, row.outcome, row.idempotency_key) for row in audit
-            )
+            actions = Counter((row.action, row.outcome, row.idempotency_key) for row in audit)
             assert actions == Counter(
                 {
                     ("task.created", "SUCCEEDED", "task-create-key-01"): 1,

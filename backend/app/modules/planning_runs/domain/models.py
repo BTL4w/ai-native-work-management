@@ -1,0 +1,485 @@
+"""Domain models and lifecycle state machines for AI planning runs persistence."""
+
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
+from uuid import UUID, uuid4
+
+
+class PlanningRunDomainError(Exception):
+    """Base domain exception for planning runs."""
+
+
+class InvalidTransitionError(PlanningRunDomainError):
+    """Raised when an invalid state transition is attempted."""
+
+
+class WorkflowRunStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    PAUSED_FOR_APPROVAL = "PAUSED_FOR_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (
+            WorkflowRunStatus.COMPLETED,
+            WorkflowRunStatus.FAILED,
+            WorkflowRunStatus.CANCELLED,
+        )
+
+
+class ProposalStatus(StrEnum):
+    DRAFT = "DRAFT"
+    READY = "READY"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (
+            ProposalStatus.APPROVED,
+            ProposalStatus.REJECTED,
+            ProposalStatus.SUPERSEDED,
+        )
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (
+            ApprovalStatus.APPROVED,
+            ApprovalStatus.REJECTED,
+            ApprovalStatus.SUPERSEDED,
+        )
+
+
+class WorkflowJobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class OutboxStatus(StrEnum):
+    PENDING = "PENDING"
+    DISPATCHED = "DISPATCHED"
+    FAILED = "FAILED"
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRun:
+    id: UUID
+    organization_id: UUID
+    project_id: UUID
+    requested_by_membership_id: UUID
+    status: WorkflowRunStatus
+    workflow_name: str
+    workflow_version: str
+    verifier_version: str
+    input_goal_text: str
+    error_message: str | None = None
+    version: int = 1
+    created_at: datetime = field(default_factory=_now_utc)
+    updated_at: datetime = field(default_factory=_now_utc)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        id: UUID | None = None,
+        organization_id: UUID,
+        project_id: UUID,
+        requested_by_membership_id: UUID,
+        workflow_name: str,
+        workflow_version: str,
+        verifier_version: str,
+        input_goal_text: str,
+        created_at: datetime | None = None,
+    ) -> "WorkflowRun":
+        now = created_at or datetime.now(UTC)
+        normalized_verifier_version = verifier_version.strip()
+        if not normalized_verifier_version:
+            raise PlanningRunDomainError("verifier_version must not be empty.")
+        return cls(
+            id=id or uuid4(),
+            organization_id=organization_id,
+            project_id=project_id,
+            requested_by_membership_id=requested_by_membership_id,
+            status=WorkflowRunStatus.QUEUED,
+            workflow_name=workflow_name,
+            workflow_version=workflow_version,
+            verifier_version=normalized_verifier_version,
+            input_goal_text=input_goal_text.strip(),
+            error_message=None,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def mark_running(self, now: datetime | None = None) -> "WorkflowRun":
+        if self.status != WorkflowRunStatus.QUEUED:
+            raise InvalidTransitionError(
+                f"Cannot transition WorkflowRun from {self.status} to RUNNING."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=WorkflowRunStatus.RUNNING,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_paused_for_approval(self, now: datetime | None = None) -> "WorkflowRun":
+        if self.status != WorkflowRunStatus.RUNNING:
+            raise InvalidTransitionError(
+                f"Cannot transition WorkflowRun from {self.status} to PAUSED_FOR_APPROVAL."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=WorkflowRunStatus.PAUSED_FOR_APPROVAL,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_completed(self, now: datetime | None = None) -> "WorkflowRun":
+        if self.status not in (WorkflowRunStatus.RUNNING, WorkflowRunStatus.PAUSED_FOR_APPROVAL):
+            raise InvalidTransitionError(
+                f"Cannot transition WorkflowRun from {self.status} to COMPLETED."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=WorkflowRunStatus.COMPLETED,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_failed(self, error_message: str, now: datetime | None = None) -> "WorkflowRun":
+        if self.status.is_terminal:
+            raise InvalidTransitionError(
+                f"Cannot transition WorkflowRun from terminal status {self.status} to FAILED."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=WorkflowRunStatus.FAILED,
+            error_message=error_message,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_cancelled(self, now: datetime | None = None) -> "WorkflowRun":
+        if self.status.is_terminal:
+            raise InvalidTransitionError(
+                f"Cannot transition WorkflowRun from terminal status {self.status} to CANCELLED."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=WorkflowRunStatus.CANCELLED,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowCheckpoint:
+    id: UUID
+    organization_id: UUID
+    workflow_run_id: UUID
+    node: str
+    sequence: int
+    state: dict[str, Any]
+    created_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalVersion:
+    id: UUID
+    organization_id: UUID
+    proposal_id: UUID
+    version_number: int
+    created_by_membership_id: UUID
+    content: dict[str, Any]
+    assumptions: list[dict[str, Any]]
+    change_summary: str | None = None
+    created_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class Proposal:
+    id: UUID
+    organization_id: UUID
+    workflow_run_id: UUID
+    status: ProposalStatus
+    current_version_number: int
+    approval_id: UUID | None = None
+    superseded_approval_id: UUID | None = None
+    version: int = 1
+    created_at: datetime = field(default_factory=_now_utc)
+    updated_at: datetime = field(default_factory=_now_utc)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        id: UUID | None = None,
+        organization_id: UUID,
+        workflow_run_id: UUID,
+        current_version_number: int = 1,
+        created_at: datetime | None = None,
+    ) -> "Proposal":
+        now = created_at or datetime.now(UTC)
+        return cls(
+            id=id or uuid4(),
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            status=ProposalStatus.DRAFT,
+            current_version_number=current_version_number,
+            approval_id=None,
+            superseded_approval_id=None,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def mark_ready(self, approval_id: UUID, now: datetime | None = None) -> "Proposal":
+        if self.status not in (ProposalStatus.DRAFT, ProposalStatus.READY):
+            raise InvalidTransitionError(f"Cannot transition Proposal from {self.status} to READY.")
+        current_time = now or datetime.now(UTC)
+        superseded = (
+            self.approval_id
+            if (self.status == ProposalStatus.READY and self.approval_id != approval_id)
+            else self.superseded_approval_id
+        )
+        return replace(
+            self,
+            status=ProposalStatus.READY,
+            approval_id=approval_id,
+            superseded_approval_id=superseded,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def edit(self, now: datetime | None = None) -> "Proposal":
+        if self.status.is_terminal:
+            raise InvalidTransitionError(f"Cannot edit Proposal in terminal status {self.status}.")
+        current_time = now or datetime.now(UTC)
+        superseded = (
+            self.approval_id if self.status == ProposalStatus.READY else self.superseded_approval_id
+        )
+        return replace(
+            self,
+            status=ProposalStatus.DRAFT,
+            current_version_number=self.current_version_number + 1,
+            approval_id=None,
+            superseded_approval_id=superseded,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_approved(self, now: datetime | None = None) -> "Proposal":
+        if self.status != ProposalStatus.READY:
+            raise InvalidTransitionError(f"Cannot approve Proposal from status {self.status}.")
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=ProposalStatus.APPROVED,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_rejected(self, now: datetime | None = None) -> "Proposal":
+        if self.status.is_terminal:
+            raise InvalidTransitionError(
+                f"Cannot reject Proposal in terminal status {self.status}."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=ProposalStatus.REJECTED,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Approval:
+    id: UUID
+    organization_id: UUID
+    proposal_id: UUID
+    proposal_version_number: int
+    status: ApprovalStatus
+    decided_by_membership_id: UUID | None = None
+    decision_reason: str | None = None
+    decided_at: datetime | None = None
+    version: int = 1
+    created_at: datetime = field(default_factory=_now_utc)
+    updated_at: datetime = field(default_factory=_now_utc)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        id: UUID | None = None,
+        organization_id: UUID,
+        proposal_id: UUID,
+        proposal_version_number: int,
+        created_at: datetime | None = None,
+    ) -> "Approval":
+        now = created_at or datetime.now(UTC)
+        return cls(
+            id=id or uuid4(),
+            organization_id=organization_id,
+            proposal_id=proposal_id,
+            proposal_version_number=proposal_version_number,
+            status=ApprovalStatus.PENDING,
+            decided_by_membership_id=None,
+            decision_reason=None,
+            decided_at=None,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def decide_approve(
+        self,
+        *,
+        decided_by: UUID,
+        decision_reason: str | None = None,
+        decided_at: datetime | None = None,
+    ) -> "Approval":
+        if self.status != ApprovalStatus.PENDING:
+            raise InvalidTransitionError(f"Cannot decide Approval from status {self.status}.")
+        now = decided_at or datetime.now(UTC)
+        return replace(
+            self,
+            status=ApprovalStatus.APPROVED,
+            decided_by_membership_id=decided_by,
+            decision_reason=decision_reason,
+            decided_at=now,
+            version=self.version + 1,
+            updated_at=now,
+        )
+
+    def decide_reject(
+        self,
+        *,
+        decided_by: UUID,
+        decision_reason: str | None = None,
+        decided_at: datetime | None = None,
+    ) -> "Approval":
+        if self.status != ApprovalStatus.PENDING:
+            raise InvalidTransitionError(f"Cannot decide Approval from status {self.status}.")
+        now = decided_at or datetime.now(UTC)
+        return replace(
+            self,
+            status=ApprovalStatus.REJECTED,
+            decided_by_membership_id=decided_by,
+            decision_reason=decision_reason,
+            decided_at=now,
+            version=self.version + 1,
+            updated_at=now,
+        )
+
+    def mark_superseded(self, now: datetime | None = None) -> "Approval":
+        if self.status != ApprovalStatus.PENDING:
+            raise InvalidTransitionError(
+                f"Cannot mark Approval as superseded from status {self.status}."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=ApprovalStatus.SUPERSEDED,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowJob:
+    id: UUID
+    organization_id: UUID
+    workflow_run_id: UUID
+    job_type: str
+    status: WorkflowJobStatus
+    payload: dict[str, Any]
+    attempt_count: int = 0
+    max_attempts: int = 3
+    available_at: datetime = field(default_factory=_now_utc)
+    locked_by_worker_id: str | None = None
+    lease_until: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime = field(default_factory=_now_utc)
+    updated_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowEvent:
+    id: UUID
+    organization_id: UUID
+    workflow_run_id: UUID
+    sequence: int
+    event_type: str
+    public_payload: dict[str, Any]
+    created_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInvocation:
+    id: UUID
+    organization_id: UUID
+    workflow_run_id: UUID
+    provider: str
+    model_name: str
+    prompt_version: str
+    schema_version: str
+    invocation_key: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    duration_ms: int | None = None
+    status: str = "SUCCESS"
+    created_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextReference:
+    id: UUID
+    organization_id: UUID
+    workflow_run_id: UUID
+    resource_type: str
+    resource_id: UUID
+    provenance_notes: str | None = None
+    created_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxEvent:
+    id: UUID
+    organization_id: UUID
+    event_id: UUID
+    event_type: str
+    aggregate_type: str
+    aggregate_id: UUID
+    payload: dict[str, Any]
+    status: OutboxStatus = OutboxStatus.PENDING
+    attempt_count: int = 0
+    available_at: datetime = field(default_factory=_now_utc)
+    processed_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime = field(default_factory=_now_utc)

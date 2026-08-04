@@ -26,6 +26,16 @@ def test_active_phase_tables_are_registered() -> None:
         "milestones",
         "task_dependencies",
         "acceptance_criteria",
+        "workflow_runs",
+        "workflow_checkpoints",
+        "proposals",
+        "proposal_versions",
+        "approvals",
+        "workflow_jobs",
+        "workflow_events",
+        "model_invocations",
+        "context_references",
+        "outbox_events",
     }
 
 
