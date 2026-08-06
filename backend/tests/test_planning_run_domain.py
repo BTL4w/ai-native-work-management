@@ -1,6 +1,7 @@
 """Unit tests for AI planning runs, proposal, and approval domain models."""
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -12,6 +13,7 @@ from app.modules.planning_runs.domain.models import (
     PlanningRunDomainError,
     Proposal,
     ProposalStatus,
+    ProposalVersion,
     WorkflowRun,
     WorkflowRunStatus,
 )
@@ -44,16 +46,43 @@ def test_workflow_run_initialization_and_status_transitions() -> None:
     assert running.status == WorkflowRunStatus.RUNNING
     assert running.version == 2
 
-    paused = running.mark_paused_for_approval()
-    assert paused.status == WorkflowRunStatus.PAUSED_FOR_APPROVAL
-    assert paused.version == 3
+    needs_input = running.mark_needs_input()
+    assert needs_input.status == WorkflowRunStatus.NEEDS_INPUT
+    assert needs_input.version == 3
 
-    completed = paused.mark_completed()
+    running_again = needs_input.mark_running()
+    assert running_again.status == WorkflowRunStatus.RUNNING
+    assert running_again.version == 4
+
+    waiting = running_again.mark_waiting_for_decision()
+    assert waiting.status == WorkflowRunStatus.WAITING_FOR_DECISION
+    assert waiting.version == 5
+
+    completed = waiting.mark_completed()
     assert completed.status == WorkflowRunStatus.COMPLETED
-    assert completed.version == 4
+    assert completed.version == 6
 
     with pytest.raises(InvalidTransitionError):
         completed.mark_running()
+
+
+def test_workflow_run_failure_branch() -> None:
+    run = WorkflowRun.create(
+        organization_id=uuid4(),
+        project_id=uuid4(),
+        requested_by_membership_id=uuid4(),
+        workflow_name="planning",
+        workflow_version="v1.0",
+        verifier_version="v1",
+        input_goal_text="Test failure",
+    ).mark_running()
+
+    failed = run.mark_failed(error_message="Model timed out")
+    assert failed.status == WorkflowRunStatus.FAILED
+    assert failed.error_message == "Model timed out"
+
+    with pytest.raises(InvalidTransitionError):
+        failed.mark_running()
 
 
 def test_workflow_run_requires_non_empty_verifier_version() -> None:
@@ -85,8 +114,11 @@ def test_proposal_lifecycle_and_version_increment() -> None:
     assert proposal.approval_id is None
     assert proposal.current_version_number == 1
 
-    ready = proposal.mark_ready(approval_id=approval_id)
-    assert ready.status == ProposalStatus.READY
+    validating = proposal.mark_validating()
+    assert validating.status == ProposalStatus.VALIDATING
+
+    ready = validating.mark_ready_for_decision(approval_id=approval_id)
+    assert ready.status == ProposalStatus.READY_FOR_DECISION
     assert ready.approval_id == approval_id
 
     # Editing auto-increments version number and supersedes approval
@@ -97,7 +129,7 @@ def test_proposal_lifecycle_and_version_increment() -> None:
     assert edited.approval_id is None
 
     new_approval_id = uuid4()
-    ready_again = edited.mark_ready(approval_id=new_approval_id)
+    ready_again = edited.mark_ready_for_decision(approval_id=new_approval_id)
     assert ready_again.approval_id == new_approval_id
 
     approved = ready_again.mark_approved()
@@ -108,26 +140,61 @@ def test_proposal_lifecycle_and_version_increment() -> None:
         approved.edit()
 
 
-def test_proposal_mark_ready_supersedes_when_ready_and_approval_changes() -> None:
-    proposal_id = uuid4()
-    org_id = uuid4()
-    run_id = uuid4()
-    app1 = uuid4()
-    app2 = uuid4()
-
+def test_proposal_stale_transition() -> None:
     proposal = Proposal.create(
-        id=proposal_id,
-        organization_id=org_id,
-        workflow_run_id=run_id,
-        current_version_number=1,
+        organization_id=uuid4(),
+        workflow_run_id=uuid4(),
     )
-    ready1 = proposal.mark_ready(approval_id=app1)
-    assert ready1.approval_id == app1
+    ready = proposal.mark_ready_for_decision(
+        approval_id=uuid4(),
+    )
+    stale = ready.mark_stale()
+    assert stale.status == ProposalStatus.STALE
 
-    # Mark ready with a new approval while already in READY status
-    ready2 = ready1.mark_ready(approval_id=app2)
-    assert ready2.approval_id == app2
-    assert ready2.superseded_approval_id == app1
+    # STALE is not decisionable
+    with pytest.raises(InvalidTransitionError):
+        stale.mark_rejected()
+
+    with pytest.raises(InvalidTransitionError):
+        stale.mark_approved()
+
+
+def test_proposal_version_metadata_and_creator_type_validation() -> None:
+    prop_ver = ProposalVersion(
+        id=uuid4(),
+        organization_id=uuid4(),
+        proposal_id=uuid4(),
+        version_number=1,
+        created_by_membership_id=uuid4(),
+        content={"goal": "Launch"},
+        assumptions=[{"text": "Budget available"}],
+        workflow_version="planning-v1",
+        prompt_version="prompt-v2",
+        schema_version="schema-v1",
+        model_reference="gpt-4o",
+        verifier_version="verifier-v1",
+        creator_type="AI_SYSTEM",
+    )
+    assert prop_ver.creator_type == "AI_SYSTEM"
+    expected_validation: dict[str, Any] = {
+        "status": "UNKNOWN",
+        "is_valid": None,
+        "errors": [],
+        "warnings": [],
+    }
+    assert prop_ver.validation_result == expected_validation
+
+    with pytest.raises(PlanningRunDomainError, match="creator_type"):
+        ProposalVersion(
+            id=uuid4(),
+            organization_id=uuid4(),
+            proposal_id=uuid4(),
+            version_number=1,
+            created_by_membership_id=uuid4(),
+            content={},
+            assumptions=[],
+            creator_type="INVALID_CREATOR",
+        )
 
 
 def test_approval_versioning_and_concurrency() -> None:

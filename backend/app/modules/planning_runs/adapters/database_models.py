@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,6 +43,12 @@ class WorkflowRunModel(Base):
         CheckConstraint(
             "verifier_version ~ '[^[:space:]]'",
             name="ck_workflow_runs_verifier_version",
+        ),
+        CheckConstraint(
+            "status IN ("
+            "'QUEUED', 'RUNNING', 'NEEDS_INPUT', "
+            "'WAITING_FOR_DECISION', 'COMPLETED', 'FAILED')",
+            name="status",
         ),
         Index("ix_workflow_runs_project", "organization_id", "project_id", "id"),
         Index("ix_workflow_runs_status", "organization_id", "status", "id"),
@@ -121,6 +128,12 @@ class ProposalModel(Base):
         ),
         UniqueConstraint("organization_id", "id"),
         UniqueConstraint("organization_id", "id", "current_version_number"),
+        CheckConstraint(
+            "status IN ("
+            "'DRAFT', 'VALIDATING', 'READY_FOR_DECISION', "
+            "'APPROVED', 'REJECTED', 'STALE')",
+            name="status",
+        ),
         Index("ix_proposals_run", "organization_id", "workflow_run_id", "id"),
     )
 
@@ -151,6 +164,10 @@ class ProposalVersionModel(Base):
         ),
         UniqueConstraint("organization_id", "id"),
         UniqueConstraint("organization_id", "proposal_id", "version_number"),
+        CheckConstraint(
+            "creator_type IN ('AI_SYSTEM', 'HUMAN_MANAGER', 'UNKNOWN')",
+            name="creator_type",
+        ),
         Index("ix_proposal_versions_proposal", "organization_id", "proposal_id", "version_number"),
     )
 
@@ -164,7 +181,41 @@ class ProposalVersionModel(Base):
         JSONB, default=list, server_default="[]"
     )
     change_summary: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    field_provenance: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    validation_result: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        default=dict,
+        server_default=text(
+            '\'{"status": "UNKNOWN", "is_valid": null, '
+            '"errors": [], "warnings": []}\'::jsonb'
+        ),
+    )
+    source_reference_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb"),
+    )
+    workflow_version: Mapped[str] = mapped_column(
+        String(50), default="UNKNOWN", server_default="UNKNOWN",
+    )
+    prompt_version: Mapped[str] = mapped_column(
+        String(50), default="UNKNOWN", server_default="UNKNOWN",
+    )
+    schema_version: Mapped[str] = mapped_column(
+        String(50), default="UNKNOWN", server_default="UNKNOWN",
+    )
+    model_reference: Mapped[str] = mapped_column(
+        String(100), default="UNKNOWN", server_default="UNKNOWN",
+    )
+    verifier_version: Mapped[str] = mapped_column(
+        String(50), default="UNKNOWN", server_default="UNKNOWN",
+    )
+    creator_type: Mapped[str] = mapped_column(
+        String(50), default="UNKNOWN", server_default="UNKNOWN",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
 
 
 class ApprovalModel(Base):
@@ -183,6 +234,7 @@ class ApprovalModel(Base):
                 "proposal_versions.version_number",
             ],
             ondelete="CASCADE",
+            name="fk_approvals_proposal_version",
         ),
         ForeignKeyConstraint(
             ["organization_id", "decided_by_membership_id"],
@@ -328,12 +380,17 @@ class OutboxEventModel(Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
         UniqueConstraint("organization_id", "id"),
-        UniqueConstraint("organization_id", "event_id"),
+        UniqueConstraint("organization_id", "event_id", name="uq_outbox_events_organization_event"),
+        CheckConstraint(
+            "status IN ('PENDING', 'DISPATCHING', 'DISPATCHED', 'FAILED')",
+            name="status",
+        ),
         Index(
-            "ix_outbox_events_status",
+            "ix_outbox_events_queue",
             "organization_id",
             "status",
             "available_at",
+            "lease_until",
             "id",
         ),
     )
@@ -346,10 +403,18 @@ class OutboxEventModel(Base):
     aggregate_id: Mapped[UUID]
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(50), default="PENDING", server_default="PENDING")
+    envelope_version: Mapped[str] = mapped_column(String(50), default="1.0", server_default="1.0")
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
     last_error: Mapped[str | None] = mapped_column(Text)
+    locked_by_worker_id: Mapped[str | None] = mapped_column(String(100))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

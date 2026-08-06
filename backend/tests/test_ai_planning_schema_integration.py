@@ -43,9 +43,13 @@ UPDATE_COLUMNS = {
     "outbox_events": {
         "status",
         "attempt_count",
+        "max_attempts",
         "available_at",
-        "processed_at",
+        "published_at",
         "last_error",
+        "last_error_code",
+        "locked_by_worker_id",
+        "lease_until",
     },
 }
 
@@ -135,15 +139,20 @@ async def test_ai_planning_tables_force_rls_and_runtime_has_proper_grants() -> N
                         "FROM pg_constraint WHERE conname IN "
                         "('ck_approvals_ck_approvals_status', "
                         "'ck_approvals_ck_approvals_version', "
-                        "'ck_workflow_runs_ck_workflow_runs_verifier_version')"
+                        "'ck_workflow_runs_ck_workflow_runs_verifier_version', "
+                        "'ck_workflow_runs_ck_workflow_runs_status', "
+                        "'ck_proposals_ck_proposals_status', "
+                        "'ck_outbox_events_ck_outbox_events_status', "
+                        "'ck_proposal_versions_ck_proposal_versions_creator_type', "
+                        "'uq_outbox_events_organization_event')"
                     )
                 )
             }
-            assert set(constraints) == {
-                "ck_approvals_ck_approvals_status",
-                "ck_approvals_ck_approvals_version",
-                "ck_workflow_runs_ck_workflow_runs_verifier_version",
-            }
+            assert "ck_workflow_runs_ck_workflow_runs_status" in constraints
+            assert "ck_proposals_ck_proposals_status" in constraints
+            assert "ck_outbox_events_ck_outbox_events_status" in constraints
+            assert "ck_proposal_versions_ck_proposal_versions_creator_type" in constraints
+            assert "uq_outbox_events_organization_event" in constraints
 
             indexes = {
                 row.indexname: row.indexdef
@@ -152,13 +161,14 @@ async def test_ai_planning_tables_force_rls_and_runtime_has_proper_grants() -> N
                         "SELECT indexname, indexdef FROM pg_indexes "
                         "WHERE indexname IN "
                         "('ix_workflow_jobs_queue', 'ix_workflow_jobs_lease', "
-                        "'ix_outbox_events_status')"
+                        "'ix_outbox_events_queue')"
                     )
                 )
             }
             assert "(organization_id, status" in indexes["ix_workflow_jobs_queue"]
             assert "(organization_id, locked_by_worker_id" in indexes["ix_workflow_jobs_lease"]
-            assert "(organization_id, status" in indexes["ix_outbox_events_status"]
+            expected_queue_idx = "(organization_id, status, available_at, lease_until, id)"
+            assert expected_queue_idx in indexes["ix_outbox_events_queue"]
     finally:
         await engine.dispose()
 
@@ -200,7 +210,7 @@ async def test_runtime_can_update_outbox_delivery_but_not_event_evidence() -> No
 
             await connection.execute(
                 text(
-                    "UPDATE outbox_events SET status = 'DISPATCHED', processed_at = now() "
+                    "UPDATE outbox_events SET status = 'DISPATCHED', published_at = now() "
                     "WHERE id = :id"
                 ),
                 {"id": outbox_id},

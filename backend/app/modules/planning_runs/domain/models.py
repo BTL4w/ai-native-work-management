@@ -18,33 +18,32 @@ class InvalidTransitionError(PlanningRunDomainError):
 class WorkflowRunStatus(StrEnum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
-    PAUSED_FOR_APPROVAL = "PAUSED_FOR_APPROVAL"
+    NEEDS_INPUT = "NEEDS_INPUT"
+    WAITING_FOR_DECISION = "WAITING_FOR_DECISION"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
 
     @property
     def is_terminal(self) -> bool:
         return self in (
             WorkflowRunStatus.COMPLETED,
             WorkflowRunStatus.FAILED,
-            WorkflowRunStatus.CANCELLED,
         )
 
 
 class ProposalStatus(StrEnum):
     DRAFT = "DRAFT"
-    READY = "READY"
+    VALIDATING = "VALIDATING"
+    READY_FOR_DECISION = "READY_FOR_DECISION"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
-    SUPERSEDED = "SUPERSEDED"
+    STALE = "STALE"
 
     @property
     def is_terminal(self) -> bool:
         return self in (
             ProposalStatus.APPROVED,
             ProposalStatus.REJECTED,
-            ProposalStatus.SUPERSEDED,
         )
 
 
@@ -72,12 +71,17 @@ class WorkflowJobStatus(StrEnum):
 
 class OutboxStatus(StrEnum):
     PENDING = "PENDING"
+    DISPATCHING = "DISPATCHING"
     DISPATCHED = "DISPATCHED"
     FAILED = "FAILED"
 
 
 def _now_utc() -> datetime:
     return datetime.now(UTC)
+
+
+def _default_validation_result() -> dict[str, Any]:
+    return {"status": "UNKNOWN", "is_valid": None, "errors": [], "warnings": []}
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +135,7 @@ class WorkflowRun:
         )
 
     def mark_running(self, now: datetime | None = None) -> "WorkflowRun":
-        if self.status != WorkflowRunStatus.QUEUED:
+        if self.status not in (WorkflowRunStatus.QUEUED, WorkflowRunStatus.NEEDS_INPUT):
             raise InvalidTransitionError(
                 f"Cannot transition WorkflowRun from {self.status} to RUNNING."
             )
@@ -143,21 +147,34 @@ class WorkflowRun:
             updated_at=current_time,
         )
 
-    def mark_paused_for_approval(self, now: datetime | None = None) -> "WorkflowRun":
+    def mark_needs_input(self, now: datetime | None = None) -> "WorkflowRun":
         if self.status != WorkflowRunStatus.RUNNING:
             raise InvalidTransitionError(
-                f"Cannot transition WorkflowRun from {self.status} to PAUSED_FOR_APPROVAL."
+                f"Cannot transition WorkflowRun from {self.status} to NEEDS_INPUT."
             )
         current_time = now or datetime.now(UTC)
         return replace(
             self,
-            status=WorkflowRunStatus.PAUSED_FOR_APPROVAL,
+            status=WorkflowRunStatus.NEEDS_INPUT,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_waiting_for_decision(self, now: datetime | None = None) -> "WorkflowRun":
+        if self.status != WorkflowRunStatus.RUNNING:
+            raise InvalidTransitionError(
+                f"Cannot transition WorkflowRun from {self.status} to WAITING_FOR_DECISION."
+            )
+        current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=WorkflowRunStatus.WAITING_FOR_DECISION,
             version=self.version + 1,
             updated_at=current_time,
         )
 
     def mark_completed(self, now: datetime | None = None) -> "WorkflowRun":
-        if self.status not in (WorkflowRunStatus.RUNNING, WorkflowRunStatus.PAUSED_FOR_APPROVAL):
+        if self.status not in (WorkflowRunStatus.RUNNING, WorkflowRunStatus.WAITING_FOR_DECISION):
             raise InvalidTransitionError(
                 f"Cannot transition WorkflowRun from {self.status} to COMPLETED."
             )
@@ -183,19 +200,6 @@ class WorkflowRun:
             updated_at=current_time,
         )
 
-    def mark_cancelled(self, now: datetime | None = None) -> "WorkflowRun":
-        if self.status.is_terminal:
-            raise InvalidTransitionError(
-                f"Cannot transition WorkflowRun from terminal status {self.status} to CANCELLED."
-            )
-        current_time = now or datetime.now(UTC)
-        return replace(
-            self,
-            status=WorkflowRunStatus.CANCELLED,
-            version=self.version + 1,
-            updated_at=current_time,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class WorkflowCheckpoint:
@@ -208,6 +212,14 @@ class WorkflowCheckpoint:
     created_at: datetime = field(default_factory=_now_utc)
 
 
+def _default_field_provenance() -> dict[str, Any]:
+    return {}
+
+
+def _default_source_reference_snapshot() -> list[dict[str, Any]]:
+    return []
+
+
 @dataclass(frozen=True, slots=True)
 class ProposalVersion:
     id: UUID
@@ -218,7 +230,31 @@ class ProposalVersion:
     content: dict[str, Any]
     assumptions: list[dict[str, Any]]
     change_summary: str | None = None
+    field_provenance: dict[str, Any] = field(
+        default_factory=_default_field_provenance,
+    )
+    validation_result: dict[str, Any] = field(
+        default_factory=_default_validation_result,
+    )
+    source_reference_snapshot: list[dict[str, Any]] = field(
+        default_factory=_default_source_reference_snapshot,
+    )
+    workflow_version: str = "UNKNOWN"
+    prompt_version: str = "UNKNOWN"
+    schema_version: str = "UNKNOWN"
+    model_reference: str = "UNKNOWN"
+    verifier_version: str = "UNKNOWN"
+    creator_type: str = "UNKNOWN"
     created_at: datetime = field(default_factory=_now_utc)
+
+    def __post_init__(self) -> None:
+        if self.creator_type not in (
+            "AI_SYSTEM", "HUMAN_MANAGER", "UNKNOWN",
+        ):
+            raise PlanningRunDomainError(
+                f"Invalid creator_type '{self.creator_type}'. "
+                "Must be AI_SYSTEM, HUMAN_MANAGER, or UNKNOWN."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,18 +294,44 @@ class Proposal:
             updated_at=now,
         )
 
-    def mark_ready(self, approval_id: UUID, now: datetime | None = None) -> "Proposal":
-        if self.status not in (ProposalStatus.DRAFT, ProposalStatus.READY):
-            raise InvalidTransitionError(f"Cannot transition Proposal from {self.status} to READY.")
+    def mark_validating(self, now: datetime | None = None) -> "Proposal":
+        if self.status != ProposalStatus.DRAFT:
+            raise InvalidTransitionError(
+                f"Cannot transition Proposal from {self.status} to VALIDATING."
+            )
         current_time = now or datetime.now(UTC)
+        return replace(
+            self,
+            status=ProposalStatus.VALIDATING,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
+    def mark_ready_for_decision(
+        self, approval_id: UUID, now: datetime | None = None,
+    ) -> "Proposal":
+        allowed = (
+            ProposalStatus.DRAFT,
+            ProposalStatus.VALIDATING,
+            ProposalStatus.READY_FOR_DECISION,
+        )
+        if self.status not in allowed:
+            raise InvalidTransitionError(
+                "Cannot transition Proposal from "
+                f"{self.status} to READY_FOR_DECISION."
+            )
+        current_time = now or datetime.now(UTC)
+        is_re_ready = (
+            self.status == ProposalStatus.READY_FOR_DECISION
+            and self.approval_id != approval_id
+        )
         superseded = (
-            self.approval_id
-            if (self.status == ProposalStatus.READY and self.approval_id != approval_id)
+            self.approval_id if is_re_ready
             else self.superseded_approval_id
         )
         return replace(
             self,
-            status=ProposalStatus.READY,
+            status=ProposalStatus.READY_FOR_DECISION,
             approval_id=approval_id,
             superseded_approval_id=superseded,
             version=self.version + 1,
@@ -278,10 +340,17 @@ class Proposal:
 
     def edit(self, now: datetime | None = None) -> "Proposal":
         if self.status.is_terminal:
-            raise InvalidTransitionError(f"Cannot edit Proposal in terminal status {self.status}.")
+            raise InvalidTransitionError(
+                "Cannot edit Proposal in terminal "
+                f"status {self.status}."
+            )
         current_time = now or datetime.now(UTC)
+        is_ready = (
+            self.status == ProposalStatus.READY_FOR_DECISION
+        )
         superseded = (
-            self.approval_id if self.status == ProposalStatus.READY else self.superseded_approval_id
+            self.approval_id if is_ready
+            else self.superseded_approval_id
         )
         return replace(
             self,
@@ -293,8 +362,31 @@ class Proposal:
             updated_at=current_time,
         )
 
+    def mark_stale(self, now: datetime | None = None) -> "Proposal":
+        if self.status.is_terminal:
+            raise InvalidTransitionError(
+                "Cannot mark Proposal as STALE from "
+                f"terminal status {self.status}."
+            )
+        current_time = now or datetime.now(UTC)
+        is_ready = (
+            self.status == ProposalStatus.READY_FOR_DECISION
+        )
+        superseded = (
+            self.approval_id if is_ready
+            else self.superseded_approval_id
+        )
+        return replace(
+            self,
+            status=ProposalStatus.STALE,
+            approval_id=None,
+            superseded_approval_id=superseded,
+            version=self.version + 1,
+            updated_at=current_time,
+        )
+
     def mark_approved(self, now: datetime | None = None) -> "Proposal":
-        if self.status != ProposalStatus.READY:
+        if self.status != ProposalStatus.READY_FOR_DECISION:
             raise InvalidTransitionError(f"Cannot approve Proposal from status {self.status}.")
         current_time = now or datetime.now(UTC)
         return replace(
@@ -305,9 +397,10 @@ class Proposal:
         )
 
     def mark_rejected(self, now: datetime | None = None) -> "Proposal":
-        if self.status.is_terminal:
+        if self.status != ProposalStatus.READY_FOR_DECISION:
             raise InvalidTransitionError(
-                f"Cannot reject Proposal in terminal status {self.status}."
+                "Cannot reject Proposal from "
+                f"status {self.status}."
             )
         current_time = now or datetime.now(UTC)
         return replace(
@@ -478,8 +571,14 @@ class OutboxEvent:
     aggregate_id: UUID
     payload: dict[str, Any]
     status: OutboxStatus = OutboxStatus.PENDING
+    envelope_version: str = "1.0"
     attempt_count: int = 0
+    max_attempts: int = 3
     available_at: datetime = field(default_factory=_now_utc)
-    processed_at: datetime | None = None
+    published_at: datetime | None = None
+    last_error_code: str | None = None
     last_error: str | None = None
+    locked_by_worker_id: str | None = None
+    lease_until: datetime | None = None
+    occurred_at: datetime = field(default_factory=_now_utc)
     created_at: datetime = field(default_factory=_now_utc)

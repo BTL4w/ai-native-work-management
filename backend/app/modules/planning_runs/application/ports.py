@@ -1,7 +1,7 @@
 """Application ports and transaction boundaries for planning runs."""
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -131,7 +131,11 @@ class PlanningRunRepository(Protocol):
     async def append_event(
         self,
         *,
-        event: WorkflowEvent,
+        event: WorkflowEvent | None = None,
+        actor: AuthenticatedActor | None = None,
+        run_id: UUID | None = None,
+        event_type: str | None = None,
+        public_payload: dict[str, Any] | None = None,
     ) -> WorkflowEvent: ...
 
     async def list_events(
@@ -157,7 +161,40 @@ class PlanningRunRepository(Protocol):
         self,
         *,
         event: OutboxEvent,
+        organization_id: UUID,
     ) -> OutboxEvent: ...
+
+    async def claim_pending_outbox_events(
+        self,
+        *,
+        organization_id: UUID,
+        worker_id: str,
+        limit: int,
+        now: datetime,
+        lease_until: datetime,
+    ) -> list[OutboxEvent]: ...
+
+    async def mark_outbox_event_published(
+        self,
+        *,
+        organization_id: UUID,
+        event_id: UUID,
+        worker_id: str,
+        now: datetime,
+        published_at: datetime,
+    ) -> None: ...
+
+    async def record_outbox_event_failure(
+        self,
+        *,
+        organization_id: UUID,
+        event_id: UUID,
+        worker_id: str,
+        now: datetime,
+        error_code: str,
+        error_message: str,
+        next_available_at: datetime,
+    ) -> None: ...
 
     async def claim_job(
         self,

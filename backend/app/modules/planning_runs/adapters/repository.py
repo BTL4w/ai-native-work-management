@@ -1,9 +1,10 @@
 """PostgreSQL repository adapter for AI planning runs persistence."""
 
 from datetime import UTC, datetime
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -25,8 +26,11 @@ from app.modules.planning_runs.domain.models import (
     Approval,
     ApprovalStatus,
     ContextReference,
+    InvalidTransitionError,
     ModelInvocation,
     OutboxEvent,
+    OutboxStatus,
+    PlanningRunDomainError,
     Proposal,
     ProposalStatus,
     ProposalVersion,
@@ -151,6 +155,26 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         *,
         checkpoint: WorkflowCheckpoint,
     ) -> WorkflowCheckpoint:
+        stmt = (
+            select(WorkflowCheckpointModel)
+            .where(
+                WorkflowCheckpointModel.organization_id == checkpoint.organization_id,
+                WorkflowCheckpointModel.workflow_run_id == checkpoint.workflow_run_id,
+                WorkflowCheckpointModel.sequence == checkpoint.sequence,
+            )
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            if existing.node == checkpoint.node and existing.state == checkpoint.state:
+                return checkpoint
+            raise InvalidTransitionError(
+                "Checkpoint conflict: sequence "
+                f"{checkpoint.sequence} already exists "
+                "with different node or state."
+            )
+
         model = WorkflowCheckpointModel(
             id=checkpoint.id,
             organization_id=checkpoint.organization_id,
@@ -220,6 +244,15 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             content=initial_version.content,
             assumptions=initial_version.assumptions,
             change_summary=initial_version.change_summary,
+            field_provenance=initial_version.field_provenance,
+            validation_result=initial_version.validation_result,
+            source_reference_snapshot=initial_version.source_reference_snapshot,
+            workflow_version=initial_version.workflow_version,
+            prompt_version=initial_version.prompt_version,
+            schema_version=initial_version.schema_version,
+            model_reference=initial_version.model_reference,
+            verifier_version=initial_version.verifier_version,
+            creator_type=initial_version.creator_type,
             created_at=initial_version.created_at,
         )
         self._session.add(prop_model)
@@ -342,7 +375,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             .where(
                 ProposalModel.id == proposal.id,
                 ProposalModel.organization_id == actor.organization_id,
-                ProposalModel.status == ProposalStatus.READY.value,
+                ProposalModel.status == ProposalStatus.READY_FOR_DECISION.value,
                 ProposalModel.approval_id == superseded_approval.id,
                 ProposalModel.current_version_number == version.version_number - 1,
                 ProposalModel.version == proposal.version - 1,
@@ -381,6 +414,15 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                 content=version.content,
                 assumptions=version.assumptions,
                 change_summary=version.change_summary,
+                field_provenance=version.field_provenance,
+                validation_result=version.validation_result,
+                source_reference_snapshot=version.source_reference_snapshot,
+                workflow_version=version.workflow_version,
+                prompt_version=version.prompt_version,
+                schema_version=version.schema_version,
+                model_reference=version.model_reference,
+                verifier_version=version.verifier_version,
+                creator_type=version.creator_type,
                 created_at=version.created_at,
             )
         )
@@ -391,7 +433,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             .where(
                 ProposalModel.id == proposal.id,
                 ProposalModel.organization_id == actor.organization_id,
-                ProposalModel.status == ProposalStatus.READY.value,
+                ProposalModel.status == ProposalStatus.READY_FOR_DECISION.value,
                 ProposalModel.approval_id == superseded_approval.id,
                 ProposalModel.current_version_number == version.version_number - 1,
                 ProposalModel.version == proposal.version - 1,
@@ -424,6 +466,15 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             content=version.content,
             assumptions=version.assumptions,
             change_summary=version.change_summary,
+            field_provenance=version.field_provenance,
+            validation_result=version.validation_result,
+            source_reference_snapshot=version.source_reference_snapshot,
+            workflow_version=version.workflow_version,
+            prompt_version=version.prompt_version,
+            schema_version=version.schema_version,
+            model_reference=version.model_reference,
+            verifier_version=version.verifier_version,
+            creator_type=version.creator_type,
             created_at=version.created_at,
         )
         self._session.add(model)
@@ -455,6 +506,15 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             content=model.content,
             assumptions=model.assumptions,
             change_summary=model.change_summary,
+            field_provenance=model.field_provenance,
+            validation_result=model.validation_result,
+            source_reference_snapshot=model.source_reference_snapshot,
+            workflow_version=model.workflow_version,
+            prompt_version=model.prompt_version,
+            schema_version=model.schema_version,
+            model_reference=model.model_reference,
+            verifier_version=model.verifier_version,
+            creator_type=model.creator_type,
             created_at=model.created_at,
         )
 
@@ -539,7 +599,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             .where(
                 ProposalModel.id == approval.proposal_id,
                 ProposalModel.organization_id == actor.organization_id,
-                ProposalModel.status == ProposalStatus.READY.value,
+                ProposalModel.status == ProposalStatus.READY_FOR_DECISION.value,
                 ProposalModel.approval_id == approval.id,
                 ProposalModel.current_version_number == approval.proposal_version_number,
                 ProposalModel.version == proposal.version - 1,
@@ -549,7 +609,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         prop_res = await self._session.execute(prop_stmt)
         if prop_res.scalar_one_or_none() is None:
             raise RuntimeError(
-                "Approval update failed: proposal is not READY, "
+                "Approval update failed: proposal is not READY_FOR_DECISION, "
                 "version mismatched, or approval superseded."
             )
 
@@ -583,7 +643,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                 ProposalModel.id == proposal.id,
                 ProposalModel.organization_id == actor.organization_id,
                 ProposalModel.version == proposal.version - 1,
-                ProposalModel.status == ProposalStatus.READY.value,
+                ProposalModel.status == ProposalStatus.READY_FOR_DECISION.value,
                 ProposalModel.approval_id == approval.id,
             )
             .values(
@@ -601,20 +661,86 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
     async def append_event(
         self,
         *,
-        event: WorkflowEvent,
+        event: WorkflowEvent | None = None,
+        actor: AuthenticatedActor | None = None,
+        run_id: UUID | None = None,
+        event_type: str | None = None,
+        public_payload: dict[str, Any] | None = None,
     ) -> WorkflowEvent:
+        if event is not None:
+            org_id = event.organization_id
+            target_run_id = event.workflow_run_id
+            target_event_type = event.event_type
+            payload = event.public_payload
+            event_id = event.id
+            created_at = event.created_at
+        else:
+            if (
+                actor is None
+                or run_id is None
+                or event_type is None
+                or public_payload is None
+            ):
+                raise PlanningRunDomainError(
+                    "append_event requires either event or "
+                    "(actor, run_id, event_type, "
+                    "public_payload)."
+                )
+            org_id = actor.organization_id
+            target_run_id = run_id
+            target_event_type = event_type
+            payload = public_payload
+            event_id = uuid4()
+            created_at = datetime.now(UTC)
+
+        run_stmt = (
+            select(WorkflowRunModel)
+            .where(
+                WorkflowRunModel.id == target_run_id,
+                WorkflowRunModel.organization_id == org_id,
+            )
+            .with_for_update()
+        )
+        run_res = await self._session.execute(run_stmt)
+        if run_res.scalar_one_or_none() is None:
+            raise PlanningRunDomainError(
+                "WorkflowRun not found or tenant mismatch."
+            )
+
+        # Repository always owns sequence computation
+        seq_stmt = select(
+            func.coalesce(
+                func.max(WorkflowEventModel.sequence), 0,
+            ),
+        ).where(
+            WorkflowEventModel.organization_id == org_id,
+            WorkflowEventModel.workflow_run_id == target_run_id,
+        )
+        max_seq = (
+            await self._session.execute(seq_stmt)
+        ).scalar_one()
+        computed_seq = max_seq + 1
+
         model = WorkflowEventModel(
-            id=event.id,
-            organization_id=event.organization_id,
-            workflow_run_id=event.workflow_run_id,
-            sequence=event.sequence,
-            event_type=event.event_type,
-            public_payload=event.public_payload,
-            created_at=event.created_at,
+            id=event_id,
+            organization_id=org_id,
+            workflow_run_id=target_run_id,
+            sequence=computed_seq,
+            event_type=target_event_type,
+            public_payload=payload,
+            created_at=created_at,
         )
         self._session.add(model)
         await self._session.flush()
-        return event
+        return WorkflowEvent(
+            id=model.id,
+            organization_id=model.organization_id,
+            workflow_run_id=model.workflow_run_id,
+            sequence=model.sequence,
+            event_type=model.event_type,
+            public_payload=model.public_payload,
+            created_at=model.created_at,
+        )
 
     async def list_events(
         self,
@@ -691,7 +817,52 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         self,
         *,
         event: OutboxEvent,
+        organization_id: UUID,
     ) -> OutboxEvent:
+        if organization_id != event.organization_id:
+            raise PlanningRunDomainError(
+                "Organization ID mismatch in "
+                "enqueue_outbox_event."
+            )
+
+        stmt = select(OutboxEventModel).where(
+            OutboxEventModel.organization_id == event.organization_id,
+            OutboxEventModel.event_id == event.event_id,
+        ).with_for_update()
+        existing = (await self._session.execute(stmt)).scalar_one_or_none()
+        if existing is not None:
+            if (
+                existing.event_type == event.event_type
+                and existing.aggregate_type == event.aggregate_type
+                and existing.aggregate_id == event.aggregate_id
+                and existing.payload == event.payload
+            ):
+                return OutboxEvent(
+                    id=existing.id,
+                    organization_id=existing.organization_id,
+                    event_id=existing.event_id,
+                    event_type=existing.event_type,
+                    aggregate_type=existing.aggregate_type,
+                    aggregate_id=existing.aggregate_id,
+                    payload=existing.payload,
+                    status=OutboxStatus(existing.status),
+                    envelope_version=existing.envelope_version,
+                    attempt_count=existing.attempt_count,
+                    max_attempts=existing.max_attempts,
+                    available_at=existing.available_at,
+                    published_at=existing.published_at,
+                    last_error_code=existing.last_error_code,
+                    last_error=existing.last_error,
+                    locked_by_worker_id=existing.locked_by_worker_id,
+                    lease_until=existing.lease_until,
+                    occurred_at=existing.occurred_at,
+                    created_at=existing.created_at,
+                )
+            raise PlanningRunDomainError(
+                f"Conflict: Outbox event {event.event_id} "
+                "exists with different attributes."
+            )
+
         model = OutboxEventModel(
             id=event.id,
             organization_id=event.organization_id,
@@ -701,15 +872,164 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             aggregate_id=event.aggregate_id,
             payload=event.payload,
             status=event.status.value,
+            envelope_version=event.envelope_version,
             attempt_count=event.attempt_count,
+            max_attempts=event.max_attempts,
             available_at=event.available_at,
-            processed_at=event.processed_at,
+            published_at=event.published_at,
+            last_error_code=event.last_error_code,
             last_error=event.last_error,
+            locked_by_worker_id=event.locked_by_worker_id,
+            lease_until=event.lease_until,
+            occurred_at=event.occurred_at,
             created_at=event.created_at,
         )
         self._session.add(model)
         await self._session.flush()
         return event
+
+    async def claim_pending_outbox_events(
+        self,
+        *,
+        organization_id: UUID,
+        worker_id: str,
+        limit: int,
+        now: datetime,
+        lease_until: datetime,
+    ) -> list[OutboxEvent]:
+        stmt = (
+            select(OutboxEventModel)
+            .where(
+                OutboxEventModel.organization_id == organization_id,
+                OutboxEventModel.attempt_count < OutboxEventModel.max_attempts,
+                (
+                    (OutboxEventModel.status == OutboxStatus.PENDING.value)
+                    & (OutboxEventModel.available_at <= now)
+                )
+                | (
+                    (OutboxEventModel.status == OutboxStatus.DISPATCHING.value)
+                    & (
+                        OutboxEventModel.lease_until.is_(None)
+                        | (OutboxEventModel.lease_until < now)
+                    )
+                ),
+            )
+            .order_by(OutboxEventModel.created_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        models = result.scalars().all()
+        claimed: list[OutboxEvent] = []
+        for model in models:
+            model.status = OutboxStatus.DISPATCHING.value
+            model.locked_by_worker_id = worker_id
+            model.lease_until = lease_until
+            model.attempt_count += 1
+            claimed.append(
+                OutboxEvent(
+                    id=model.id,
+                    organization_id=model.organization_id,
+                    event_id=model.event_id,
+                    event_type=model.event_type,
+                    aggregate_type=model.aggregate_type,
+                    aggregate_id=model.aggregate_id,
+                    payload=model.payload,
+                    status=OutboxStatus.DISPATCHING,
+                    envelope_version=model.envelope_version,
+                    attempt_count=model.attempt_count,
+                    max_attempts=model.max_attempts,
+                    available_at=model.available_at,
+                    published_at=model.published_at,
+                    last_error_code=model.last_error_code,
+                    last_error=model.last_error,
+                    locked_by_worker_id=model.locked_by_worker_id,
+                    lease_until=model.lease_until,
+                    occurred_at=model.occurred_at,
+                    created_at=model.created_at,
+                )
+            )
+        await self._session.flush()
+        return claimed
+
+    async def mark_outbox_event_published(
+        self,
+        *,
+        organization_id: UUID,
+        event_id: UUID,
+        worker_id: str,
+        now: datetime,
+        published_at: datetime,
+    ) -> None:
+        stmt = (
+            update(OutboxEventModel)
+            .where(
+                OutboxEventModel.organization_id == organization_id,
+                OutboxEventModel.event_id == event_id,
+                OutboxEventModel.locked_by_worker_id == worker_id,
+                OutboxEventModel.status == OutboxStatus.DISPATCHING.value,
+                OutboxEventModel.lease_until.is_not(None),
+                OutboxEventModel.lease_until >= now,
+            )
+            .values(
+                status=OutboxStatus.DISPATCHED.value,
+                published_at=published_at,
+                locked_by_worker_id=None,
+                lease_until=None,
+            )
+        )
+        result = await self._session.execute(stmt)
+        assert isinstance(result, CursorResult)
+        if result.rowcount == 0:
+            raise PlanningRunDomainError(
+                "Outbox publish failed: lease expired, "
+                "wrong worker, or event not DISPATCHING."
+            )
+
+    async def record_outbox_event_failure(
+        self,
+        *,
+        organization_id: UUID,
+        event_id: UUID,
+        worker_id: str,
+        now: datetime,
+        error_code: str,
+        error_message: str,
+        next_available_at: datetime,
+    ) -> None:
+        stmt = (
+            select(OutboxEventModel)
+            .where(
+                OutboxEventModel.organization_id == organization_id,
+                OutboxEventModel.event_id == event_id,
+                OutboxEventModel.locked_by_worker_id == worker_id,
+                OutboxEventModel.status == OutboxStatus.DISPATCHING.value,
+                OutboxEventModel.lease_until.is_not(None),
+                OutboxEventModel.lease_until >= now,
+            )
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
+        if model is None:
+            raise PlanningRunDomainError(
+                "Outbox failure record failed: "
+                "lease expired, wrong worker, "
+                "or event not DISPATCHING."
+            )
+
+        new_status = (
+            OutboxStatus.PENDING.value
+            if model.attempt_count < model.max_attempts
+            else OutboxStatus.FAILED.value
+        )
+        model.status = new_status
+        model.last_error_code = error_code
+        model.last_error = error_message
+        model.available_at = next_available_at
+        model.locked_by_worker_id = None
+        model.lease_until = None
+        await self._session.flush()
 
     async def claim_job(
         self,
