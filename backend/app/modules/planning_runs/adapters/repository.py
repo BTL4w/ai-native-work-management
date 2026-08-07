@@ -1034,21 +1034,26 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
     async def claim_job(
         self,
         *,
+        organization_id: UUID | None = None,
         worker_id: str,
         now: datetime,
         lease_until: datetime,
     ) -> WorkflowJob | None:
+        conditions = [
+            WorkflowJobModel.attempt_count < WorkflowJobModel.max_attempts,
+            (WorkflowJobModel.status == WorkflowJobStatus.QUEUED.value)
+            | (
+                (WorkflowJobModel.status == WorkflowJobStatus.RUNNING.value)
+                & (WorkflowJobModel.lease_until < now)
+            ),
+            WorkflowJobModel.available_at <= now,
+        ]
+        if organization_id is not None:
+            conditions.append(WorkflowJobModel.organization_id == organization_id)
+
         stmt = (
             select(WorkflowJobModel)
-            .where(
-                WorkflowJobModel.attempt_count < WorkflowJobModel.max_attempts,
-                (WorkflowJobModel.status == WorkflowJobStatus.QUEUED.value)
-                | (
-                    (WorkflowJobModel.status == WorkflowJobStatus.RUNNING.value)
-                    & (WorkflowJobModel.lease_until < now)
-                ),
-                WorkflowJobModel.available_at <= now,
-            )
+            .where(*conditions)
             .order_by(WorkflowJobModel.created_at.asc())
             .limit(1)
             .with_for_update(skip_locked=True)

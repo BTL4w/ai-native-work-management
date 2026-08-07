@@ -4,12 +4,15 @@ UV := uv
 
 .DEFAULT_GOAL := up
 
-.PHONY: up dev sync migrate seed lint format-check typecheck test test-ai test-integration migration-check
+.PHONY: up dev sync migrate seed lint format-check typecheck test test-ai test-integration migration-check worker-dev
 
 up: sync
 	$(UV) run fastapi dev app/main.py
 
 dev: up
+
+worker-dev: sync
+	$(UV) run python -m app.worker
 
 sync:
 	$(UV) sync --locked

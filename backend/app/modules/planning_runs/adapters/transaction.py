@@ -1,6 +1,7 @@
 """Transaction boundary implementation for AI planning runs."""
 
 from typing import Self
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_sessionmaker
@@ -16,9 +17,15 @@ from app.modules.planning_runs.application.ports import (
 class PostgreSQLPlanningRunTransaction(PlanningRunTransaction):
     """Async PostgreSQL transaction manager enforcing RLS tenant context and app_runtime role."""
 
-    def __init__(self, session: AsyncSession, actor: AuthenticatedActor) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        membership_id: UUID | None = None,
+    ) -> None:
         self._session = session
-        self._actor = actor
+        self._organization_id = organization_id
+        self._membership_id = membership_id
         self._repository = PostgreSQLPlanningRunRepository(session)
         self._transaction: AsyncSessionTransaction | None = None
 
@@ -29,6 +36,10 @@ class PostgreSQLPlanningRunTransaction(PlanningRunTransaction):
                 "Planning run repository is unavailable outside an active transaction."
             )
         return self._repository
+
+    @property
+    def session(self) -> AsyncSession:
+        return self._session
 
     async def commit(self) -> None:
         if self._transaction is None:
@@ -48,12 +59,12 @@ class PostgreSQLPlanningRunTransaction(PlanningRunTransaction):
         await self._session.execute(text("SET LOCAL ROLE app_runtime"))
         await self._session.execute(
             text("SELECT set_config('app.organization_id', :org_id, true)"),
-            {"org_id": str(self._actor.organization_id)},
+            {"org_id": str(self._organization_id)},
         )
-        if self._actor.membership_id:
+        if self._membership_id:
             await self._session.execute(
                 text("SELECT set_config('app.membership_id', :mem_id, true)"),
-                {"mem_id": str(self._actor.membership_id)},
+                {"mem_id": str(self._membership_id)},
             )
         return self
 
@@ -78,6 +89,15 @@ class PostgreSQLPlanningRunTransactionFactory:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    def __call__(self, actor: AuthenticatedActor) -> PlanningRunTransaction:
+    def __call__(self, context: AuthenticatedActor | UUID) -> PlanningRunTransaction:
         session = self._session_factory(close_resets_only=False)
-        return PostgreSQLPlanningRunTransaction(session=session, actor=actor)
+        if isinstance(context, AuthenticatedActor):
+            return PostgreSQLPlanningRunTransaction(
+                session=session,
+                organization_id=context.organization_id,
+                membership_id=context.membership_id,
+            )
+        return PostgreSQLPlanningRunTransaction(
+            session=session,
+            organization_id=context,
+        )

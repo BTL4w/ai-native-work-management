@@ -133,7 +133,9 @@ async def test_workflow_run_and_job_atomic_creation() -> None:
 
             now = datetime.now(UTC)
             lease_until = now + timedelta(minutes=5)
-            claimed = await repo.claim_job(worker_id="worker-1", now=now, lease_until=lease_until)
+            claimed = await repo.claim_job(
+                organization_id=org_id, worker_id="worker-1", now=now, lease_until=lease_until
+            )
             assert claimed is not None
             assert claimed.id == job_id
             assert claimed.locked_by_worker_id == "worker-1"

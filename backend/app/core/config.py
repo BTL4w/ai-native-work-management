@@ -1,12 +1,36 @@
 """Typed environment configuration."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 _POSTGRESQL_ASYNC_URL_PREFIX = "postgresql+psycopg://"
+
+
+class CustomEnvSettingsSource(EnvSettingsSource):
+    """Env settings source that handles empty string values for complex fields."""
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip().strip("'\"")):
+            return []
+        if isinstance(value, str):
+            clean_value = value.strip()
+            if (clean_value.startswith("'") and clean_value.endswith("'")) or (
+                clean_value.startswith('"') and clean_value.endswith('"')
+            ):
+                clean_value = clean_value[1:-1].strip()
+            if not clean_value:
+                return []
+            value = clean_value
+        return super().decode_complex_value(field_name, field, value)
 
 
 class Settings(BaseSettings):
@@ -17,6 +41,22 @@ class Settings(BaseSettings):
         env_prefix="APP_",
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            CustomEnvSettingsSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     name: str = "Work Management API"
     version: str = "0.1.0"
@@ -40,6 +80,18 @@ class Settings(BaseSettings):
     langsmith_api_key: SecretStr | None = None
     ai_raw_context_retention_days: int = Field(default=30, ge=0, le=30)
     ai_redacted_trace_retention_days: int = Field(default=90, ge=0, le=90)
+    worker_poll_interval_seconds: float = Field(default=0.5, ge=0.1, le=10)
+    worker_lease_seconds: int = Field(default=60, ge=10, le=600)
+    worker_organization_ids: list[UUID] = Field(default_factory=list)  # type: ignore
+    worker_id: str = ""
+
+    @field_validator("worker_organization_ids", mode="before")
+    @classmethod
+    def parse_worker_organization_ids(cls, value: object) -> object:
+        """Parse string values or handle empty string from environment."""
+        if isinstance(value, str) and not value.strip():
+            return []
+        return value
 
     @field_validator("database_url")
     @classmethod
@@ -75,6 +127,18 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def generate_default_worker_id(self) -> "Settings":
+        """Generate a stable worker ID from hostname and PID if not configured."""
+
+        if not self.worker_id.strip():
+            import os
+            import socket
+            object.__setattr__(
+                self, "worker_id",
+                f"worker-{socket.gethostname()}-{os.getpid()}"
+            )
+        return self
 
 @lru_cache
 def get_settings() -> Settings:

@@ -6,10 +6,10 @@ E2E_DATABASE_URL := postgresql+psycopg://work_management:work_management@localho
 
 .DEFAULT_GOAL := dev
 
-.PHONY: dev up bootstrap install db-up backend-dev frontend-dev migrate seed down ai ai-sync ai-lint ai-typecheck ai-test containers-build containers-up containers-down containers-config-check ai-image-check lint typecheck test test-ai test-e2e e2e-db-reset migration-check
+.PHONY: dev up bootstrap install db-up backend-dev frontend-dev worker-dev migrate seed down ai ai-sync ai-lint ai-typecheck ai-test containers-build containers-up containers-down containers-config-check ai-worker-check lint typecheck test test-ai test-e2e e2e-db-reset migration-check
 
 dev: bootstrap
-	$(MAKE) --no-print-directory -j2 backend-dev frontend-dev
+	$(MAKE) --no-print-directory -j3 backend-dev frontend-dev worker-dev
 
 up: dev
 
@@ -30,6 +30,9 @@ backend-dev:
 
 frontend-dev:
 	$(PNPM) --dir frontend dev
+
+worker-dev:
+	$(MAKE) --no-print-directory -C backend worker-dev
 
 migrate:
 	$(MAKE) --no-print-directory -C backend migrate
@@ -56,7 +59,7 @@ ai-test:
 	$(MAKE) --no-print-directory -C ai test
 
 containers-build:
-	docker compose --profile tools build backend-api frontend ai-check
+	docker compose --profile tools build backend-api frontend ai-worker
 
 containers-up:
 	docker compose up -d --build --wait --wait-timeout 60 postgres backend-api frontend
@@ -67,8 +70,8 @@ containers-down:
 containers-config-check:
 	docker compose --profile tools config --quiet
 
-ai-image-check:
-	docker compose --profile tools run --rm --build ai-check
+ai-worker-check:
+	docker compose --profile tools run --rm --build ai-worker timeout 3s python -m app.worker || [ $$? -eq 124 ]
 
 lint:
 	$(MAKE) --no-print-directory -C backend lint

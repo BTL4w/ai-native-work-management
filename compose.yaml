@@ -88,12 +88,21 @@ services:
     restart: unless-stopped
     stop_grace_period: 10s
 
-  ai-check:
+  ai-worker:
     profiles:
       - tools
     build:
-      context: ai
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-work_management}:${POSTGRES_PASSWORD:-work_management}@postgres:5432/${POSTGRES_DB:-work_management}
+      APP_ENVIRONMENT: local
+      APP_WORKER_ORGANIZATION_IDS: ${APP_WORKER_ORGANIZATION_IDS:-[]}
+      APP_WORKER_ID: ${APP_WORKER_ID:-}
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:

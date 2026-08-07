@@ -199,6 +199,7 @@ class PlanningRunRepository(Protocol):
     async def claim_job(
         self,
         *,
+        organization_id: UUID | None = None,
         worker_id: str,
         now: datetime,
         lease_until: datetime,
@@ -226,6 +227,9 @@ class PlanningRunTransaction(Protocol):
 
     @property
     def repository(self) -> PlanningRunRepository: ...
+
+    @property
+    def session(self) -> Any: ...
 
     async def commit(self) -> None: ...
 
