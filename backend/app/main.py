@@ -20,6 +20,14 @@ from app.modules.identity.application.auth_service import AuthService
 from app.modules.organization.adapters.member_repository import SqlAlchemyMemberTransactionFactory
 from app.modules.organization.api.members import router as member_router
 from app.modules.organization.application.member_service import MemberService
+from app.modules.planning_runs.adapters.ai_runtime import PlanningAIRuntime
+from app.modules.planning_runs.adapters.transaction import (
+    PostgreSQLPlanningRunTransactionFactory,
+)
+from app.modules.planning_runs.api.routes import router as planning_run_router
+from app.modules.planning_runs.application.event_service import WorkflowEventService
+from app.modules.planning_runs.application.proposal_service import ProposalService
+from app.modules.planning_runs.application.run_service import PlanningRunService
 from app.modules.work.adapters.project_repository import SqlAlchemyProjectTransactionFactory
 from app.modules.work.adapters.task_repository import SqlAlchemyTaskTransactionFactory
 from app.modules.work.api.routes import router as project_router
@@ -49,6 +57,9 @@ def create_app(
     task_service: TaskService | None = None,
     member_service: MemberService | None = None,
     manual_planning_service: ManualPlanningService | None = None,
+    planning_run_service: PlanningRunService | None = None,
+    proposal_service: ProposalService | None = None,
+    workflow_event_service: WorkflowEventService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -85,6 +96,34 @@ def create_app(
         resolved_manual_planning_service = ManualPlanningService(
             SqlAlchemyManualPlanningTransactionFactory(create_session_factory(database_engine))
         )
+    runtime = PlanningAIRuntime()
+    resolved_planning_run_service = planning_run_service
+    resolved_proposal_service = proposal_service
+    resolved_workflow_event_service = workflow_event_service
+    if (
+        resolved_planning_run_service is None
+        or resolved_proposal_service is None
+        or resolved_workflow_event_service is None
+    ):
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        planning_transaction_factory = PostgreSQLPlanningRunTransactionFactory(
+            create_session_factory(database_engine)
+        )
+        if resolved_planning_run_service is None:
+            resolved_planning_run_service = PlanningRunService(
+                transaction_factory=planning_transaction_factory,
+                runtime=runtime,
+            )
+        if resolved_proposal_service is None:
+            resolved_proposal_service = ProposalService(
+                transaction_factory=planning_transaction_factory,
+                runtime=runtime,
+            )
+        if resolved_workflow_event_service is None:
+            resolved_workflow_event_service = WorkflowEventService(
+                transaction_factory=planning_transaction_factory
+            )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
@@ -106,6 +145,9 @@ def create_app(
     app.state.task_service = resolved_task_service
     app.state.member_service = resolved_member_service
     app.state.manual_planning_service = resolved_manual_planning_service
+    app.state.planning_run_service = resolved_planning_run_service
+    app.state.proposal_service = resolved_proposal_service
+    app.state.workflow_event_service = resolved_workflow_event_service
     app.state.database_engine = database_engine
     app.add_middleware(
         CORSMiddleware,
@@ -132,6 +174,7 @@ def create_app(
     app.include_router(task_router, prefix="/api/v1")
     app.include_router(member_router, prefix="/api/v1")
     app.include_router(planning_router, prefix="/api/v1")
+    app.include_router(planning_run_router, prefix="/api/v1")
     return app
 
 

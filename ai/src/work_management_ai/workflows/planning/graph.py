@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from typing import Literal, cast
 from uuid import UUID
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt, interrupt
+from pydantic import TypeAdapter
 
 from work_management_ai.model_gateway.contracts import (
     ModelGateway,
@@ -98,6 +100,37 @@ class PlanningGraph:
             Command(resume=manager_value),
             config={"configurable": {"thread_id": self.thread_id(run_id)}},
         )
+        return self._result(raw)
+
+    async def resume_from_checkpoint(
+        self,
+        persisted_state: dict[str, object],
+        manager_value: str,
+    ) -> PlanningGraphResult:
+        """Resume a manager-input interrupt from a persisted typed checkpoint."""
+
+        state = TypeAdapter(PlanningState).validate_python(persisted_state)
+        if state["stage"] != "NEEDS_INPUT" or not state["pending_questions"]:
+            raise ValueError("checkpoint is not awaiting manager input")
+        answer = manager_value.strip()
+        if not answer:
+            raise ValueError("manager input must not be blank")
+        restored = cast(
+            PlanningState,
+            {
+                **state,
+                "stage": "UNDERSTANDING",
+                "manager_answers": (*state["manager_answers"], answer),
+                "pending_questions": state["pending_questions"][1:],
+            },
+        )
+        config: RunnableConfig = {"configurable": {"thread_id": self.thread_id(state["run_id"])}}
+        await self._compiled.aupdate_state(
+            config,
+            restored,
+            as_node="await_manager_input",
+        )
+        raw = await self._compiled.ainvoke(None, config=config)
         return self._result(raw)
 
     def _compile(self) -> CompiledStateGraph[PlanningState, None, PlanningState, PlanningState]:
@@ -458,7 +491,7 @@ class PlanningGraph:
             kind = cast(str, value.pop("kind"))
             graph_interrupt = PlanningInterrupt(kind=kind, payload=value)
         return PlanningGraphResult(
-            state=cast(PlanningState, output),
+            state=TypeAdapter(PlanningState).validate_python(output),
             interrupt=graph_interrupt,
         )
 

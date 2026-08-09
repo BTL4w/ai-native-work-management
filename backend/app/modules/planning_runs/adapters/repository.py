@@ -1,13 +1,16 @@
 """PostgreSQL repository adapter for AI planning runs persistence."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.audit.adapters.database_models import AuditEventModel
+from app.modules.audit.domain.events import AuditOutcome
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.organization.adapters.database_models import MembershipModel
 from app.modules.organization.domain.roles import MembershipRole
 from app.modules.planning_runs.adapters.database_models import (
     ApprovalModel,
@@ -21,11 +24,16 @@ from app.modules.planning_runs.adapters.database_models import (
     WorkflowJobModel,
     WorkflowRunModel,
 )
-from app.modules.planning_runs.application.ports import PlanningRunRepository
+from app.modules.planning_runs.application.ports import (
+    PlanningRunRepository,
+    ProposalMutationResult,
+    WorkflowRunMutationResult,
+)
 from app.modules.planning_runs.domain.models import (
     Approval,
     ApprovalStatus,
     ContextReference,
+    IdempotencyKeyReusedError,
     InvalidTransitionError,
     ModelInvocation,
     OutboxEvent,
@@ -41,6 +49,12 @@ from app.modules.planning_runs.domain.models import (
     WorkflowRun,
     WorkflowRunStatus,
 )
+from app.modules.work.adapters.database_models import (
+    IdempotencyRecordModel,
+    IdempotencyState,
+)
+
+_IDEMPOTENCY_TTL = timedelta(hours=24)
 
 
 class PostgreSQLPlanningRunRepository(PlanningRunRepository):
@@ -48,6 +62,191 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def _find_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        operation: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        record = await self._session.scalar(
+            select(IdempotencyRecordModel).where(
+                IdempotencyRecordModel.organization_id == actor.organization_id,
+                IdempotencyRecordModel.actor_membership_id == actor.membership_id,
+                IdempotencyRecordModel.operation == operation,
+                IdempotencyRecordModel.idempotency_key == idempotency_key,
+            )
+        )
+        if record is None:
+            return None
+        if (
+            record.request_fingerprint != request_fingerprint
+            or record.state is not IdempotencyState.COMPLETED
+            or record.response_body is None
+        ):
+            raise IdempotencyKeyReusedError
+        return record.response_body
+
+    def _new_idempotency(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        operation: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        now: datetime,
+    ) -> IdempotencyRecordModel:
+        record = IdempotencyRecordModel(
+            id=uuid4(),
+            organization_id=actor.organization_id,
+            actor_membership_id=actor.membership_id,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            state=IdempotencyState.IN_PROGRESS,
+            response_status=None,
+            response_body=None,
+            expires_at=now + _IDEMPOTENCY_TTL,
+        )
+        self._session.add(record)
+        return record
+
+    def _audit_success(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        resource_type: str,
+        resource_id: UUID,
+        request_id: str,
+        idempotency_key: str,
+        after_data: dict[str, object],
+    ) -> None:
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                actor_membership_id=actor.membership_id,
+                action=action,
+                outcome=AuditOutcome.SUCCEEDED,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                before_data={},
+                after_data=after_data,
+                reason_data={},
+            )
+        )
+
+    async def audit_rejection(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        reason_code: str,
+        idempotency_key: str | None = None,
+        resource_id: UUID | None = None,
+        **_: object,
+    ) -> None:
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                actor_membership_id=actor.membership_id,
+                action=action,
+                outcome=AuditOutcome.REJECTED,
+                resource_type="ai_planning",
+                resource_id=resource_id,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                before_data={},
+                after_data={},
+                reason_data={"code": reason_code},
+            )
+        )
+
+    async def create_planning_run_mutation(self, **values: object) -> WorkflowRunMutationResult:
+        actor = values["actor"]
+        run = values["run"]
+        job = values["job"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(run, WorkflowRun)
+        assert isinstance(job, WorkflowJob)
+        request_id = str(values["request_id"])
+        idempotency_key = str(values["idempotency_key"])
+        request_fingerprint = str(values["request_fingerprint"])
+        operation = "planning_run.create"
+        replay = await self._find_replay(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        if replay is not None:
+            existing = await self.get_workflow_run(
+                actor=actor, run_id=UUID(str(replay["run_id"]))
+            )
+            if existing is None:
+                raise PlanningRunDomainError("idempotency replay resource is unavailable")
+            return WorkflowRunMutationResult(run=existing, replayed=True)
+        now = datetime.now(UTC)
+        record = self._new_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            now=now,
+        )
+        await self.create_workflow_run(run=run, job=job)
+        self._audit_success(
+            actor=actor,
+            action="planning_run.created",
+            resource_type="workflow_run",
+            resource_id=run.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            after_data={"status": run.status.value, "job_type": job.job_type},
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 202
+        record.response_body = {"run_id": str(run.id)}
+        await self._session.flush()
+        return WorkflowRunMutationResult(run=run, replayed=False)
+
+    async def list_workflow_runs(
+        self, *, actor: AuthenticatedActor, limit: int
+    ) -> tuple[WorkflowRun, ...]:
+        models = (
+            await self._session.scalars(
+                select(WorkflowRunModel)
+                .where(WorkflowRunModel.organization_id == actor.organization_id)
+                .order_by(WorkflowRunModel.created_at.desc(), WorkflowRunModel.id)
+                .limit(limit)
+            )
+        ).all()
+        return tuple(self._run_from_model(model) for model in models)
+
+    @staticmethod
+    def _run_from_model(model: WorkflowRunModel) -> WorkflowRun:
+        return WorkflowRun(
+            id=model.id,
+            organization_id=model.organization_id,
+            project_id=model.project_id,
+            requested_by_membership_id=model.requested_by_membership_id,
+            status=WorkflowRunStatus(model.status),
+            workflow_name=model.workflow_name,
+            workflow_version=model.workflow_version,
+            verifier_version=model.verifier_version,
+            input_goal_text=model.input_goal_text,
+            error_message=model.error_message,
+            version=model.version,
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+        )
 
     async def create_workflow_run(
         self,
@@ -108,21 +307,414 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         model = result.scalar_one_or_none()
         if model is None:
             return None
-        return WorkflowRun(
-            id=model.id,
-            organization_id=model.organization_id,
-            project_id=model.project_id,
-            requested_by_membership_id=model.requested_by_membership_id,
-            status=WorkflowRunStatus(model.status),
-            workflow_name=model.workflow_name,
-            workflow_version=model.workflow_version,
-            verifier_version=model.verifier_version,
-            input_goal_text=model.input_goal_text,
-            error_message=model.error_message,
-            version=model.version,
-            created_at=model.created_at,
-            updated_at=model.updated_at,
+        return self._run_from_model(model)
+
+    async def get_workflow_run_by_scope(
+        self, *, organization_id: UUID, run_id: UUID
+    ) -> WorkflowRun | None:
+        model = await self._session.scalar(
+            select(WorkflowRunModel).where(
+                WorkflowRunModel.organization_id == organization_id,
+                WorkflowRunModel.id == run_id,
+            )
         )
+        return self._run_from_model(model) if model is not None else None
+
+    async def list_active_membership_ids(
+        self, *, organization_id: UUID
+    ) -> frozenset[UUID]:
+        values = (
+            await self._session.scalars(
+                select(MembershipModel.id).where(
+                    MembershipModel.organization_id == organization_id,
+                    MembershipModel.is_active.is_(True),
+                )
+            )
+        ).all()
+        return frozenset(values)
+
+    async def resume_planning_run_mutation(self, **values: object) -> WorkflowRunMutationResult:
+        actor = values["actor"]
+        run = values["run"]
+        job = values["job"]
+        checkpoint = values["checkpoint"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(run, WorkflowRun)
+        assert isinstance(job, WorkflowJob)
+        assert isinstance(checkpoint, WorkflowCheckpoint)
+        request_id = str(values["request_id"])
+        idempotency_key = str(values["idempotency_key"])
+        request_fingerprint = str(values["request_fingerprint"])
+        operation = f"planning_run.message:{run.id}"
+        replay = await self._find_replay(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        if replay is not None:
+            existing = await self.get_workflow_run(actor=actor, run_id=run.id)
+            if existing is None:
+                raise PlanningRunDomainError("idempotency replay resource is unavailable")
+            return WorkflowRunMutationResult(run=existing, replayed=True)
+        locked = await self._session.scalar(
+            select(WorkflowRunModel)
+            .where(
+                WorkflowRunModel.organization_id == actor.organization_id,
+                WorkflowRunModel.id == run.id,
+                WorkflowRunModel.status == WorkflowRunStatus.NEEDS_INPUT.value,
+                WorkflowRunModel.version == run.version - 1,
+            )
+            .with_for_update()
+        )
+        if locked is None:
+            raise InvalidTransitionError("run no longer awaits manager input")
+        latest = await self._session.scalar(
+            select(WorkflowCheckpointModel)
+            .where(
+                WorkflowCheckpointModel.organization_id == actor.organization_id,
+                WorkflowCheckpointModel.workflow_run_id == run.id,
+            )
+            .order_by(WorkflowCheckpointModel.sequence.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if (
+            latest is None
+            or latest.sequence != checkpoint.sequence
+            or latest.node != "await_manager_input"
+        ):
+            raise InvalidTransitionError("manager-input checkpoint changed")
+        now = datetime.now(UTC)
+        record = self._new_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            now=now,
+        )
+        locked.status = run.status.value
+        locked.version = run.version
+        locked.updated_at = run.updated_at
+        self._session.add(
+            WorkflowJobModel(
+                id=job.id,
+                organization_id=job.organization_id,
+                workflow_run_id=job.workflow_run_id,
+                job_type=job.job_type,
+                status=job.status.value,
+                payload=job.payload,
+                attempt_count=job.attempt_count,
+                max_attempts=job.max_attempts,
+                available_at=job.available_at,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+        self._audit_success(
+            actor=actor,
+            action="planning_run.message_submitted",
+            resource_type="workflow_run",
+            resource_id=run.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            after_data={"status": run.status.value, "checkpoint": checkpoint.sequence},
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 202
+        record.response_body = {"run_id": str(run.id)}
+        await self._session.flush()
+        return WorkflowRunMutationResult(run=run, replayed=False)
+
+    async def find_workflow_run_mutation_replay(
+        self, **values: object
+    ) -> WorkflowRunMutationResult | None:
+        actor = values["actor"]
+        assert isinstance(actor, AuthenticatedActor)
+        replay = await self._find_replay(
+            actor=actor,
+            operation=str(values["operation"]),
+            idempotency_key=str(values["idempotency_key"]),
+            request_fingerprint=str(values["request_fingerprint"]),
+        )
+        if replay is None:
+            return None
+        run = await self.get_workflow_run(
+            actor=actor, run_id=UUID(str(replay["run_id"]))
+        )
+        if run is None:
+            raise PlanningRunDomainError("idempotency replay resource is unavailable")
+        return WorkflowRunMutationResult(run=run, replayed=True)
+
+    async def find_invalid_active_membership_ids(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_ids: set[UUID],
+    ) -> set[UUID]:
+        if not membership_ids:
+            return set()
+        valid = set(
+            (
+                await self._session.scalars(
+                    select(MembershipModel.id).where(
+                        MembershipModel.organization_id == actor.organization_id,
+                        MembershipModel.id.in_(membership_ids),
+                        MembershipModel.is_active.is_(True),
+                    )
+                )
+            ).all()
+        )
+        return membership_ids - valid
+
+    async def complete_proposal_revalidation(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        proposal_id: UUID,
+        version_number: int,
+        validation_result: dict[str, object],
+        request_id: str,
+    ) -> Proposal:
+        proposal_model = await self._session.scalar(
+            select(ProposalModel)
+            .where(
+                ProposalModel.organization_id == actor.organization_id,
+                ProposalModel.id == proposal_id,
+                ProposalModel.status == ProposalStatus.DRAFT.value,
+                ProposalModel.current_version_number == version_number,
+            )
+            .with_for_update()
+        )
+        version_model = await self._session.scalar(
+            select(ProposalVersionModel)
+            .where(
+                ProposalVersionModel.organization_id == actor.organization_id,
+                ProposalVersionModel.proposal_id == proposal_id,
+                ProposalVersionModel.version_number == version_number,
+            )
+        )
+        if proposal_model is None or version_model is None:
+            raise InvalidTransitionError("proposal version is unavailable for revalidation")
+        if version_model.validation_result != validation_result:
+            raise InvalidTransitionError("proposal validation snapshot is stale")
+        is_valid = bool(validation_result.get("can_approve", False))
+        approval_id: UUID | None = None
+        if is_valid:
+            approval = Approval.create(
+                organization_id=actor.organization_id,
+                proposal_id=proposal_id,
+                proposal_version_number=version_number,
+            )
+            approval_id = approval.id
+            self._session.add(
+                ApprovalModel(
+                    id=approval.id,
+                    organization_id=approval.organization_id,
+                    proposal_id=approval.proposal_id,
+                    proposal_version_number=approval.proposal_version_number,
+                    status=approval.status.value,
+                    version=approval.version,
+                    created_at=approval.created_at,
+                    updated_at=approval.updated_at,
+                )
+            )
+            proposal_model.status = ProposalStatus.READY_FOR_DECISION.value
+            proposal_model.approval_id = approval.id
+            proposal_model.version += 1
+            proposal_model.updated_at = datetime.now(UTC)
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                actor_membership_id=actor.membership_id,
+                action="proposal.validated",
+                outcome=AuditOutcome.SUCCEEDED,
+                resource_type="proposal",
+                resource_id=proposal_id,
+                request_id=request_id,
+                idempotency_key=None,
+                before_data={},
+                after_data={
+                    "version": version_number,
+                    "can_approve": is_valid,
+                    "approval_id": str(approval_id) if approval_id else None,
+                },
+                reason_data={},
+            )
+        )
+        await self._session.flush()
+        return Proposal(
+            id=proposal_model.id,
+            organization_id=proposal_model.organization_id,
+            workflow_run_id=proposal_model.workflow_run_id,
+            status=ProposalStatus(proposal_model.status),
+            current_version_number=proposal_model.current_version_number,
+            approval_id=proposal_model.approval_id,
+            superseded_approval_id=proposal_model.superseded_approval_id,
+            version=proposal_model.version,
+            created_at=proposal_model.created_at,
+            updated_at=proposal_model.updated_at,
+        )
+
+    async def edit_proposal_mutation(self, **values: object) -> ProposalMutationResult:
+        actor = values["actor"]
+        proposal = values["proposal"]
+        version = values["version"]
+        approval = values["superseded_approval"]
+        job = values["job"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(proposal, Proposal)
+        assert isinstance(version, ProposalVersion)
+        assert approval is None or isinstance(approval, Approval)
+        assert isinstance(job, WorkflowJob)
+        request_id = str(values["request_id"])
+        idempotency_key = str(values["idempotency_key"])
+        request_fingerprint = str(values["request_fingerprint"])
+        operation = f"proposal.edit:{proposal.id}"
+        replay = await self._find_replay(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        if replay is not None:
+            saved_proposal = await self.get_proposal(
+                actor=actor, proposal_id=proposal.id
+            )
+            saved_version = await self.get_proposal_version(
+                actor=actor,
+                proposal_id=proposal.id,
+                version_number=int(replay["version"]),
+            )
+            if saved_proposal is None or saved_version is None:
+                raise PlanningRunDomainError("idempotency replay resource is unavailable")
+            return ProposalMutationResult(
+                proposal=saved_proposal, version=saved_version, replayed=True
+            )
+        locked = await self._session.scalar(
+            select(ProposalModel)
+            .where(
+                ProposalModel.organization_id == actor.organization_id,
+                ProposalModel.id == proposal.id,
+                ProposalModel.current_version_number == version.version_number - 1,
+                ProposalModel.version == proposal.version - 1,
+            )
+            .with_for_update()
+        )
+        if locked is None:
+            raise InvalidTransitionError("proposal changed concurrently")
+        now = datetime.now(UTC)
+        record = self._new_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            now=now,
+        )
+        if approval is not None:
+            approval_result = await self._session.execute(
+                update(ApprovalModel)
+                .where(
+                    ApprovalModel.organization_id == actor.organization_id,
+                    ApprovalModel.id == approval.id,
+                    ApprovalModel.status == ApprovalStatus.PENDING.value,
+                    ApprovalModel.version == approval.version - 1,
+                )
+                .values(
+                    status=approval.status.value,
+                    version=approval.version,
+                    updated_at=approval.updated_at,
+                )
+            )
+            assert isinstance(approval_result, CursorResult)
+            if approval_result.rowcount != 1:
+                raise InvalidTransitionError("approval changed concurrently")
+        self._session.add(
+            ProposalVersionModel(
+                id=version.id,
+                organization_id=version.organization_id,
+                proposal_id=version.proposal_id,
+                version_number=version.version_number,
+                created_by_membership_id=version.created_by_membership_id,
+                content=version.content,
+                assumptions=version.assumptions,
+                change_summary=version.change_summary,
+                field_provenance=version.field_provenance,
+                validation_result=version.validation_result,
+                source_reference_snapshot=version.source_reference_snapshot,
+                workflow_version=version.workflow_version,
+                prompt_version=version.prompt_version,
+                schema_version=version.schema_version,
+                model_reference=version.model_reference,
+                verifier_version=version.verifier_version,
+                creator_type=version.creator_type,
+                created_at=version.created_at,
+            )
+        )
+        locked.status = proposal.status.value
+        locked.current_version_number = proposal.current_version_number
+        locked.approval_id = None
+        locked.superseded_approval_id = proposal.superseded_approval_id
+        locked.version = proposal.version
+        locked.updated_at = proposal.updated_at
+        self._session.add(
+            WorkflowJobModel(
+                id=job.id,
+                organization_id=job.organization_id,
+                workflow_run_id=job.workflow_run_id,
+                job_type=job.job_type,
+                status=job.status.value,
+                payload=job.payload,
+                attempt_count=job.attempt_count,
+                max_attempts=job.max_attempts,
+                available_at=job.available_at,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+        self._audit_success(
+            actor=actor,
+            action="proposal.edited",
+            resource_type="proposal",
+            resource_id=proposal.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            after_data={"version": version.version_number, "status": proposal.status.value},
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 202
+        record.response_body = {
+            "proposal_id": str(proposal.id),
+            "version": version.version_number,
+        }
+        await self._session.flush()
+        return ProposalMutationResult(proposal=proposal, version=version, replayed=False)
+
+    async def find_proposal_mutation_replay(
+        self, **values: object
+    ) -> ProposalMutationResult | None:
+        actor = values["actor"]
+        assert isinstance(actor, AuthenticatedActor)
+        replay = await self._find_replay(
+            actor=actor,
+            operation=str(values["operation"]),
+            idempotency_key=str(values["idempotency_key"]),
+            request_fingerprint=str(values["request_fingerprint"]),
+        )
+        if replay is None:
+            return None
+        proposal_id = UUID(str(replay["proposal_id"]))
+        version_number = int(replay["version"])
+        proposal = await self.get_proposal(actor=actor, proposal_id=proposal_id)
+        version = await self.get_proposal_version(
+            actor=actor,
+            proposal_id=proposal_id,
+            version_number=version_number,
+        )
+        if proposal is None or version is None:
+            raise PlanningRunDomainError("idempotency replay resource is unavailable")
+        return ProposalMutationResult(proposal=proposal, version=version, replayed=True)
 
     async def update_workflow_run(
         self,
@@ -747,12 +1339,14 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         *,
         actor: AuthenticatedActor,
         run_id: UUID,
+        after_sequence: int = 0,
     ) -> list[WorkflowEvent]:
         stmt = (
             select(WorkflowEventModel)
             .where(
                 WorkflowEventModel.workflow_run_id == run_id,
                 WorkflowEventModel.organization_id == actor.organization_id,
+                WorkflowEventModel.sequence > after_sequence,
             )
             .order_by(WorkflowEventModel.sequence.asc())
         )

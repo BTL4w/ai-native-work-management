@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.planning_runs.adapters.database_models import WorkflowRunModel
 from app.modules.planning_runs.domain.models import (
     Approval,
     ApprovalStatus,
@@ -64,6 +65,21 @@ def test_workflow_run_initialization_and_status_transitions() -> None:
 
     with pytest.raises(InvalidTransitionError):
         completed.mark_running()
+
+
+def test_new_project_planning_run_does_not_require_existing_project() -> None:
+    run = WorkflowRun.create(
+        organization_id=uuid4(),
+        project_id=None,
+        requested_by_membership_id=uuid4(),
+        workflow_name="project_planning",
+        workflow_version="1.0.0",
+        verifier_version="1.0.0",
+        input_goal_text="Plan a new customer conference",
+    )
+
+    assert run.project_id is None
+    assert WorkflowRunModel.__table__.c.project_id.nullable is True
 
 
 def test_workflow_run_failure_branch() -> None:

@@ -1,5 +1,6 @@
 """Application ports and transaction boundaries for planning runs."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
@@ -29,12 +30,76 @@ class PlanningRunRepository(Protocol):
         job: WorkflowJob | None = None,
     ) -> WorkflowRun: ...
 
+    async def create_planning_run_mutation(
+        self,
+        **values: object,
+    ) -> "WorkflowRunMutationResult": ...
+
+    async def list_workflow_runs(
+        self, *, actor: AuthenticatedActor, limit: int
+    ) -> tuple[WorkflowRun, ...]: ...
+
+    async def resume_planning_run_mutation(
+        self,
+        **values: object,
+    ) -> "WorkflowRunMutationResult": ...
+
+    async def find_workflow_run_mutation_replay(
+        self, **values: object
+    ) -> "WorkflowRunMutationResult | None": ...
+
+    async def edit_proposal_mutation(
+        self,
+        **values: object,
+    ) -> "ProposalMutationResult": ...
+
+    async def find_proposal_mutation_replay(
+        self, **values: object
+    ) -> "ProposalMutationResult | None": ...
+
+    async def find_invalid_active_membership_ids(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_ids: set[UUID],
+    ) -> set[UUID]: ...
+
+    async def complete_proposal_revalidation(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        proposal_id: UUID,
+        version_number: int,
+        validation_result: dict[str, object],
+        request_id: str,
+    ) -> Proposal: ...
+
+    async def audit_rejection(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        reason_code: str,
+        idempotency_key: str | None = None,
+        resource_id: UUID | None = None,
+        **values: object,
+    ) -> None: ...
+
     async def get_workflow_run(
         self,
         *,
         actor: AuthenticatedActor,
         run_id: UUID,
     ) -> WorkflowRun | None: ...
+
+    async def get_workflow_run_by_scope(
+        self, *, organization_id: UUID, run_id: UUID
+    ) -> WorkflowRun | None: ...
+
+    async def list_active_membership_ids(
+        self, *, organization_id: UUID
+    ) -> frozenset[UUID]: ...
 
     async def update_workflow_run(
         self,
@@ -143,6 +208,7 @@ class PlanningRunRepository(Protocol):
         *,
         actor: AuthenticatedActor,
         run_id: UUID,
+        after_sequence: int = 0,
     ) -> list[WorkflowEvent]: ...
 
     async def record_model_invocation(
@@ -238,3 +304,45 @@ class PlanningRunTransaction(Protocol):
     async def __aenter__(self) -> "PlanningRunTransaction": ...
 
     async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRunMutationResult:
+    run: WorkflowRun
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalMutationResult:
+    proposal: Proposal
+    version: ProposalVersion
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRunSnapshot:
+    run: WorkflowRun
+    checkpoint: WorkflowCheckpoint | None
+    proposal: Proposal | None
+    proposal_version: ProposalVersion | None
+    events: tuple[WorkflowEvent, ...]
+
+
+class PlanningRuntimePort(Protocol):
+    """Backend-owned view of the AI runtime; no framework types cross it."""
+
+    workflow_version: str
+    verifier_version: str
+
+    def validate_capability(self, message: str) -> None: ...
+
+    def validate_proposal_content(
+        self, content: dict[str, object]
+    ) -> dict[str, object]: ...
+
+    def validate_proposal_deterministically(
+        self,
+        content: dict[str, object],
+        *,
+        active_membership_ids: frozenset[UUID],
+    ) -> dict[str, object]: ...

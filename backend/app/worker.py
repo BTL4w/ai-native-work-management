@@ -10,6 +10,7 @@ from typing import NoReturn
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+from app.modules.planning_runs.adapters.ai_runtime import build_planning_job_handlers
 from app.modules.planning_runs.adapters.transaction import PostgreSQLPlanningRunTransactionFactory
 from app.modules.planning_runs.application.job_service import JobService
 from app.modules.planning_runs.application.outbox_service import (
@@ -47,7 +48,7 @@ async def _run_worker() -> None:
     # Initialize services
     job_service = JobService(
         transaction_factory=transaction_factory,
-        handlers={},
+        handlers=build_planning_job_handlers(settings),
         organization_scopes=scopes,
         lease_seconds=settings.worker_lease_seconds,
     )

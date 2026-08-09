@@ -56,7 +56,7 @@ class WorkflowRunModel(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     organization_id: Mapped[UUID]
-    project_id: Mapped[UUID]
+    project_id: Mapped[UUID | None] = mapped_column(nullable=True)
     requested_by_membership_id: Mapped[UUID]
     status: Mapped[str] = mapped_column(String(50), default="QUEUED", server_default="QUEUED")
     workflow_name: Mapped[str] = mapped_column(String(100))

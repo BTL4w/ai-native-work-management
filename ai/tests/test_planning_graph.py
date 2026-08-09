@@ -144,6 +144,34 @@ async def test_missing_information_interrupt_resumes_to_proposal_interrupt() -> 
 
 
 @pytest.mark.asyncio
+async def test_new_graph_instance_resumes_from_persisted_manager_input_checkpoint() -> None:
+    first_graph, _, persistence = graph_with(
+        {"planning.en.generate": load_fixture("en")},
+        required_questions=("What is the budget?",),
+    )
+    needs_input = await first_graph.run(new_state())
+    checkpoint = next(
+        item for item in persistence.checkpoints.values() if item.node == "await_manager_input"
+    )
+    second_context = FakeContextPort(required_questions=("What is the budget?",))
+    second_graph = PlanningGraph(
+        model_gateway=MockModelGateway(fixtures={"planning.en.generate": load_fixture("en")}),
+        context_port=second_context,
+        persistence_port=persistence,
+    )
+
+    proposal = await second_graph.resume_from_checkpoint(
+        checkpoint.state,
+        "The budget is 50,000 USD",
+    )
+
+    assert needs_input.interrupt is not None
+    assert proposal.interrupt is not None
+    assert proposal.interrupt.kind == "MANAGER_DECISION_REQUIRED"
+    assert proposal.state["manager_answers"] == ("The budget is 50,000 USD",)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("locale", ["vi", "en"])
 async def test_valid_bilingual_request_reaches_proposal_interrupt(
     locale: PlanningLocale,

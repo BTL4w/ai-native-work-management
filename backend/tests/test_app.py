@@ -53,6 +53,12 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/task-dependencies/{dependency_id}",
         "/api/v1/acceptance-criteria",
         "/api/v1/acceptance-criteria/{criterion_id}",
+        "/api/v1/ai/planning-runs",
+        "/api/v1/workflow-runs",
+        "/api/v1/workflow-runs/{run_id}",
+        "/api/v1/workflow-runs/{run_id}/messages",
+        "/api/v1/workflow-runs/{run_id}/events",
+        "/api/v1/proposals/{proposal_id}",
     }
     login_responses = response.json()["paths"]["/api/v1/auth/login"]["post"]["responses"]
     assert login_responses["422"]["content"]["application/json"]["schema"] == {

@@ -15,6 +15,34 @@ class InvalidTransitionError(PlanningRunDomainError):
     """Raised when an invalid state transition is attempted."""
 
 
+class PlanningRunForbiddenError(PlanningRunDomainError):
+    """Actor lacks permission for the planning-run operation."""
+
+
+class PlanningRunNotFoundError(PlanningRunDomainError):
+    """Run or proposal is absent or intentionally undisclosed."""
+
+
+class WorkflowRunStateError(PlanningRunDomainError):
+    """Run is not at the checkpoint required by the requested command."""
+
+
+class UnsupportedPlanningCapabilityError(PlanningRunDomainError):
+    """The request belongs to a capability outside Phase 2 planning."""
+
+
+class IdempotencyKeyReusedError(PlanningRunDomainError):
+    """An idempotency key was reused with a different normalized request."""
+
+
+class ResourceVersionMismatchError(PlanningRunDomainError):
+    """A stale proposal version was supplied."""
+
+    def __init__(self, current_version: int) -> None:
+        super().__init__("resource version mismatch")
+        self.current_version = current_version
+
+
 class WorkflowRunStatus(StrEnum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
@@ -88,7 +116,7 @@ def _default_validation_result() -> dict[str, Any]:
 class WorkflowRun:
     id: UUID
     organization_id: UUID
-    project_id: UUID
+    project_id: UUID | None
     requested_by_membership_id: UUID
     status: WorkflowRunStatus
     workflow_name: str
@@ -106,7 +134,7 @@ class WorkflowRun:
         *,
         id: UUID | None = None,
         organization_id: UUID,
-        project_id: UUID,
+        project_id: UUID | None,
         requested_by_membership_id: UUID,
         workflow_name: str,
         workflow_version: str,
