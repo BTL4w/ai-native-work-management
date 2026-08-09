@@ -120,10 +120,22 @@ class WorkflowRunReferenceResponse(BaseModel):
 
 class WorkflowProposalSnapshotResponse(BaseModel):
     proposal_id: UUID
+    approval_id: UUID | None
     status: str
     version: int
     validation_result: dict[str, object]
     content: dict[str, object]
+    change_summary: str | None
+    field_provenance: dict[str, object]
+    creator_type: str
+    previous_version: "PreviousProposalVersionResponse | None"
+
+
+class PreviousProposalVersionResponse(BaseModel):
+    version: int
+    content: dict[str, object]
+    field_provenance: dict[str, object]
+    creator_type: str
 
 
 class WorkflowTimelineItemResponse(BaseModel):
@@ -179,10 +191,24 @@ class WorkflowRunResponse(BaseModel):
         if snapshot.proposal is not None and snapshot.proposal_version is not None:
             response.current_proposal = WorkflowProposalSnapshotResponse(
                 proposal_id=snapshot.proposal.id,
+                approval_id=snapshot.proposal.approval_id,
                 status=snapshot.proposal.status.value,
                 version=snapshot.proposal_version.version_number,
                 validation_result=snapshot.proposal_version.validation_result,
                 content=snapshot.proposal_version.content,
+                change_summary=snapshot.proposal_version.change_summary,
+                field_provenance=snapshot.proposal_version.field_provenance,
+                creator_type=snapshot.proposal_version.creator_type,
+                previous_version=(
+                    PreviousProposalVersionResponse(
+                        version=snapshot.previous_proposal_version.version_number,
+                        content=snapshot.previous_proposal_version.content,
+                        field_provenance=snapshot.previous_proposal_version.field_provenance,
+                        creator_type=snapshot.previous_proposal_version.creator_type,
+                    )
+                    if snapshot.previous_proposal_version is not None
+                    else None
+                ),
             )
         response.public_timeline = [
             WorkflowTimelineItemResponse(
@@ -198,6 +224,12 @@ class WorkflowRunResponse(BaseModel):
             actions.append("MESSAGE")
         if snapshot.proposal is not None and not snapshot.proposal.status.is_terminal:
             actions.append("EDIT_PROPOSAL")
+        if (
+            snapshot.proposal is not None
+            and snapshot.proposal.status.value == "READY_FOR_DECISION"
+            and snapshot.proposal.approval_id is not None
+        ):
+            actions.append("DECIDE_APPROVAL")
         response.allowed_actions = actions
         return response
 

@@ -15,6 +15,7 @@ import type { MeResponse } from "@/shared/api/contracts";
 import { ApiError, isDefinitiveMutationRejection } from "@/shared/api/client";
 import { LocaleSwitcher } from "@/shared/i18n/locale-switcher";
 import { ProjectPlanPanel } from "@/features/planning/project-plan";
+import { AiAssistant } from "@/features/ai-proposals/ai-assistant";
 
 import {
   createProject,
@@ -31,7 +32,7 @@ import {
 } from "./api";
 import type { Member, Project, ProjectPage, Task, TaskPage, TaskStatus } from "./contracts";
 
-type View = "projects" | "myTasks";
+type View = "aiAssistant" | "projects" | "myTasks";
 type ProjectFormState = { project: Project | null };
 type TaskFormState = { task: Task | null };
 type WorkQueryKey = readonly ["work", string, string];
@@ -118,6 +119,13 @@ export function WorkWorkspace({
     setSelectedTask(null);
   }
 
+  function openAiAssistant() {
+    setAssignmentMode(false);
+    setView("aiAssistant");
+    setSelectedProject(null);
+    setSelectedTask(null);
+  }
+
   function openMyTasks() {
     setAssignmentMode(false);
     setView("myTasks");
@@ -148,6 +156,8 @@ export function WorkWorkspace({
 
   const pageTitle = assignmentMode
     ? t("nav.assignTask")
+    : view === "aiAssistant"
+    ? t("nav.chat")
     : view === "myTasks"
     ? t("task.myTitle")
     : selectedProject?.name ?? t("project.title");
@@ -174,7 +184,7 @@ export function WorkWorkspace({
 
         <nav aria-label={t("navigationLabel")} className="sidebar-navigation">
           <p className="sidebar-section-label sidebar-copy">{t("sidebar.workspace")}</p>
-          <SidebarItem disabled icon="chat" label={t("nav.chat")} meta={t("sidebar.soon")} />
+          {canManage ? <SidebarItem active={view === "aiAssistant"} icon="chat" label={t("nav.chat")} onClick={openAiAssistant} /> : null}
           <SidebarItem active={view === "projects"} icon="grid" label={t("nav.projects")} onClick={openProjects} />
           <SidebarItem active={view === "myTasks"} icon="check" label={t("nav.myTasks")} onClick={openMyTasks} />
           {canManage ? <SidebarItem icon="plus" label={t("nav.assignTask")} onClick={openAssignmentFlow} /> : null}
@@ -217,7 +227,9 @@ export function WorkWorkspace({
           <span className="phase-badge"><span aria-hidden="true" className="phase-dot" />{t("sidebar.phase")}</span>
         </header>
         <main className="workspace-content">
-        {view === "projects" ? (
+        {view === "aiAssistant" ? (
+          <AiAssistant actor={actor} onContinueManually={openProjects} />
+        ) : view === "projects" ? (
           <ProjectsView
             canManage={canManage}
             projects={projects.data ?? emptyProjectPage}

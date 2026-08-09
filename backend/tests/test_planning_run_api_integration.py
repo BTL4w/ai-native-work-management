@@ -24,6 +24,7 @@ from app.modules.planning_runs.adapters.ai_runtime import build_planning_job_han
 from app.modules.planning_runs.adapters.transaction import (
     PostgreSQLPlanningRunTransactionFactory,
 )
+from app.modules.planning_runs.api.schemas import WorkflowRunResponse
 from app.modules.planning_runs.application.job_service import JobService
 from app.modules.planning_runs.application.ports import (
     ProposalMutationResult,
@@ -69,6 +70,75 @@ def run_for(current_actor: AuthenticatedActor) -> WorkflowRun:
         created_at=now,
         updated_at=now,
     )
+
+
+def test_snapshot_exposes_current_approval_provenance_and_previous_version() -> None:
+    current_actor = actor()
+    run = replace(run_for(current_actor), status=WorkflowRunStatus.WAITING_FOR_DECISION)
+    approval_id = uuid4()
+    proposal = Proposal.create(
+        organization_id=current_actor.organization_id,
+        workflow_run_id=run.id,
+        current_version_number=2,
+    ).mark_ready_for_decision(approval_id)
+    previous = ProposalVersion(
+        id=uuid4(),
+        organization_id=current_actor.organization_id,
+        proposal_id=proposal.id,
+        version_number=1,
+        created_by_membership_id=current_actor.membership_id,
+        content={"project": {"title": "AI draft"}},
+        assumptions=[],
+        field_provenance={"default": "AI_PROPOSED"},
+        creator_type="AI_SYSTEM",
+    )
+    current = ProposalVersion(
+        id=uuid4(),
+        organization_id=current_actor.organization_id,
+        proposal_id=proposal.id,
+        version_number=2,
+        created_by_membership_id=current_actor.membership_id,
+        content={"project": {"title": "Manager draft"}},
+        assumptions=[],
+        change_summary="Manager edited proposal",
+        field_provenance={"default": "MANAGER_EDITED"},
+        creator_type="HUMAN_MANAGER",
+    )
+
+    response = WorkflowRunResponse.from_snapshot(
+        WorkflowRunSnapshot(
+            run=run,
+            checkpoint=None,
+            proposal=proposal,
+            proposal_version=current,
+            previous_proposal_version=previous,
+            events=(),
+        )
+    ).model_dump(mode="json")
+
+    assert response["current_proposal"] == {
+        "proposal_id": str(proposal.id),
+        "approval_id": str(approval_id),
+        "status": "READY_FOR_DECISION",
+        "version": 2,
+        "validation_result": {
+            "status": "UNKNOWN",
+            "is_valid": None,
+            "errors": [],
+            "warnings": [],
+        },
+        "content": {"project": {"title": "Manager draft"}},
+        "change_summary": "Manager edited proposal",
+        "field_provenance": {"default": "MANAGER_EDITED"},
+        "creator_type": "HUMAN_MANAGER",
+        "previous_version": {
+            "version": 1,
+            "content": {"project": {"title": "AI draft"}},
+            "field_provenance": {"default": "AI_PROPOSED"},
+            "creator_type": "AI_SYSTEM",
+        },
+    }
+    assert response["allowed_actions"] == ["EDIT_PROPOSAL", "DECIDE_APPROVAL"]
 
 
 class StubRunService:

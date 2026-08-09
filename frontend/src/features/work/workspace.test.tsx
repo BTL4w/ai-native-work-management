@@ -47,14 +47,17 @@ describe("WorkWorkspace", () => {
   it("provides a collapsible, phase-aware workspace sidebar", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "/api/v1/projects") return response(page([]));
+      if (String(input) === "/api/v1/workflow-runs?limit=20") return response({ items: [] });
       throw new Error(`Unexpected request: ${String(input)}`);
     }));
 
     const { container } = renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
 
-    expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Giao task" })).toBeEnabled();
     expect(screen.getByText("Phase 2 · Manual planning")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Trợ lý AI" }));
+    expect(await screen.findByRole("heading", { name: "Trợ lý AI" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Giao task" }));
     expect(screen.getByText("Chọn một project để tạo và giao task mới.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Thu gọn thanh bên" }));
@@ -126,6 +129,7 @@ describe("WorkWorkspace", () => {
     );
 
     renderWithAppProviders(<WorkWorkspace actor={employeeActor} />);
+    expect(screen.queryByRole("button", { name: "Trợ lý AI" })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByText(task.title));
     expect(screen.queryByRole("button", { name: "Sửa task" })).not.toBeInTheDocument();
 

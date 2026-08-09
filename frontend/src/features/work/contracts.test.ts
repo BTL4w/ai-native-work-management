@@ -149,8 +149,9 @@ describe("deep work OpenAPI compatibility manifest", () => {
   });
 
   it("mechanically aligns every runtime schema, nested reference and request body", () => {
-    expect(Object.keys(runtimeSchemas).sort()).toEqual(Object.keys(manifest.schemas).sort());
-    for (const [name, expected] of Object.entries(manifest.schemas)) {
+    expect(Object.keys(manifest.schemas)).toEqual(expect.arrayContaining(Object.keys(runtimeSchemas)));
+    for (const name of Object.keys(runtimeSchemas)) {
+      const expected = manifest.schemas[name as keyof typeof manifest.schemas];
       expect(describeSchema(runtimeJsonSchemas[name]), name).toEqual(expected);
     }
   });

@@ -175,12 +175,19 @@ class PlanningRunService:
             checkpoint = await repository.get_latest_checkpoint(actor=actor, run_id=run_id)
             proposal = await repository.get_proposal_by_run_id(actor=actor, run_id=run_id)
             proposal_version = None
+            previous_proposal_version = None
             if proposal is not None:
                 proposal_version = await repository.get_proposal_version(
                     actor=actor,
                     proposal_id=proposal.id,
                     version_number=proposal.current_version_number,
                 )
+                if proposal.current_version_number > 1:
+                    previous_proposal_version = await repository.get_proposal_version(
+                        actor=actor,
+                        proposal_id=proposal.id,
+                        version_number=proposal.current_version_number - 1,
+                    )
             events = await repository.list_events(actor=actor, run_id=run_id)
         return WorkflowRunSnapshot(
             run=run,
@@ -188,6 +195,7 @@ class PlanningRunService:
             proposal=proposal,
             proposal_version=proposal_version,
             events=tuple(events),
+            previous_proposal_version=previous_proposal_version,
         )
 
     async def post_manager_message(

@@ -334,6 +334,7 @@ class WorkflowRunSnapshot:
     proposal: Proposal | None
     proposal_version: ProposalVersion | None
     events: tuple[WorkflowEvent, ...]
+    previous_proposal_version: ProposalVersion | None = None
 
 
 class PlanningRuntimePort(Protocol):

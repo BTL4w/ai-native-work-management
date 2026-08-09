@@ -1,7 +1,8 @@
 {
   "enums": {
     "MembershipRole": ["ADMIN", "MANAGER", "EMPLOYEE"],
-    "TaskStatus": ["TO_DO", "IN_PROGRESS", "DONE"]
+    "TaskStatus": ["TO_DO", "IN_PROGRESS", "DONE"],
+    "ApprovalDecision": ["APPROVE", "REJECT"]
   },
   "schemas": {
     "ProjectCreateRequest": { "required": ["name"], "properties": { "name": "string[1,160]", "description": "null|string[,5000]" } },
@@ -30,6 +31,11 @@
     "AcceptanceCriterionResponse": { "required": ["id", "task_id", "text", "position", "version", "created_at", "updated_at"], "properties": { "id": "string:uuid", "task_id": "string:uuid", "text": "string", "position": "integer", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time" } },
     "PlanningPageResponse": { "required": ["items", "page", "page_size", "total"], "properties": { "items": "array:ref:AcceptanceCriterionResponse|ref:DependencyResponse|ref:GoalResponse|ref:MilestoneResponse", "page": "integer", "page_size": "integer", "total": "integer" } },
     "DeleteResponse": { "required": ["id", "version"], "properties": { "id": "string:uuid", "version": "integer" } },
+    "WorkflowRunReferenceResponse": { "required": ["run_id", "status", "version"], "properties": { "run_id": "string:uuid", "status": "string", "version": "integer" } },
+    "PreviousProposalVersionResponse": { "required": ["version", "content", "field_provenance", "creator_type"], "properties": { "version": "integer", "content": "object", "field_provenance": "object", "creator_type": "string" } },
+    "WorkflowProposalSnapshotResponse": { "required": ["proposal_id", "approval_id", "status", "version", "validation_result", "content", "change_summary", "field_provenance", "creator_type", "previous_version"], "properties": { "proposal_id": "string:uuid", "approval_id": "null|string:uuid", "status": "string", "version": "integer", "validation_result": "object", "content": "object", "change_summary": "null|string", "field_provenance": "object", "creator_type": "string", "previous_version": "null|ref:PreviousProposalVersionResponse" } },
+    "WorkflowRunResponse": { "required": ["id", "project_id", "status", "workflow_name", "workflow_version", "verifier_version", "input_goal_text", "version", "created_at", "updated_at"], "properties": { "id": "string:uuid", "project_id": "null|string:uuid", "status": "string", "workflow_name": "string", "workflow_version": "string", "verifier_version": "string", "input_goal_text": "string", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time", "current_stage": "null|string", "current_proposal": "null|ref:WorkflowProposalSnapshotResponse", "public_timeline": "array:ref:WorkflowTimelineItemResponse", "allowed_actions": "array:string" } },
+    "ApprovalDecisionResponse": { "required": ["approval", "proposal", "created", "workflow_run_id", "finalization_job_id"], "properties": { "approval": "ref:ApprovalStatusResponse", "proposal": "ref:DecidedProposalResponse", "created": "ref:CreatedBusinessIdsResponse", "workflow_run_id": "string:uuid", "finalization_job_id": "string:uuid" } },
     "FieldError": { "required": ["field", "code", "message_key"], "properties": { "field": "string", "code": "string", "message_key": "string" } },
     "ErrorDetail": { "required": ["code", "message_key", "request_id"], "properties": { "code": "string", "message_key": "string", "request_id": "string", "field_errors": "array:ref:FieldError", "details": "object" } },
     "ErrorResponse": { "required": ["error"], "properties": { "error": "ref:ErrorDetail" } }
