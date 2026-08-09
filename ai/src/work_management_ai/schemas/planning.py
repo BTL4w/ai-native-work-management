@@ -1,6 +1,7 @@
 """Typed structured output for the Phase 2 planning model."""
 
 from datetime import date
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -42,6 +43,7 @@ class ProposedTask(PlanningSchema):
     title: str
     description: str | None
     due_date: date | None
+    assignee_membership_id: UUID | None
     acceptance_criteria: list[str]
 
 

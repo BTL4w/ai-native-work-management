@@ -1,0 +1,110 @@
+"""Typed, resumable state for the bounded planning graph."""
+
+from collections.abc import Iterable
+from dataclasses import asdict, is_dataclass
+from typing import Literal, TypedDict, cast
+from uuid import UUID
+
+from pydantic import BaseModel
+
+from work_management_ai.prompts.planning import PLANNING_PROMPT_VERSION
+from work_management_ai.schemas.planning import PlanningModelOutput
+from work_management_ai.workflows.planning.verifier import (
+    PLANNING_VERIFIER_VERSION,
+    PlanningValidationResult,
+)
+
+PLANNING_WORKFLOW_VERSION = "1.0.0"
+PLANNING_SCHEMA_VERSION = "1.0.0"
+
+PlanningLocale = Literal["vi", "en"]
+PlanningActorRole = Literal["ADMIN", "MANAGER", "EMPLOYEE"]
+
+
+class PlanningState(TypedDict):
+    """Structured execution/audit state; never contains prompts or hidden reasoning."""
+
+    run_id: UUID
+    organization_id: UUID
+    actor_membership_id: UUID
+    actor_role: PlanningActorRole
+    locale: PlanningLocale
+    stage: str
+    user_brief: str
+    context_reference_ids: tuple[str, ...]
+    understanding: str | None
+    assumptions: tuple[str, ...]
+    manager_answers: tuple[str, ...]
+    pending_questions: tuple[str, ...]
+    proposal: PlanningModelOutput | None
+    proposal_id: UUID | None
+    proposal_version: int | None
+    validation_result: PlanningValidationResult | None
+    schema_error_code: str | None
+    schema_repair_count: int
+    verifier_revision_count: int
+    workflow_version: str
+    prompt_version: str
+    schema_version: str
+    model_reference: str | None
+    verifier_version: str
+
+
+def create_planning_state(
+    *,
+    run_id: UUID,
+    organization_id: UUID,
+    actor_membership_id: UUID,
+    actor_role: PlanningActorRole,
+    locale: PlanningLocale,
+    user_brief: str,
+) -> PlanningState:
+    """Create a complete initial state with stable version metadata."""
+
+    return PlanningState(
+        run_id=run_id,
+        organization_id=organization_id,
+        actor_membership_id=actor_membership_id,
+        actor_role=actor_role,
+        locale=locale,
+        stage="RECEIVED",
+        user_brief=user_brief,
+        context_reference_ids=(),
+        understanding=None,
+        assumptions=(),
+        manager_answers=(),
+        pending_questions=(),
+        proposal=None,
+        proposal_id=None,
+        proposal_version=None,
+        validation_result=None,
+        schema_error_code=None,
+        schema_repair_count=0,
+        verifier_revision_count=0,
+        workflow_version=PLANNING_WORKFLOW_VERSION,
+        prompt_version=PLANNING_PROMPT_VERSION,
+        schema_version=PLANNING_SCHEMA_VERSION,
+        model_reference=None,
+        verifier_version=PLANNING_VERIFIER_VERSION,
+    )
+
+
+def checkpoint_state(state: PlanningState) -> dict[str, object]:
+    """Return a JSON-safe allowlisted checkpoint without transient model context."""
+
+    return {key: _json_value(value) for key, value in state.items()}
+
+
+def _json_value(value: object) -> object:
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, BaseModel):
+        return cast(object, value.model_dump(mode="json"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_value(cast(dict[str, object], asdict(value)))
+    if isinstance(value, dict):
+        mapping = cast(dict[object, object], value)
+        return {str(key): _json_value(item) for key, item in mapping.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_value(item) for item in cast(Iterable[object], value)]
+    return value

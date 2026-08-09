@@ -1,0 +1,40 @@
+{
+  "project": {
+    "title": "Customer conference",
+    "description": "Conference plan for 300 customers",
+    "start_date": "2026-08-10",
+    "due_date": "2026-09-30"
+  },
+  "goal": {
+    "title": "Improve customer engagement",
+    "description": null,
+    "expected_outcomes": ["Three hundred customers attend the conference"],
+    "target_date": "2026-09-30"
+  },
+  "milestones": [
+    {
+      "ref": "m1",
+      "title": "Venue confirmed",
+      "description": null,
+      "due_date": "2026-09-01"
+    }
+  ],
+  "tasks": [
+    {
+      "ref": "t1",
+      "milestone_ref": "m1",
+      "title": "Sign venue agreement",
+      "description": null,
+      "due_date": "2026-08-25",
+      "assignee_membership_id": null,
+      "acceptance_criteria": ["The venue agreement is signed"]
+    }
+  ],
+  "dependencies": [],
+  "assumptions": [
+    {
+      "description": "The conference is in person",
+      "source": "manager_input"
+    }
+  ]
+}

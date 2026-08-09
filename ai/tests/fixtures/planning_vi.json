@@ -1,0 +1,40 @@
+{
+  "project": {
+    "title": "Hội thảo khách hàng",
+    "description": "Kế hoạch hội thảo cho 300 khách",
+    "start_date": "2026-08-10",
+    "due_date": "2026-09-30"
+  },
+  "goal": {
+    "title": "Tăng tương tác với khách hàng",
+    "description": null,
+    "expected_outcomes": ["300 khách tham dự hội thảo"],
+    "target_date": "2026-09-30"
+  },
+  "milestones": [
+    {
+      "ref": "m1",
+      "title": "Xác nhận địa điểm",
+      "description": null,
+      "due_date": "2026-09-01"
+    }
+  ],
+  "tasks": [
+    {
+      "ref": "t1",
+      "milestone_ref": "m1",
+      "title": "Ký hợp đồng địa điểm",
+      "description": null,
+      "due_date": "2026-08-25",
+      "assignee_membership_id": null,
+      "acceptance_criteria": ["Hợp đồng địa điểm đã được ký"]
+    }
+  ],
+  "dependencies": [],
+  "assumptions": [
+    {
+      "description": "Hội thảo tổ chức trực tiếp",
+      "source": "manager_input"
+    }
+  ]
+}
