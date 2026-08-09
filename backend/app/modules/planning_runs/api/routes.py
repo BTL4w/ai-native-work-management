@@ -12,11 +12,14 @@ from fastapi.responses import StreamingResponse
 from app.api.errors import ApplicationError, ErrorResponse
 from app.modules.identity.api.dependencies import ActorDependency
 from app.modules.planning_runs.api.dependencies import (
+    ApprovalServiceDependency,
     PlanningRunServiceDependency,
     ProposalServiceDependency,
     WorkflowEventServiceDependency,
 )
 from app.modules.planning_runs.api.schemas import (
+    ApprovalDecisionRequest,
+    ApprovalDecisionResponse,
     ManagerMessageRequest,
     PlanningRunCreateRequest,
     ProposalEditRequest,
@@ -26,10 +29,13 @@ from app.modules.planning_runs.api.schemas import (
     WorkflowRunResponse,
 )
 from app.modules.planning_runs.domain.models import (
+    ApprovalStateConflictError,
     IdempotencyKeyReusedError,
     PlanningRunDomainError,
     PlanningRunForbiddenError,
     PlanningRunNotFoundError,
+    ProposalStaleError,
+    ProposalValidationError,
     ResourceVersionMismatchError,
     UnsupportedPlanningCapabilityError,
     WorkflowRunStateError,
@@ -93,6 +99,24 @@ def _raise_planning_error(error: Exception) -> NoReturn:
             status_code=409,
             code="WORKFLOW_STATE_CONFLICT",
             message_key="ai.error.workflowStateConflict",
+        )
+    elif isinstance(error, ApprovalStateConflictError):
+        mapped = ApplicationError(
+            status_code=409,
+            code="APPROVAL_STATE_CONFLICT",
+            message_key="approval.error.stateConflict",
+        )
+    elif isinstance(error, ProposalStaleError):
+        mapped = ApplicationError(
+            status_code=422,
+            code="PROPOSAL_STALE",
+            message_key="approval.error.proposalStale",
+        )
+    elif isinstance(error, ProposalValidationError):
+        mapped = ApplicationError(
+            status_code=422,
+            code="VALIDATION_FAILED",
+            message_key="common.error.validation",
         )
     elif isinstance(error, UnsupportedPlanningCapabilityError):
         mapped = ApplicationError(
@@ -238,6 +262,38 @@ async def edit_proposal(
     if result.replayed:
         response.headers["Idempotency-Replayed"] = "true"
     return ProposalReferenceResponse.from_domain(result.proposal, result.version)
+
+
+@router.post(
+    "/approvals/{approval_id}/decision",
+    response_model=ApprovalDecisionResponse,
+    responses=_ERROR_RESPONSES,
+)
+async def decide_approval(
+    approval_id: UUID,
+    payload: ApprovalDecisionRequest,
+    request: Request,
+    response: Response,
+    actor: ActorDependency,
+    service: ApprovalServiceDependency,
+    idempotency_key: IdempotencyKeyHeader,
+    if_match: IfMatchHeader = None,
+) -> ApprovalDecisionResponse:
+    try:
+        result = await service.decide(
+            actor=actor,
+            approval_id=approval_id,
+            decision=payload.decision,
+            expected_proposal_version=_expected_version(if_match),
+            reason=payload.reason,
+            request_id=str(request.state.request_id),
+            idempotency_key=idempotency_key,
+        )
+    except (PlanningRunDomainError, ValueError) as error:
+        _raise_planning_error(error)
+    if result.replayed:
+        response.headers["Idempotency-Replayed"] = "true"
+    return ApprovalDecisionResponse.from_result(result)
 
 
 @router.get(

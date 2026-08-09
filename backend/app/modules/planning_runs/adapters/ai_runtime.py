@@ -14,7 +14,9 @@ from app.modules.organization.domain.roles import MembershipRole
 from app.modules.planning_runs.application.job_service import JobHandler
 from app.modules.planning_runs.application.ports import PlanningRunTransaction
 from app.modules.planning_runs.domain.models import (
+    ApprovalStatus,
     Proposal,
+    ProposalStatus,
     ProposalVersion,
     UnsupportedPlanningCapabilityError,
     WorkflowCheckpoint,
@@ -431,10 +433,101 @@ class ProposalRevalidationJobHandler:
         )
 
 
+class PlanningFinalizationJobHandler:
+    """Finalize a committed Manager decision without invoking the model."""
+
+    async def __call__(self, transaction: PlanningRunTransaction, job: WorkflowJob) -> None:
+        run = await transaction.repository.get_workflow_run_by_scope(
+            organization_id=job.organization_id,
+            run_id=job.workflow_run_id,
+        )
+        if run is None:
+            raise RuntimeError("workflow run is unavailable")
+        if run.status is WorkflowRunStatus.COMPLETED:
+            return
+        if run.status is not WorkflowRunStatus.WAITING_FOR_DECISION:
+            raise RuntimeError("workflow run is not waiting for decision")
+        actor = _worker_actor(run, MembershipRole.MANAGER.value)
+        try:
+            approval_id = UUID(str(job.payload["approval_id"]))
+            proposal_id = UUID(str(job.payload["proposal_id"]))
+            proposal_version = int(job.payload["proposal_version"])
+            checkpoint_sequence = int(job.payload["checkpoint_sequence"])
+            decision = str(job.payload["decision"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("finalization payload is invalid") from error
+        approval = await transaction.repository.get_approval(
+            actor=actor,
+            approval_id=approval_id,
+        )
+        proposal = await transaction.repository.get_proposal(
+            actor=actor,
+            proposal_id=proposal_id,
+        )
+        checkpoint = await transaction.repository.get_latest_checkpoint(
+            actor=actor,
+            run_id=run.id,
+        )
+        expected = {
+            "APPROVE": (ApprovalStatus.APPROVED, ProposalStatus.APPROVED),
+            "REJECT": (ApprovalStatus.REJECTED, ProposalStatus.REJECTED),
+        }.get(decision)
+        if (
+            approval is None
+            or proposal is None
+            or expected is None
+            or approval.status is not expected[0]
+            or proposal.status is not expected[1]
+            or approval.proposal_id != proposal.id
+            or approval.proposal_version_number != proposal_version
+            or proposal.current_version_number != proposal_version
+            or proposal.workflow_run_id != run.id
+            or checkpoint is None
+            or checkpoint.node != "await_manager_decision"
+            or checkpoint.sequence != checkpoint_sequence
+        ):
+            raise RuntimeError("committed decision does not match finalization checkpoint")
+        completed = run.mark_completed()
+        await transaction.repository.update_workflow_run(actor=actor, run=completed)
+        await transaction.repository.save_checkpoint(
+            checkpoint=WorkflowCheckpoint(
+                id=uuid4(),
+                organization_id=run.organization_id,
+                workflow_run_id=run.id,
+                node="completed",
+                sequence=checkpoint.sequence + 1,
+                state={
+                    "stage": "COMPLETED",
+                    "decision": decision,
+                    "proposal_id": str(proposal.id),
+                    "proposal_version": proposal_version,
+                    "approval_id": str(approval.id),
+                },
+            )
+        )
+        await transaction.repository.append_event(
+            event=WorkflowEvent(
+                id=uuid4(),
+                organization_id=run.organization_id,
+                workflow_run_id=run.id,
+                sequence=0,
+                event_type="workflow.completed",
+                public_payload={
+                    "status": "COMPLETED",
+                    "decision": decision,
+                    "proposal_id": str(proposal.id),
+                    "proposal_version": proposal_version,
+                    "approval_id": str(approval.id),
+                },
+            )
+        )
+
+
 def build_planning_job_handlers(settings: Settings) -> dict[str, JobHandler]:
     planning = PlanningJobHandler(settings)
     return {
         "planning.start": planning,
         "planning.resume": planning,
         "proposal.revalidate": ProposalRevalidationJobHandler(),
+        "planning.finalize": PlanningFinalizationJobHandler(),
     }

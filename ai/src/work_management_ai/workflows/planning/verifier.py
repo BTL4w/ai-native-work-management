@@ -78,6 +78,18 @@ def verify_plan(
         error("tasks", "TASK_LIMIT_EXCEEDED")
     if len(plan.dependencies) > MAX_DEPENDENCIES:
         error("dependencies", "DEPENDENCY_LIMIT_EXCEEDED")
+    if (
+        plan.project.start_date is not None
+        and plan.project.due_date is not None
+        and plan.project.start_date > plan.project.due_date
+    ):
+        error("project.start_date", "PROJECT_DATE_ORDER")
+    if (
+        plan.goal.target_date is not None
+        and plan.project.due_date is not None
+        and plan.goal.target_date > plan.project.due_date
+    ):
+        error("goal.target_date", "GOAL_AFTER_PROJECT")
 
     milestone_by_ref = {milestone.ref: milestone for milestone in plan.milestones}
     task_by_ref = {task.ref: task for task in plan.tasks}

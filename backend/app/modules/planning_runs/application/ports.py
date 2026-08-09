@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.planning_runs.application.approval_ports import ApprovalDecisionResult
 from app.modules.planning_runs.domain.models import (
     Approval,
     ContextReference,
@@ -29,6 +30,13 @@ class PlanningRunRepository(Protocol):
         run: WorkflowRun,
         job: WorkflowJob | None = None,
     ) -> WorkflowRun: ...
+
+    async def decide_approval_mutation(
+        self,
+        **values: object,
+    ) -> ApprovalDecisionResult: ...
+
+    async def mark_stale_decision_attempt(self, **values: object) -> None: ...
 
     async def create_planning_run_mutation(
         self,

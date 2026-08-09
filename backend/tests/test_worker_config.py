@@ -38,8 +38,13 @@ def test_worker_organization_ids_parsing() -> None:
     del os.environ["APP_WORKER_ORGANIZATION_IDS"]
 
 
-def test_task_7_worker_registers_only_start_resume_and_revalidation_handlers() -> None:
+def test_task_8_worker_registers_planning_and_finalization_handlers() -> None:
     handlers = build_planning_job_handlers(Settings(environment="test"))
 
-    assert set(handlers) == {"planning.start", "planning.resume", "proposal.revalidate"}
+    assert set(handlers) == {
+        "planning.start",
+        "planning.resume",
+        "planning.finalize",
+        "proposal.revalidate",
+    }
     assert "approval.apply" not in handlers

@@ -1,7 +1,9 @@
 """PostgreSQL repository adapter for AI planning runs persistence."""
 
-from datetime import UTC, datetime, timedelta
-from typing import Any
+import hashlib
+import json
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import CursorResult, func, select, update
@@ -24,13 +26,20 @@ from app.modules.planning_runs.adapters.database_models import (
     WorkflowJobModel,
     WorkflowRunModel,
 )
+from app.modules.planning_runs.application.approval_ports import (
+    ApprovalDecision,
+    ApprovalDecisionResult,
+    CreatedBusinessIds,
+)
 from app.modules.planning_runs.application.ports import (
     PlanningRunRepository,
+    PlanningRuntimePort,
     ProposalMutationResult,
     WorkflowRunMutationResult,
 )
 from app.modules.planning_runs.domain.models import (
     Approval,
+    ApprovalStateConflictError,
     ApprovalStatus,
     ContextReference,
     IdempotencyKeyReusedError,
@@ -39,9 +48,13 @@ from app.modules.planning_runs.domain.models import (
     OutboxEvent,
     OutboxStatus,
     PlanningRunDomainError,
+    PlanningRunNotFoundError,
     Proposal,
+    ProposalStaleError,
     ProposalStatus,
+    ProposalValidationError,
     ProposalVersion,
+    ResourceVersionMismatchError,
     WorkflowCheckpoint,
     WorkflowEvent,
     WorkflowJob,
@@ -52,9 +65,74 @@ from app.modules.planning_runs.domain.models import (
 from app.modules.work.adapters.database_models import (
     IdempotencyRecordModel,
     IdempotencyState,
+    ProjectModel,
+    TaskModel,
 )
+from app.modules.work.application.shared_commands import build_project_draft, build_task_draft
+from app.modules.work.domain.projects import ProjectError
+from app.modules.work.domain.tasks import TaskError, TaskStatus
+from app.modules.work.planning.adapters.database_models import (
+    AcceptanceCriterionModel,
+    GoalModel,
+    MilestoneModel,
+    TaskDependencyModel,
+)
+from app.modules.work.planning.domain.acceptance_criteria import (
+    AcceptanceCriterionDraft,
+    AcceptanceCriterionError,
+)
+from app.modules.work.planning.domain.dependencies import DependencyError, TaskDependencyDraft
+from app.modules.work.planning.domain.goals import GoalDraft, GoalError
+from app.modules.work.planning.domain.milestones import MilestoneDraft, MilestoneError
 
 _IDEMPOTENCY_TTL = timedelta(hours=24)
+
+
+def _mapping(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ProposalValidationError(field)
+    return cast(dict[str, object], value)
+
+
+def _items(value: object, field: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ProposalValidationError(field)
+    return [_mapping(item, field) for item in cast(list[object], value)]
+
+
+def _optional_date(value: object, field: str) -> date | None:
+    if value is None or isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as error:
+        raise ProposalValidationError(field) from error
+
+
+def _decision_result(body: dict[str, Any], *, replayed: bool) -> ApprovalDecisionResult:
+    created = cast(dict[str, Any], body.get("created", {}))
+    return ApprovalDecisionResult(
+        approval_id=UUID(str(body["approval_id"])),
+        approval_status=ApprovalStatus(str(body["approval_status"])),
+        proposal_id=UUID(str(body["proposal_id"])),
+        proposal_version=int(body["proposal_version"]),
+        proposal_status=ProposalStatus(str(body["proposal_status"])),
+        workflow_run_id=UUID(str(body["workflow_run_id"])),
+        finalization_job_id=UUID(str(body["finalization_job_id"])),
+        created=CreatedBusinessIds(
+            project_id=(
+                UUID(str(created["project_id"])) if created.get("project_id") is not None else None
+            ),
+            goal_id=(UUID(str(created["goal_id"])) if created.get("goal_id") is not None else None),
+            milestone_ids=tuple(UUID(str(value)) for value in created.get("milestone_ids", [])),
+            task_ids=tuple(UUID(str(value)) for value in created.get("task_ids", [])),
+            dependency_ids=tuple(UUID(str(value)) for value in created.get("dependency_ids", [])),
+            acceptance_criterion_ids=tuple(
+                UUID(str(value)) for value in created.get("acceptance_criterion_ids", [])
+            ),
+        ),
+        replayed=replayed,
+    )
 
 
 class PostgreSQLPlanningRunRepository(PlanningRunRepository):
@@ -169,6 +247,645 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             )
         )
 
+    async def decide_approval_mutation(self, **values: object) -> ApprovalDecisionResult:
+        """Lock, revalidate and apply one exact immutable proposal version."""
+
+        actor = values["actor"]
+        approval_id = values["approval_id"]
+        decision = values["decision"]
+        runtime = values["runtime"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(approval_id, UUID)
+        assert isinstance(decision, ApprovalDecision)
+        assert hasattr(runtime, "validate_proposal_content")
+        typed_runtime = cast(PlanningRuntimePort, runtime)
+        expected_version = cast(int, values["expected_proposal_version"])
+        reason = cast(str | None, values["reason"])
+        request_id = str(values["request_id"])
+        idempotency_key = str(values["idempotency_key"])
+        request_fingerprint = str(values["request_fingerprint"])
+        operation = f"approval.decision:{approval_id}"
+
+        replay = await self._find_replay(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        if replay is not None:
+            return _decision_result(replay, replayed=True)
+
+        approval_model = await self._session.scalar(
+            select(ApprovalModel)
+            .where(
+                ApprovalModel.organization_id == actor.organization_id,
+                ApprovalModel.id == approval_id,
+            )
+            .with_for_update()
+        )
+        if approval_model is None:
+            raise PlanningRunNotFoundError
+
+        # A concurrent same-key request may have completed while this request
+        # waited on the approval lock. Re-read after acquiring the final lock.
+        replay = await self._find_replay(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        if replay is not None:
+            return _decision_result(replay, replayed=True)
+        if approval_model.status != ApprovalStatus.PENDING.value:
+            raise ApprovalStateConflictError
+
+        proposal_model = await self._session.scalar(
+            select(ProposalModel)
+            .where(
+                ProposalModel.organization_id == actor.organization_id,
+                ProposalModel.id == approval_model.proposal_id,
+            )
+            .with_for_update()
+        )
+        if proposal_model is None:
+            raise PlanningRunNotFoundError
+        if expected_version != proposal_model.current_version_number:
+            raise ResourceVersionMismatchError(proposal_model.current_version_number)
+        if approval_model.proposal_version_number != expected_version:
+            raise ResourceVersionMismatchError(proposal_model.current_version_number)
+        if (
+            proposal_model.status != ProposalStatus.READY_FOR_DECISION.value
+            or proposal_model.approval_id != approval_id
+        ):
+            raise ApprovalStateConflictError
+
+        version_lock_key = (
+            f"planning-proposal-version:{actor.organization_id}:"
+            f"{proposal_model.id}:{expected_version}"
+        )
+        await self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(version_lock_key, 0)))
+        )
+        version_model = await self._session.scalar(
+            select(ProposalVersionModel).where(
+                ProposalVersionModel.organization_id == actor.organization_id,
+                ProposalVersionModel.proposal_id == proposal_model.id,
+                ProposalVersionModel.version_number == expected_version,
+            )
+        )
+        if version_model is None:
+            raise PlanningRunNotFoundError
+        run_model = await self._session.scalar(
+            select(WorkflowRunModel)
+            .where(
+                WorkflowRunModel.organization_id == actor.organization_id,
+                WorkflowRunModel.id == proposal_model.workflow_run_id,
+            )
+            .with_for_update()
+        )
+        if run_model is None:
+            raise PlanningRunNotFoundError
+        if run_model.status != WorkflowRunStatus.WAITING_FOR_DECISION.value:
+            raise ApprovalStateConflictError
+        checkpoint = await self._session.scalar(
+            select(WorkflowCheckpointModel)
+            .where(
+                WorkflowCheckpointModel.organization_id == actor.organization_id,
+                WorkflowCheckpointModel.workflow_run_id == run_model.id,
+            )
+            .order_by(WorkflowCheckpointModel.sequence.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if checkpoint is None or checkpoint.node != "await_manager_decision":
+            raise ApprovalStateConflictError
+
+        await self._verify_source_freshness(
+            actor=actor,
+            snapshot=version_model.source_reference_snapshot,
+        )
+        if not bool(version_model.validation_result.get("can_approve", False)):
+            raise ProposalValidationError
+
+        normalized = typed_runtime.validate_proposal_content(version_model.content)
+        active_membership_ids = frozenset(
+            (
+                await self._session.scalars(
+                    select(MembershipModel.id).where(
+                        MembershipModel.organization_id == actor.organization_id,
+                        MembershipModel.is_active.is_(True),
+                    )
+                )
+            ).all()
+        )
+        current_validation = typed_runtime.validate_proposal_deterministically(
+            normalized,
+            active_membership_ids=active_membership_ids,
+        )
+        if not bool(current_validation.get("can_approve", False)):
+            raise ProposalValidationError
+
+        now = datetime.now(UTC)
+        idempotency = self._new_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            now=now,
+        )
+        created = CreatedBusinessIds()
+        if decision is ApprovalDecision.APPROVE:
+            try:
+                created = await self._apply_business_graph(
+                    actor=actor,
+                    content=normalized,
+                    now=now,
+                )
+            except (
+                AcceptanceCriterionError,
+                DependencyError,
+                GoalError,
+                MilestoneError,
+                ProjectError,
+                TaskError,
+            ) as error:
+                raise ProposalValidationError from error
+
+        approval_model.status = (
+            ApprovalStatus.APPROVED.value
+            if decision is ApprovalDecision.APPROVE
+            else ApprovalStatus.REJECTED.value
+        )
+        approval_model.decided_by_membership_id = actor.membership_id
+        approval_model.decision_reason = reason
+        approval_model.decided_at = now
+        approval_model.version += 1
+        approval_model.updated_at = now
+        proposal_model.status = (
+            ProposalStatus.APPROVED.value
+            if decision is ApprovalDecision.APPROVE
+            else ProposalStatus.REJECTED.value
+        )
+        proposal_model.version += 1
+        proposal_model.updated_at = now
+
+        finalization_job_id = uuid4()
+        self._session.add(
+            WorkflowJobModel(
+                id=finalization_job_id,
+                organization_id=actor.organization_id,
+                workflow_run_id=run_model.id,
+                job_type="planning.finalize",
+                status=WorkflowJobStatus.QUEUED.value,
+                payload={
+                    "instruction": "FINALIZE_MANAGER_DECISION",
+                    "approval_id": str(approval_id),
+                    "proposal_id": str(proposal_model.id),
+                    "proposal_version": expected_version,
+                    "decision": decision.value,
+                    "checkpoint_sequence": checkpoint.sequence,
+                },
+                attempt_count=0,
+                max_attempts=3,
+                available_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        if decision is ApprovalDecision.APPROVE:
+            outbox_id = uuid4()
+            self._session.add(
+                OutboxEventModel(
+                    id=outbox_id,
+                    event_id=outbox_id,
+                    organization_id=actor.organization_id,
+                    event_type="planning.proposal_approved.v1",
+                    aggregate_type="proposal",
+                    aggregate_id=proposal_model.id,
+                    payload={
+                        "envelope_version": "1.0",
+                        "organization_id": str(actor.organization_id),
+                        "workflow_run_id": str(run_model.id),
+                        "proposal_id": str(proposal_model.id),
+                        "proposal_version": expected_version,
+                        "approval_id": str(approval_id),
+                        "created": self._created_json(created),
+                    },
+                    status=OutboxStatus.PENDING.value,
+                    envelope_version="1.0",
+                    attempt_count=0,
+                    max_attempts=3,
+                    available_at=now,
+                    occurred_at=now,
+                    created_at=now,
+                )
+            )
+        self._audit_success(
+            actor=actor,
+            action="approval.decided",
+            resource_type="approval",
+            resource_id=approval_id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            after_data={
+                "decision": decision.value,
+                "proposal_id": str(proposal_model.id),
+                "proposal_version": expected_version,
+                "created": self._created_json(created),
+            },
+        )
+        body: dict[str, Any] = {
+            "approval_id": str(approval_id),
+            "approval_status": approval_model.status,
+            "proposal_id": str(proposal_model.id),
+            "proposal_version": expected_version,
+            "proposal_status": proposal_model.status,
+            "workflow_run_id": str(run_model.id),
+            "finalization_job_id": str(finalization_job_id),
+            "created": self._created_json(created),
+        }
+        idempotency.state = IdempotencyState.COMPLETED
+        idempotency.response_status = 200
+        idempotency.response_body = body
+        await self._session.flush()
+        return _decision_result(body, replayed=False)
+
+    async def mark_stale_decision_attempt(self, **values: object) -> None:
+        """Persist STALE/superseded lifecycle and safe audit after apply rollback."""
+
+        actor = values["actor"]
+        approval_id = values["approval_id"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(approval_id, UUID)
+        expected_version = cast(int, values["expected_proposal_version"])
+        approval = await self._session.scalar(
+            select(ApprovalModel)
+            .where(
+                ApprovalModel.organization_id == actor.organization_id,
+                ApprovalModel.id == approval_id,
+            )
+            .with_for_update()
+        )
+        if approval is None:
+            return
+        proposal = await self._session.scalar(
+            select(ProposalModel)
+            .where(
+                ProposalModel.organization_id == actor.organization_id,
+                ProposalModel.id == approval.proposal_id,
+            )
+            .with_for_update()
+        )
+        if (
+            proposal is not None
+            and approval.status == ApprovalStatus.PENDING.value
+            and approval.proposal_version_number == expected_version
+            and proposal.status == ProposalStatus.READY_FOR_DECISION.value
+            and proposal.current_version_number == expected_version
+            and proposal.approval_id == approval.id
+        ):
+            now = datetime.now(UTC)
+            approval.status = ApprovalStatus.SUPERSEDED.value
+            approval.version += 1
+            approval.updated_at = now
+            proposal.status = ProposalStatus.STALE.value
+            proposal.approval_id = None
+            proposal.superseded_approval_id = approval.id
+            proposal.version += 1
+            proposal.updated_at = now
+        await self.audit_rejection(
+            actor=actor,
+            action="approval.decided",
+            request_id=str(values["request_id"]),
+            reason_code="PROPOSAL_STALE",
+            idempotency_key=str(values["idempotency_key"]),
+            resource_id=approval_id,
+        )
+        await self._session.flush()
+
+    @staticmethod
+    def _created_json(created: CreatedBusinessIds) -> dict[str, object]:
+        return {
+            "project_id": str(created.project_id) if created.project_id else None,
+            "goal_id": str(created.goal_id) if created.goal_id else None,
+            "milestone_ids": [str(value) for value in created.milestone_ids],
+            "task_ids": [str(value) for value in created.task_ids],
+            "dependency_ids": [str(value) for value in created.dependency_ids],
+            "acceptance_criterion_ids": [str(value) for value in created.acceptance_criterion_ids],
+        }
+
+    async def _verify_source_freshness(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        snapshot: list[dict[str, Any]],
+    ) -> None:
+        for raw in snapshot:
+            item = dict(raw)
+            if set(item) == {"reference_id"}:
+                try:
+                    reference_id = UUID(str(item["reference_id"]))
+                except ValueError as error:
+                    raise ProposalStaleError from error
+                reference = await self._session.scalar(
+                    select(ContextReferenceModel).where(
+                        ContextReferenceModel.organization_id == actor.organization_id,
+                        ContextReferenceModel.id == reference_id,
+                    )
+                )
+                if reference is None or reference.provenance_notes is None:
+                    raise ProposalStaleError
+                try:
+                    provenance = json.loads(reference.provenance_notes)
+                except json.JSONDecodeError as error:
+                    raise ProposalStaleError from error
+                item = {
+                    **cast(dict[str, Any], provenance),
+                    "resource_type": reference.resource_type,
+                    "resource_id": str(reference.resource_id),
+                }
+            resource_type = str(item.get("resource_type", "")).upper()
+            try:
+                resource_id = UUID(str(item["resource_id"]))
+            except (KeyError, ValueError) as error:
+                raise ProposalStaleError from error
+            if resource_type == "PROJECT":
+                model = await self._session.scalar(
+                    select(ProjectModel).where(
+                        ProjectModel.organization_id == actor.organization_id,
+                        ProjectModel.id == resource_id,
+                    )
+                )
+                if model is None or int(item.get("version", -1)) != model.version:
+                    raise ProposalStaleError
+            elif resource_type == "TASK":
+                task = await self._session.scalar(
+                    select(TaskModel).where(
+                        TaskModel.organization_id == actor.organization_id,
+                        TaskModel.id == resource_id,
+                    )
+                )
+                if task is None or int(item.get("version", -1)) != task.version:
+                    raise ProposalStaleError
+            elif resource_type == "MEMBERSHIP":
+                membership = await self._session.scalar(
+                    select(MembershipModel).where(
+                        MembershipModel.organization_id == actor.organization_id,
+                        MembershipModel.id == resource_id,
+                    )
+                )
+                if membership is None or not membership.is_active:
+                    raise ProposalStaleError
+                expected = item.get("fingerprint")
+                current = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "id": str(membership.id),
+                            "role": membership.role.value,
+                            "is_active": membership.is_active,
+                            "updated_at": membership.updated_at.isoformat(),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                if expected != current:
+                    raise ProposalStaleError
+            else:
+                raise ProposalStaleError
+
+    async def _apply_business_graph(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        content: dict[str, object],
+        now: datetime,
+    ) -> CreatedBusinessIds:
+        project_data = _mapping(content.get("project"), "project")
+        goal_data = _mapping(content.get("goal"), "goal")
+        milestone_data = _items(content.get("milestones"), "milestones")
+        task_data = _items(content.get("tasks"), "tasks")
+        dependency_data = _items(content.get("dependencies"), "dependencies")
+        project_start = _optional_date(project_data.get("start_date"), "project.start_date")
+        project_due = _optional_date(project_data.get("due_date"), "project.due_date")
+        goal_target = _optional_date(goal_data.get("target_date"), "goal.target_date")
+        if project_start is not None and project_due is not None and project_start > project_due:
+            raise ProposalValidationError
+        if goal_target is not None and project_due is not None and goal_target > project_due:
+            raise ProposalValidationError
+
+        project_draft = build_project_draft(
+            name=str(project_data.get("title", "")),
+            description=cast(str | None, project_data.get("description")),
+        )
+        project_id = uuid4()
+        self._session.add(
+            ProjectModel(
+                id=project_id,
+                organization_id=actor.organization_id,
+                name=project_draft.name,
+                description=project_draft.description,
+                version=1,
+                created_by_membership_id=actor.membership_id,
+                updated_by_membership_id=actor.membership_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await self._session.flush()
+        goal_draft = GoalDraft.create(
+            project_id=project_id,
+            title=str(goal_data.get("title", "")),
+            description=cast(str | None, goal_data.get("description")),
+            expected_outcomes=tuple(
+                str(value) for value in cast(list[object], goal_data.get("expected_outcomes", []))
+            ),
+            target_date=goal_target,
+        )
+        goal_id = uuid4()
+        self._session.add(
+            GoalModel(
+                id=goal_id,
+                organization_id=actor.organization_id,
+                project_id=project_id,
+                title=goal_draft.title,
+                description=goal_draft.description,
+                expected_outcomes=list(goal_draft.expected_outcomes),
+                target_date=goal_draft.target_date,
+                version=1,
+                created_by_membership_id=actor.membership_id,
+                updated_by_membership_id=actor.membership_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        milestone_ids: list[UUID] = []
+        milestone_by_ref: dict[str, UUID] = {}
+        milestone_due_by_ref: dict[str, date | None] = {}
+        for position, raw in enumerate(milestone_data, start=1):
+            ref = str(raw.get("ref", ""))
+            if not ref or ref in milestone_by_ref:
+                raise ProposalValidationError
+            due = _optional_date(raw.get("due_date"), f"milestones[{ref}].due_date")
+            if due is not None and project_due is not None and due > project_due:
+                raise ProposalValidationError
+            draft = MilestoneDraft.create(
+                project_id=project_id,
+                name=str(raw.get("title", "")),
+                description=cast(str | None, raw.get("description")),
+                target_date=due,
+                position=position,
+            )
+            milestone_id = uuid4()
+            milestone_ids.append(milestone_id)
+            milestone_by_ref[ref] = milestone_id
+            milestone_due_by_ref[ref] = due
+            self._session.add(
+                MilestoneModel(
+                    id=milestone_id,
+                    organization_id=actor.organization_id,
+                    project_id=project_id,
+                    name=draft.name,
+                    description=draft.description,
+                    target_date=draft.target_date,
+                    position=draft.position,
+                    version=1,
+                    created_by_membership_id=actor.membership_id,
+                    updated_by_membership_id=actor.membership_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        await self._session.flush()
+
+        task_ids: list[UUID] = []
+        task_by_ref: dict[str, UUID] = {}
+        criterion_ids: list[UUID] = []
+        for raw in task_data:
+            ref = str(raw.get("ref", ""))
+            if not ref or ref in task_by_ref:
+                raise ProposalValidationError
+            milestone_ref_value = raw.get("milestone_ref")
+            milestone_ref = str(milestone_ref_value) if milestone_ref_value is not None else None
+            if milestone_ref is not None and milestone_ref not in milestone_by_ref:
+                raise ProposalValidationError
+            due = _optional_date(raw.get("due_date"), f"tasks[{ref}].due_date")
+            if (
+                milestone_ref is not None
+                and due is not None
+                and milestone_due_by_ref[milestone_ref] is not None
+                and due > cast(date, milestone_due_by_ref[milestone_ref])
+            ):
+                raise ProposalValidationError
+            try:
+                assignee_id = UUID(str(raw["assignee_membership_id"]))
+            except (KeyError, ValueError) as error:
+                raise ProposalValidationError from error
+            draft = build_task_draft(
+                project_id=project_id,
+                milestone_id=(
+                    milestone_by_ref[milestone_ref] if milestone_ref is not None else None
+                ),
+                title=str(raw.get("title", "")),
+                description=cast(str | None, raw.get("description")),
+                assignee_membership_id=assignee_id,
+                due_date=due,
+            )
+            task_id = uuid4()
+            task_ids.append(task_id)
+            task_by_ref[ref] = task_id
+            self._session.add(
+                TaskModel(
+                    id=task_id,
+                    organization_id=actor.organization_id,
+                    project_id=project_id,
+                    milestone_id=draft.milestone_id,
+                    title=draft.title,
+                    description=draft.description,
+                    assignee_membership_id=draft.assignee_membership_id,
+                    status=TaskStatus.TO_DO,
+                    due_date=draft.due_date,
+                    version=1,
+                    created_by_membership_id=actor.membership_id,
+                    updated_by_membership_id=actor.membership_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            criteria = raw.get("acceptance_criteria", [])
+            if not isinstance(criteria, list):
+                raise ProposalValidationError
+            normalized_criteria: set[str] = set()
+            for position, text_value in enumerate(cast(list[object], criteria), start=1):
+                criterion = AcceptanceCriterionDraft.create(
+                    task_id=task_id,
+                    text=str(text_value),
+                    position=position,
+                )
+                normalized = " ".join(criterion.text.split()).casefold()
+                if normalized in normalized_criteria:
+                    raise ProposalValidationError
+                normalized_criteria.add(normalized)
+                criterion_id = uuid4()
+                criterion_ids.append(criterion_id)
+                self._session.add(
+                    AcceptanceCriterionModel(
+                        id=criterion_id,
+                        organization_id=actor.organization_id,
+                        task_id=task_id,
+                        text=criterion.text,
+                        position=criterion.position,
+                        version=1,
+                        created_by_membership_id=actor.membership_id,
+                        updated_by_membership_id=actor.membership_id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        await self._session.flush()
+
+        dependency_ids: list[UUID] = []
+        edge_set: set[tuple[UUID, UUID]] = set()
+        for raw in dependency_data:
+            predecessor_ref = str(raw.get("predecessor_ref", ""))
+            successor_ref = str(raw.get("successor_ref", ""))
+            if predecessor_ref not in task_by_ref or successor_ref not in task_by_ref:
+                raise ProposalValidationError
+            draft = TaskDependencyDraft.create(
+                predecessor_task_id=task_by_ref[predecessor_ref],
+                successor_task_id=task_by_ref[successor_ref],
+            )
+            edge = (draft.predecessor_task_id, draft.successor_task_id)
+            if edge in edge_set:
+                raise ProposalValidationError
+            edge_set.add(edge)
+            dependency_id = uuid4()
+            dependency_ids.append(dependency_id)
+            self._session.add(
+                TaskDependencyModel(
+                    id=dependency_id,
+                    organization_id=actor.organization_id,
+                    predecessor_task_id=draft.predecessor_task_id,
+                    successor_task_id=draft.successor_task_id,
+                    version=1,
+                    created_by_membership_id=actor.membership_id,
+                    updated_by_membership_id=actor.membership_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        await self._session.flush()
+        return CreatedBusinessIds(
+            project_id=project_id,
+            goal_id=goal_id,
+            milestone_ids=tuple(milestone_ids),
+            task_ids=tuple(task_ids),
+            dependency_ids=tuple(dependency_ids),
+            acceptance_criterion_ids=tuple(criterion_ids),
+        )
+
     async def create_planning_run_mutation(self, **values: object) -> WorkflowRunMutationResult:
         actor = values["actor"]
         run = values["run"]
@@ -187,9 +904,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             request_fingerprint=request_fingerprint,
         )
         if replay is not None:
-            existing = await self.get_workflow_run(
-                actor=actor, run_id=UUID(str(replay["run_id"]))
-            )
+            existing = await self.get_workflow_run(actor=actor, run_id=UUID(str(replay["run_id"])))
             if existing is None:
                 raise PlanningRunDomainError("idempotency replay resource is unavailable")
             return WorkflowRunMutationResult(run=existing, replayed=True)
@@ -320,9 +1035,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         )
         return self._run_from_model(model) if model is not None else None
 
-    async def list_active_membership_ids(
-        self, *, organization_id: UUID
-    ) -> frozenset[UUID]:
+    async def list_active_membership_ids(self, *, organization_id: UUID) -> frozenset[UUID]:
         values = (
             await self._session.scalars(
                 select(MembershipModel.id).where(
@@ -439,9 +1152,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         )
         if replay is None:
             return None
-        run = await self.get_workflow_run(
-            actor=actor, run_id=UUID(str(replay["run_id"]))
-        )
+        run = await self.get_workflow_run(actor=actor, run_id=UUID(str(replay["run_id"])))
         if run is None:
             raise PlanningRunDomainError("idempotency replay resource is unavailable")
         return WorkflowRunMutationResult(run=run, replayed=True)
@@ -487,8 +1198,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             .with_for_update()
         )
         version_model = await self._session.scalar(
-            select(ProposalVersionModel)
-            .where(
+            select(ProposalVersionModel).where(
                 ProposalVersionModel.organization_id == actor.organization_id,
                 ProposalVersionModel.proposal_id == proposal_id,
                 ProposalVersionModel.version_number == version_number,
@@ -579,9 +1289,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             request_fingerprint=request_fingerprint,
         )
         if replay is not None:
-            saved_proposal = await self.get_proposal(
-                actor=actor, proposal_id=proposal.id
-            )
+            saved_proposal = await self.get_proposal(actor=actor, proposal_id=proposal.id)
             saved_version = await self.get_proposal_version(
                 actor=actor,
                 proposal_id=proposal.id,
@@ -1167,8 +1875,8 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         approval: Approval,
         proposal: Proposal,
     ) -> Approval:
-        if actor.role != MembershipRole.MANAGER:
-            raise PermissionError("Approval decisions require the Manager role.")
+        if actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
+            raise PermissionError("Approval decisions require an authorized management role.")
         if approval.decided_by_membership_id != actor.membership_id:
             raise PermissionError("Approval decision must identify the authenticated actor.")
         expected_proposal_status = {
@@ -1267,12 +1975,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             event_id = event.id
             created_at = event.created_at
         else:
-            if (
-                actor is None
-                or run_id is None
-                or event_type is None
-                or public_payload is None
-            ):
+            if actor is None or run_id is None or event_type is None or public_payload is None:
                 raise PlanningRunDomainError(
                     "append_event requires either event or "
                     "(actor, run_id, event_type, "
@@ -1295,22 +1998,19 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         )
         run_res = await self._session.execute(run_stmt)
         if run_res.scalar_one_or_none() is None:
-            raise PlanningRunDomainError(
-                "WorkflowRun not found or tenant mismatch."
-            )
+            raise PlanningRunDomainError("WorkflowRun not found or tenant mismatch.")
 
         # Repository always owns sequence computation
         seq_stmt = select(
             func.coalesce(
-                func.max(WorkflowEventModel.sequence), 0,
+                func.max(WorkflowEventModel.sequence),
+                0,
             ),
         ).where(
             WorkflowEventModel.organization_id == org_id,
             WorkflowEventModel.workflow_run_id == target_run_id,
         )
-        max_seq = (
-            await self._session.execute(seq_stmt)
-        ).scalar_one()
+        max_seq = (await self._session.execute(seq_stmt)).scalar_one()
         computed_seq = max_seq + 1
 
         model = WorkflowEventModel(
@@ -1414,15 +2114,16 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         organization_id: UUID,
     ) -> OutboxEvent:
         if organization_id != event.organization_id:
-            raise PlanningRunDomainError(
-                "Organization ID mismatch in "
-                "enqueue_outbox_event."
-            )
+            raise PlanningRunDomainError("Organization ID mismatch in enqueue_outbox_event.")
 
-        stmt = select(OutboxEventModel).where(
-            OutboxEventModel.organization_id == event.organization_id,
-            OutboxEventModel.event_id == event.event_id,
-        ).with_for_update()
+        stmt = (
+            select(OutboxEventModel)
+            .where(
+                OutboxEventModel.organization_id == event.organization_id,
+                OutboxEventModel.event_id == event.event_id,
+            )
+            .with_for_update()
+        )
         existing = (await self._session.execute(stmt)).scalar_one_or_none()
         if existing is not None:
             if (
@@ -1453,8 +2154,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                     created_at=existing.created_at,
                 )
             raise PlanningRunDomainError(
-                f"Conflict: Outbox event {event.event_id} "
-                "exists with different attributes."
+                f"Conflict: Outbox event {event.event_id} exists with different attributes."
             )
 
         model = OutboxEventModel(
@@ -1576,8 +2276,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         assert isinstance(result, CursorResult)
         if result.rowcount == 0:
             raise PlanningRunDomainError(
-                "Outbox publish failed: lease expired, "
-                "wrong worker, or event not DISPATCHING."
+                "Outbox publish failed: lease expired, wrong worker, or event not DISPATCHING."
             )
 
     async def record_outbox_event_failure(

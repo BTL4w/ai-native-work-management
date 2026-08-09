@@ -13,9 +13,9 @@ from app.modules.work.application.ports import (
     ProjectPage,
     ProjectTransactionFactory,
 )
+from app.modules.work.application.shared_commands import build_project_draft
 from app.modules.work.domain.projects import (
     Project,
-    ProjectDraft,
     ProjectError,
     ProjectForbiddenError,
     ProjectNotFoundError,
@@ -90,7 +90,7 @@ class ProjectService:
     ) -> ProjectMutationResult:
         await self._require_writer(actor=actor, action="project.created", request_id=request_id)
         try:
-            draft = ProjectDraft.create(name=name, description=description)
+            draft = build_project_draft(name=name, description=description)
             request_fingerprint = _fingerprint(
                 "project.create", {"name": draft.name, "description": draft.description}
             )

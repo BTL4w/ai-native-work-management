@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.domain.roles import MembershipRole
+from app.modules.work.application.shared_commands import build_task_draft
 from app.modules.work.application.task_ports import (
     TaskMutationResult,
     TaskPage,
@@ -16,7 +17,6 @@ from app.modules.work.application.task_ports import (
 )
 from app.modules.work.domain.tasks import (
     Task,
-    TaskDraft,
     TaskError,
     TaskForbiddenError,
     TaskNotFoundError,
@@ -156,7 +156,7 @@ class TaskService:
             idempotency_key=idempotency_key,
         )
         try:
-            draft = TaskDraft.create(
+            draft = build_task_draft(
                 project_id=project_id,
                 milestone_id=milestone_id,
                 title=title,

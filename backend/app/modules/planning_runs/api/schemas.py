@@ -6,6 +6,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.planning_runs.application.approval_ports import (
+    ApprovalDecision,
+    ApprovalDecisionResult,
+)
 from app.modules.planning_runs.application.ports import WorkflowRunSnapshot
 from app.modules.planning_runs.domain.models import Proposal, ProposalVersion, WorkflowRun
 
@@ -43,6 +47,65 @@ class ProposalEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: dict[str, object]
+
+
+class ApprovalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ApprovalDecision
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class ApprovalStatusResponse(BaseModel):
+    id: UUID
+    status: str
+
+
+class DecidedProposalResponse(BaseModel):
+    id: UUID
+    version: int
+    status: str
+
+
+class CreatedBusinessIdsResponse(BaseModel):
+    project_id: UUID | None
+    goal_id: UUID | None
+    milestone_ids: list[UUID]
+    task_ids: list[UUID]
+    dependency_ids: list[UUID]
+    acceptance_criterion_ids: list[UUID]
+
+
+class ApprovalDecisionResponse(BaseModel):
+    approval: ApprovalStatusResponse
+    proposal: DecidedProposalResponse
+    created: CreatedBusinessIdsResponse
+    workflow_run_id: UUID
+    finalization_job_id: UUID
+
+    @classmethod
+    def from_result(cls, result: ApprovalDecisionResult) -> Self:
+        return cls(
+            approval=ApprovalStatusResponse(
+                id=result.approval_id,
+                status=result.approval_status.value,
+            ),
+            proposal=DecidedProposalResponse(
+                id=result.proposal_id,
+                version=result.proposal_version,
+                status=result.proposal_status.value,
+            ),
+            created=CreatedBusinessIdsResponse(
+                project_id=result.created.project_id,
+                goal_id=result.created.goal_id,
+                milestone_ids=list(result.created.milestone_ids),
+                task_ids=list(result.created.task_ids),
+                dependency_ids=list(result.created.dependency_ids),
+                acceptance_criterion_ids=list(result.created.acceptance_criterion_ids),
+            ),
+            workflow_run_id=result.workflow_run_id,
+            finalization_job_id=result.finalization_job_id,
+        )
 
 
 class WorkflowRunReferenceResponse(BaseModel):

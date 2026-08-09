@@ -79,6 +79,20 @@ def test_verifier_requires_manager_selected_assignee() -> None:
     assert result.can_approve is False
 
 
+def test_verifier_rejects_inactive_or_foreign_selected_assignee() -> None:
+    plan = PlanningModelOutput.model_validate(assigned_plan_data())
+
+    result = verify_plan(
+        plan,
+        PlanningVerificationContext(active_membership_ids=frozenset()),
+    )
+
+    assert [(item.path, item.code) for item in result.errors] == [
+        ("tasks[t1].assignee_membership_id", "ASSIGNEE_NOT_PERMITTED")
+    ]
+    assert result.can_approve is False
+
+
 def test_verifier_accepts_exactly_one_goal_and_resolves_temporary_refs() -> None:
     plan = PlanningModelOutput.model_validate(assigned_plan_data())
 
@@ -141,6 +155,22 @@ def test_verifier_rejects_task_after_milestone_and_milestone_after_project() -> 
     assert [(item.path, item.code) for item in result.errors] == [
         ("milestones[m1].due_date", "MILESTONE_AFTER_PROJECT"),
         ("tasks[t1].due_date", "TASK_AFTER_MILESTONE"),
+    ]
+
+
+def test_verifier_rejects_project_date_order_and_goal_after_project() -> None:
+    data = assigned_plan_data()
+    project = cast(dict[str, object], data["project"])
+    goal = cast(dict[str, object], data["goal"])
+    project["start_date"] = "2026-10-01"
+    project["due_date"] = "2026-09-30"
+    goal["target_date"] = "2026-10-02"
+
+    result = verify_plan(PlanningModelOutput.model_validate(data), verification_context())
+
+    assert [(item.path, item.code) for item in result.errors] == [
+        ("goal.target_date", "GOAL_AFTER_PROJECT"),
+        ("project.start_date", "PROJECT_DATE_ORDER"),
     ]
 
 

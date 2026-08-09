@@ -25,6 +25,7 @@ from app.modules.planning_runs.adapters.transaction import (
     PostgreSQLPlanningRunTransactionFactory,
 )
 from app.modules.planning_runs.api.routes import router as planning_run_router
+from app.modules.planning_runs.application.approval_service import ApprovalService
 from app.modules.planning_runs.application.event_service import WorkflowEventService
 from app.modules.planning_runs.application.proposal_service import ProposalService
 from app.modules.planning_runs.application.run_service import PlanningRunService
@@ -60,6 +61,7 @@ def create_app(
     planning_run_service: PlanningRunService | None = None,
     proposal_service: ProposalService | None = None,
     workflow_event_service: WorkflowEventService | None = None,
+    approval_service: ApprovalService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -100,10 +102,12 @@ def create_app(
     resolved_planning_run_service = planning_run_service
     resolved_proposal_service = proposal_service
     resolved_workflow_event_service = workflow_event_service
+    resolved_approval_service = approval_service
     if (
         resolved_planning_run_service is None
         or resolved_proposal_service is None
         or resolved_workflow_event_service is None
+        or resolved_approval_service is None
     ):
         if database_engine is None:
             database_engine = create_database_engine(resolved_settings)
@@ -123,6 +127,11 @@ def create_app(
         if resolved_workflow_event_service is None:
             resolved_workflow_event_service = WorkflowEventService(
                 transaction_factory=planning_transaction_factory
+            )
+        if resolved_approval_service is None:
+            resolved_approval_service = ApprovalService(
+                transaction_factory=planning_transaction_factory,
+                runtime=runtime,
             )
 
     @asynccontextmanager
@@ -148,6 +157,7 @@ def create_app(
     app.state.planning_run_service = resolved_planning_run_service
     app.state.proposal_service = resolved_proposal_service
     app.state.workflow_event_service = resolved_workflow_event_service
+    app.state.approval_service = resolved_approval_service
     app.state.database_engine = database_engine
     app.add_middleware(
         CORSMiddleware,

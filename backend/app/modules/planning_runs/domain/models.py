@@ -43,6 +43,18 @@ class ResourceVersionMismatchError(PlanningRunDomainError):
         self.current_version = current_version
 
 
+class ApprovalStateConflictError(PlanningRunDomainError):
+    """Approval or Proposal is no longer in the required decision state."""
+
+
+class ProposalStaleError(PlanningRunDomainError):
+    """A proposal source reference changed after the immutable snapshot."""
+
+
+class ProposalValidationError(PlanningRunDomainError):
+    """Deterministic proposal validation blocks approval application."""
+
+
 class WorkflowRunStatus(StrEnum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
