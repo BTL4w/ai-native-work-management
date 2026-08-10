@@ -1,0 +1,36 @@
+{
+  "message": "Load Project A evidence, then create a planning proposal",
+  "plan": {
+    "schema_version": "1.0",
+    "objectives": ["Load current Project evidence", "Create a planning proposal"],
+    "steps": [
+      {
+        "step_id": "read_project",
+        "target_agent_id": "work_intelligence",
+        "target_agent_version": "1.0.0",
+        "capability": "work.read_project",
+        "objective": "Load permitted Project facts",
+        "typed_input": {"reference": "Project A"},
+        "depends_on": [],
+        "mode": "READ_ONLY"
+      },
+      {
+        "step_id": "plan_project",
+        "target_agent_id": "planning",
+        "target_agent_version": "1.0.0",
+        "capability": "planning.create",
+        "objective": "Create a proposal from the objective and evidence",
+        "typed_input": {"brief": "Plan Project A"},
+        "depends_on": ["read_project"],
+        "mode": "PROPOSAL"
+      }
+    ],
+    "unavailable_capabilities": [],
+    "response_language": "en"
+  },
+  "synthesis": {
+    "blocks": [
+      {"kind": "text", "text": "The evidence and planning proposal are ready."}
+    ]
+  }
+}

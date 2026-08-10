@@ -1,0 +1,26 @@
+{
+  "message": "Cho tôi biết các task đang làm của Project A",
+  "plan": {
+    "schema_version": "1.0",
+    "objectives": ["Load current Project evidence"],
+    "steps": [
+      {
+        "step_id": "read_project",
+        "target_agent_id": "work_intelligence",
+        "target_agent_version": "1.0.0",
+        "capability": "work.read_project",
+        "objective": "Load permitted Project facts",
+        "typed_input": {"reference": "Project A"},
+        "depends_on": [],
+        "mode": "READ_ONLY"
+      }
+    ],
+    "unavailable_capabilities": [],
+    "response_language": "vi"
+  },
+  "synthesis": {
+    "blocks": [
+      {"kind": "text", "text": "Đây là thông tin Project A được phép xem."}
+    ]
+  }
+}

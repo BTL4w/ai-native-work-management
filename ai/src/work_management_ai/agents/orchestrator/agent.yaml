@@ -1,0 +1,45 @@
+schema_version: "1.0"
+agent:
+  id: orchestrator
+  name: Orchestrator Agent
+  version: "1.0.0"
+  owner: ai-runtime
+  activation_phase: 2
+
+capabilities:
+  - orchestration.plan
+  - orchestration.delegate
+  - orchestration.synthesize
+
+contracts:
+  input: work_management_ai.agents.orchestrator.contracts.OrchestratorInput
+  output: work_management_ai.agents.orchestrator.contracts.OrchestratorOutput
+  handoff: work_management_ai.runtime.contracts.AgentHandoff
+
+permissions:
+  roles: [ADMIN, MANAGER, EMPLOYEE]
+  tenant_scope: actor_membership
+  risk_ceiling: PROPOSAL_ONLY
+
+runtime:
+  workflow: orchestrator.v1
+  max_iterations: 8
+  max_tool_calls: 0
+  max_handoffs: 6
+  max_replans: 2
+  timeout_seconds: 120
+  checkpoint: durable
+  model_policy: structured_reasoning
+
+allowed_skills: []
+allowed_tools: []
+
+approval:
+  produced_writes: NEVER
+  can_self_approve: false
+
+fallback:
+  strategy: SAFE_MANUAL_FALLBACK
+
+evaluators:
+  - orchestrator_plan@1
