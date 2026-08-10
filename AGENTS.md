@@ -2,7 +2,9 @@
 
 ## Purpose
 
-This repository contains an AI-native, cross-domain enterprise work-management platform. Work must follow the solo-developer vertical-slice sequence in `PLAN.md`.
+This repository contains an AI-native, cross-domain enterprise work-management
+platform built around one conversation-first, hub-and-spoke multi-agent system.
+Work must follow the solo-developer vertical-slice sequence in `PLAN.md`.
 
 The current repository is in the planning/documentation stage. Do not write application code until the user explicitly asks to implement a named phase or a clearly bounded item from `PLAN.md`.
 
@@ -57,7 +59,15 @@ Google Calendar and Qdrant are Post-MVP Optional Integrations. Kubernetes/kind, 
 - Qdrant, when its optional phase is authorized, is a retrieval index and never a source of truth.
 - Store the Work Graph through relational foreign keys and relation tables. Do not introduce a graph database in the MVP.
 - Do not introduce GraphRAG for direct lookup or simple retrieval.
-- Do not create a multi-agent swarm or a separately named agent for every feature.
+- Use one bounded hub-and-spoke Agent Runtime: an Orchestrator Agent may delegate
+  to phase-activated Specialist Agents through typed handoffs. Specialists must
+  not call each other directly.
+- Do not create an unrestricted swarm, peer-to-peer delegation, self-created
+  agents or a separately named agent for every endpoint/feature. A Specialist
+  Agent is justified only by an independently testable capability, context,
+  skill/tool, workflow and evaluation boundary recorded in `PLAN.md`.
+- During Core MVP, all agents run inside the same application/worker runtime.
+  Do not deploy a microservice or broker per agent.
 - Keep the product domain-neutral. Do not make IT, software-development, repository, pull-request or CI/CD concepts part of core business behavior.
 
 ## Project Structure
@@ -67,6 +77,8 @@ When Phase 1 is authorized, use these top-level boundaries unless the user appro
 - `frontend/` — Next.js, React and TypeScript UI.
 - `backend/app/` — FastAPI entrypoint, domain modules, application services and adapters.
 - `backend/alembic/` — PostgreSQL migrations and RLS policies.
+- `ai/` — Model Gateway, Agent Runtime, Orchestrator/Specialist packages,
+  manifests, graphs, skills, tools, evaluators and safe traces from Phase 2.
 - `tests/` or colocated test directories consistent with the selected framework.
 - `deploy/` — created only when the Post-MVP Deployment Track is authorized.
 
@@ -96,6 +108,8 @@ Avoid placeholder packages for future phases. Create a module when the active ve
 - Never trust an arbitrary organization identifier sent by the client; resolve allowed tenant context from authenticated membership.
 - Add negative cross-tenant tests for each new tenant-owned resource.
 - Chat history, model context, vector records and temporary workflow memory are not official business facts.
+- Conversation, orchestration, agent-run, handoff, skill/tool invocation and
+  checkpoint rows are tenant-owned operational state, not authorization facts.
 
 ## Authorization, Approval and Audit
 
@@ -112,6 +126,16 @@ Approval is mandatory for:
 - Bulk changes.
 - High-risk actions.
 - Any action explicitly required by an organization policy.
+
+Human gates are role- and ownership-aware:
+
+- A user confirms an AI-extracted draft of their own Daily Update before it is
+  persisted.
+- A Manager/Admin approves AI-proposed plan, assignment, deadline, dependency,
+  bulk or organization-level changes.
+- Read-only answers and verified analysis do not require approval.
+- An explicit low-risk, user-owned, reversible action may execute directly only
+  when deterministic policy permits it; AI-inferred actions remain proposals.
 
 For an approved side effect, follow:
 
@@ -142,14 +166,44 @@ intent
 - Use typed structured output for every model call that affects product behavior.
 - Use deterministic code for authorization, business invariants, arithmetic, dates, workload, ranking, risk scores, constraints and post-condition verification.
 - LLMs may understand requests, extract structured drafts and explain verified results. They may not override deterministic decisions.
-- Every AI write remains a proposal until a human approves it.
+- Use one Orchestrator Agent as the only component allowed to create a typed
+  handoff to a Specialist Agent. Every specialist result returns to the
+  Orchestrator; no direct specialist-to-specialist delegation is allowed.
+- Each implemented agent package must include `agent.yaml`, typed
+  `contracts.py`, `harness.py`, versioned prompts, workflows/graphs as needed,
+  allowed skills, evaluators and tests. The manifest declares agent/version,
+  owner, activation phase, capabilities, permissions, risk ceiling, model
+  policy, skill/tool allowlists, budgets, approval rules, fallbacks and stop
+  conditions.
+- Agent Registry must reject inactive, unknown, invalid or permission-incompatible
+  agents. Do not create placeholder packages for future-phase agents.
+- An Assistant Turn owns one durable Orchestration Run and may create multiple
+  bounded Agent Runs. Persist typed execution plans, handoffs, checkpoints,
+  evidence and safe decisions; never persist or expose hidden chain-of-thought.
+- The Agent Harness surrounds every model/tool loop with manifest loading,
+  context construction, policy guards, budgets, retries, checkpoints,
+  verification, safe tracing and manual fallback.
+- Agents may reason, plan, re-plan and call tools only within declared budgets
+  and permissions. Models cannot grant roles, tenant scope, approval state,
+  tools, skills or activation status.
+- Every AI-generated business mutation remains a proposal until the appropriate
+  human gate succeeds. Owner-confirmed drafts and policy-authorized explicit
+  low-risk user actions follow their separately documented path.
 - Every workflow must define typed state, nodes, edges, retry limits, stop conditions, approval points, verifiers and fallback behavior.
-- Persist only structured workflow state required for execution and audit. Do not persist hidden chain-of-thought.
-- Record workflow, skill, prompt, model and verifier versions with each run.
+- Persist only structured orchestration/workflow state required for execution
+  and audit. Do not persist hidden chain-of-thought.
+- Record agent, manifest, handoff, workflow, skill, tool, prompt, model and
+  verifier versions with each applicable run.
 - A tool must have typed input/output, tenant scope, permission, risk level, timeout, retry policy, idempotency behavior and audit behavior.
 - Tools call application services; they do not write directly to the database.
 - Skills must declare trigger, input/output schema, required context, allowed tools, risk/approval rules, owner, semantic version and evaluation cases.
+- Load skills progressively. A skill is reusable capability/instruction, not an
+  Agent; a Tool is a typed action, not a source of authorization.
 - Load only context that the current node needs and preserve source, tenant, permission, version and timestamp provenance.
+- Core MVP memory is limited to structured working memory and conversation
+  memory. Personalized long-term memory is an optional later extension and must
+  not be implemented without its Settings, retention, inspection/deletion and
+  consent design.
 - A failed model or verifier must fall back to the manual product flow where that flow is essential.
 
 ## Model Data and Evaluation
@@ -197,6 +251,11 @@ For every applicable change:
 - Use mock model and integration adapters in the default automated suite.
 - Keep live-provider tests separate, opt-in and credential-gated.
 - Add bilingual evaluation cases for user-facing AI workflows.
+- Test agent manifests/contracts, Orchestrator execution plans, typed handoffs,
+  inactive-agent denial, specialist isolation, tool allowlists, bounded loops,
+  checkpoint recovery and multi-agent integration for every activated agent.
+- Approval bypass, unauthorized delegation, peer-to-peer handoff and
+  cross-tenant leakage test counts must remain zero.
 - Verify migrations and public OpenAPI contracts.
 - Update local run/demo instructions when commands or dependencies change.
 - Confirm that no Explicit non-goal was introduced.
