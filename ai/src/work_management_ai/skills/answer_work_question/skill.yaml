@@ -1,0 +1,17 @@
+schema_version: "1.0"
+name: answer_work_question
+version: "1.0.0"
+owner: work-intelligence
+description: Answer bilingual questions about permitted Projects, assigned Tasks, dependencies and acceptance criteria.
+runnable_by_agents: [work_intelligence]
+allowed_tools: [work.read_my_tasks@1, work.read_resource@1]
+risk_level: READ_ONLY
+input_contract: work_management_ai.skills.answer_work_question.contracts.AnswerWorkQuestionInput
+output_contract: work_management_ai.skills.answer_work_question.contracts.AnswerWorkQuestionOutput
+evaluators: [work_grounding@1]
+triggers:
+  - "vi:công việc của tôi, task tiếp theo, chi tiết project hoặc task"
+  - "en:my tasks, next task, project or task details"
+required_context: [authenticated_actor, tenant_scope, context_references]
+approval: NONE
+stop_conditions: [ambiguous_resource, invisible_resource, insufficient_evidence, tool_failure]

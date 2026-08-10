@@ -304,6 +304,22 @@ def test_registry_rejects_permission_incompatible_skill_and_tool(
         ).register_resource(read_only_package, read_only_resource)
 
 
+def test_registry_rejects_agent_roles_outside_tool_role_allowlist(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    package, resource = _write_resource_package(tmp_path, monkeypatch, _agent_manifest_yaml())
+    employee_only_tool = (
+        _tool_registry()
+        .resolve("planning.validate_draft@1")
+        .manifest.model_copy(update={"roles": ("EMPLOYEE",)})
+    )
+
+    with pytest.raises(AgentRegistryError, match="AGENT_TOOL_ROLE_INCOMPATIBLE"):
+        _registry(tool_registry=ToolRegistry([employee_only_tool])).register_resource(
+            package, resource
+        )
+
+
 def test_contract_paths_cannot_import_outside_work_management_ai() -> None:
     with pytest.raises(ValidationError):
         AgentManifest.model_validate(
@@ -325,6 +341,55 @@ def test_manifest_rejects_an_empty_role_allowlist() -> None:
 
     with pytest.raises(ValidationError):
         AgentManifest.model_validate(values)
+
+
+def test_skill_and_tool_manifests_preserve_runtime_governance_metadata() -> None:
+    skill = SkillManifest.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "answer_work_question",
+            "version": "1.0.0",
+            "owner": "work-intelligence",
+            "description": "Answer permission-safe work questions",
+            "runnable_by_agents": ["work_intelligence"],
+            "allowed_tools": ["work.read_my_tasks@1"],
+            "risk_level": "READ_ONLY",
+            "input_contract": "work_management_ai.runtime.contracts.AgentHandoff",
+            "output_contract": "work_management_ai.runtime.contracts.AgentResult",
+            "evaluators": ["work_grounding@1"],
+            "triggers": ["vi:task của tôi", "en:my tasks"],
+            "required_context": ["authenticated_actor", "tenant_scope"],
+            "approval": "NONE",
+            "stop_conditions": ["ambiguous_resource", "insufficient_evidence"],
+        }
+    )
+    tool = ToolManifest.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "work.read_my_tasks",
+            "version": "1.0.0",
+            "owner": "work-intelligence",
+            "tenant_scope": "actor_membership",
+            "roles": ["ADMIN", "MANAGER", "EMPLOYEE"],
+            "risk_level": "READ_ONLY",
+            "input_contract": "work_management_ai.runtime.contracts.AgentHandoff",
+            "output_contract": "work_management_ai.runtime.contracts.AgentResult",
+            "timeout_seconds": 5,
+            "max_attempts": 1,
+            "retry_policy": "NONE",
+            "idempotency": "NOT_APPLICABLE",
+            "audit": "SAFE_METADATA",
+            "evidence_output": True,
+            "freshness_output": True,
+            "trace_metadata": ["tool_id", "duration_ms", "result_status"],
+        }
+    )
+
+    assert skill.approval == "NONE"
+    assert skill.triggers == ("vi:task của tôi", "en:my tasks")
+    assert tool.roles == ("ADMIN", "MANAGER", "EMPLOYEE")
+    assert tool.retry_policy == "NONE"
+    assert tool.trace_metadata == ("tool_id", "duration_ms", "result_status")
 
 
 def test_registry_rejects_read_only_agent_that_declares_writes(

@@ -1,0 +1,17 @@
+schema_version: "1.0"
+name: work.read_my_tasks
+version: "1.0.0"
+owner: work-intelligence
+tenant_scope: actor_membership
+roles: [ADMIN, MANAGER, EMPLOYEE]
+risk_level: READ_ONLY
+input_contract: work_management_ai.tools.work.read_my_tasks.contracts.ReadMyTasksInput
+output_contract: work_management_ai.tools.work.read_my_tasks.contracts.ReadMyTasksOutput
+timeout_seconds: 5
+max_attempts: 1
+retry_policy: NONE
+idempotency: NOT_APPLICABLE
+audit: SAFE_METADATA
+evidence_output: true
+freshness_output: true
+trace_metadata: [tool_id, duration_ms, result_status, evidence_count]

@@ -1,0 +1,10 @@
+{
+  "question": "What are my current tasks?",
+  "plan": {
+    "question_kind": "MY_TASKS",
+    "skill_reference": "answer_work_question@1",
+    "tool_id": "work.read_my_tasks",
+    "tool_input": {"status": null, "due_from": null, "due_to": null, "limit": 20},
+    "requested_handoff": null
+  }
+}

@@ -1,0 +1,37 @@
+schema_version: "1.0"
+agent:
+  id: work_intelligence
+  name: Work Intelligence Agent
+  version: "1.0.0"
+  owner: work-intelligence
+  activation_phase: 2
+capabilities:
+  - work.answer_question
+  - work.read_project
+  - work.read_task
+  - work.read_my_tasks
+contracts:
+  input: work_management_ai.runtime.contracts.AgentHandoff
+  output: work_management_ai.runtime.contracts.AgentResult
+  handoff: work_management_ai.runtime.contracts.AgentHandoff
+permissions:
+  roles: [ADMIN, MANAGER, EMPLOYEE]
+  tenant_scope: actor_membership
+  risk_ceiling: READ_ONLY
+runtime:
+  workflow: work_intelligence.v1
+  max_iterations: 6
+  max_tool_calls: 8
+  max_handoffs: 0
+  max_replans: 0
+  timeout_seconds: 60
+  checkpoint: durable
+  model_policy: structured_grounded_answer
+allowed_skills: [answer_work_question@1]
+allowed_tools: [work.read_my_tasks@1, work.read_resource@1]
+approval:
+  produced_writes: NEVER
+  can_self_approve: false
+fallback:
+  strategy: SAFE_MANUAL_READ_FALLBACK
+evaluators: [work_grounding@1]

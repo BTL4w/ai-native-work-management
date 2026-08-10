@@ -98,6 +98,10 @@ class AgentRegistry:
                 > _RISK_ORDER[manifest.permissions.risk_ceiling]
             ):
                 raise AgentRegistryError("AGENT_TOOL_RISK_INCOMPATIBLE")
+            if tool.manifest.roles and not set(manifest.permissions.roles).issubset(
+                tool.manifest.roles
+            ):
+                raise AgentRegistryError("AGENT_TOOL_ROLE_INCOMPATIBLE")
 
         key = (manifest.agent.id, manifest.agent.version)
         registered = RegisteredAgent(

@@ -139,6 +139,10 @@ class SkillManifest(_ManifestModel):
     input_contract: str
     output_contract: str
     evaluators: tuple[str, ...] = Field(min_length=1)
+    triggers: tuple[str, ...] = ()
+    required_context: tuple[str, ...] = ()
+    approval: Literal["NONE", "ALWAYS", "POLICY"] = "NONE"
+    stop_conditions: tuple[str, ...] = ()
 
     @field_validator("version")
     @classmethod
@@ -162,13 +166,20 @@ class ToolManifest(_ManifestModel):
     version: str
     owner: str = Field(min_length=1, max_length=100)
     tenant_scope: Literal["actor_membership"]
+    roles: tuple[Literal["ADMIN", "MANAGER", "EMPLOYEE"], ...] = ()
     risk_level: RiskLevel
     input_contract: str
     output_contract: str
     timeout_seconds: int = Field(ge=1, le=180)
     max_attempts: int = Field(ge=1, le=3)
+    retry_policy: Literal["NONE", "IDEMPOTENT"] = "NONE"
     idempotency: Literal["NOT_APPLICABLE", "OPTIONAL", "REQUIRED"]
     audit: Literal["NONE", "SAFE_METADATA", "REQUIRED"]
+    evidence_output: bool = False
+    freshness_output: bool = False
+    trace_metadata: tuple[
+        Literal["tool_id", "duration_ms", "result_status", "evidence_count"], ...
+    ] = ()
 
     @field_validator("version")
     @classmethod
