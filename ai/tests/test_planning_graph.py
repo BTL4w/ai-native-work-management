@@ -10,6 +10,7 @@ import pytest
 
 from work_management_ai.model_gateway.mock import MockModelGateway
 from work_management_ai.prompts.planning import build_planning_messages
+from work_management_ai.schemas.planning import PlanningModelOutput
 from work_management_ai.tracing import TraceMetadata
 from work_management_ai.workflows.planning.context import (
     PermittedPlanningContext,
@@ -21,8 +22,13 @@ from work_management_ai.workflows.planning.ports import (
     PlanningCheckpoint,
     PlanningProgressEvent,
     PlanningProposalDraft,
+    PlanningRevisionBase,
 )
-from work_management_ai.workflows.planning.state import PlanningLocale, create_planning_state
+from work_management_ai.workflows.planning.state import (
+    PlanningLocale,
+    PlanningRevisionError,
+    create_planning_state,
+)
 
 RUN_ID = UUID("00000000-0000-0000-0000-000000000010")
 ORG_ID = UUID("00000000-0000-0000-0000-000000000020")
@@ -332,3 +338,77 @@ async def test_trace_failure_does_not_fail_business_workflow() -> None:
 
     assert result.interrupt is not None
     assert result.interrupt.kind == "MANAGER_DECISION_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_generate_revision_has_no_persistence_side_effect() -> None:
+    base_data = load_fixture("en")
+    base_tasks = cast(list[dict[str, object]], base_data["tasks"])
+    base_tasks[0]["assignee_membership_id"] = str(ACTOR_ID)
+    base_content = PlanningModelOutput.model_validate(base_data)
+    revision_fixture = cast(
+        dict[str, object],
+        json.loads((FIXTURE_DIR / "planning_revision_en.json").read_text()),
+    )
+    graph, _, persistence = graph_with({"planning.en.proposal_revision": revision_fixture})
+    context = PermittedPlanningContext(
+        reference_ids=("proposal:version:1",),
+        active_membership_ids=frozenset({ACTOR_ID}),
+        required_questions=(),
+        structured_facts={"proposal_version": 1},
+    )
+
+    result = await graph.generate_revision(
+        base=PlanningRevisionBase(
+            proposal_id=PROPOSAL_ID,
+            version=1,
+            locale="en",
+            content=base_content,
+        ),
+        instruction="Move the final milestone by one week",
+        context=context,
+    )
+
+    assert result.base_version == 1
+    assert persistence.checkpoints == {}
+    assert persistence.progress == {}
+    assert persistence.proposals == {}
+    assert result.content.project.title == base_content.project.title
+    assert result.content.tasks[0].ref == "t1"
+    assert result.content.tasks[0].assignee_membership_id == ACTOR_ID
+    assert result.content.tasks[1].assignee_membership_id is None
+
+
+@pytest.mark.asyncio
+async def test_generate_revision_rejects_deterministic_invariant_failure() -> None:
+    base_content = PlanningModelOutput.model_validate(load_fixture("en"))
+    revision_fixture = cast(
+        dict[str, object],
+        json.loads((FIXTURE_DIR / "planning_revision_en.json").read_text()),
+    )
+    revision_content = cast(dict[str, object], revision_fixture["content"])
+    dependencies = cast(list[dict[str, object]], revision_content["dependencies"])
+    dependencies.append({"predecessor_ref": "t2", "successor_ref": "t1"})
+    graph, _, persistence = graph_with({"planning.en.proposal_revision": revision_fixture})
+    context = PermittedPlanningContext(
+        reference_ids=("proposal:version:1",),
+        active_membership_ids=frozenset(),
+        required_questions=(),
+        structured_facts={"proposal_version": 1},
+    )
+
+    with pytest.raises(PlanningRevisionError, match="DEPENDENCY_CYCLE"):
+        await graph.generate_revision(
+            base=PlanningRevisionBase(
+                proposal_id=PROPOSAL_ID,
+                version=1,
+                locale="en",
+                content=base_content,
+            ),
+            instruction="Create a dependency cycle",
+            context=context,
+        )
+
+    assert persistence.checkpoints == {}
+    assert persistence.progress == {}
+    assert persistence.proposals == {}

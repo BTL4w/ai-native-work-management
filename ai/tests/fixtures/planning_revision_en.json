@@ -1,0 +1,51 @@
+{
+  "content": {
+    "project": {
+      "title": "Customer conference",
+      "description": "Conference plan for 300 customers",
+      "start_date": "2026-08-10",
+      "due_date": "2026-10-07"
+    },
+    "goal": {
+      "title": "Improve customer engagement",
+      "description": null,
+      "expected_outcomes": ["Three hundred customers attend the conference"],
+      "target_date": "2026-10-07"
+    },
+    "milestones": [
+      {
+        "ref": "m1",
+        "title": "Venue confirmed",
+        "description": null,
+        "due_date": "2026-09-08"
+      }
+    ],
+    "tasks": [
+      {
+        "ref": "t1",
+        "milestone_ref": "m1",
+        "title": "Sign venue agreement",
+        "description": null,
+        "due_date": "2026-09-01",
+        "assignee_membership_id": "00000000-0000-0000-0000-000000000999",
+        "acceptance_criteria": ["The venue agreement is signed"]
+      },
+      {
+        "ref": "t2",
+        "milestone_ref": "m1",
+        "title": "Confirm catering",
+        "description": null,
+        "due_date": "2026-09-02",
+        "assignee_membership_id": "00000000-0000-0000-0000-000000000999",
+        "acceptance_criteria": ["The catering agreement is signed"]
+      }
+    ],
+    "dependencies": [
+      {"predecessor_ref": "t1", "successor_ref": "t2"}
+    ],
+    "assumptions": [
+      {"description": "The conference is in person", "source": "manager_input"}
+    ]
+  },
+  "change_summary": "Moved the final milestone by one week and added catering work."
+}

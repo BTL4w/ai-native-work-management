@@ -1,0 +1,17 @@
+schema_version: "1.0"
+name: planning.manage_run
+version: "1.0.0"
+owner: planning-agent
+tenant_scope: actor_membership
+roles: [ADMIN, MANAGER]
+risk_level: PROPOSAL_ONLY
+input_contract: work_management_ai.tools.planning.manage_run.contracts.PlanningRunToolInput
+output_contract: work_management_ai.tools.planning.manage_run.contracts.PlanningRunToolOutput
+timeout_seconds: 10
+max_attempts: 3
+retry_policy: IDEMPOTENT
+idempotency: REQUIRED
+audit: REQUIRED
+evidence_output: true
+freshness_output: true
+trace_metadata: [tool_id, duration_ms, result_status, evidence_count]

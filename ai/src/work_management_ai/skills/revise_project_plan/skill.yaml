@@ -1,0 +1,15 @@
+schema_version: "1.0"
+name: revise_project_plan
+version: "1.0.0"
+owner: planning-agent
+description: Revise one exact immutable Planning proposal version for Manager review.
+runnable_by_agents: [planning]
+allowed_tools: [planning.manage_run@1]
+risk_level: PROPOSAL_ONLY
+input_contract: work_management_ai.skills.revise_project_plan.contracts.ReviseProjectPlanInput
+output_contract: work_management_ai.skills.revise_project_plan.contracts.ReviseProjectPlanOutput
+evaluators: [planning_schema@1, planning_invariants@1, planning_grounding@1]
+triggers: ["vi:chỉnh proposal kế hoạch", "en:revise this planning proposal"]
+required_context: [authenticated_actor, tenant_scope, context_references]
+approval: ALWAYS
+stop_conditions: [stale_base_version, verifier_failure, manager_decision_required, tool_failure]

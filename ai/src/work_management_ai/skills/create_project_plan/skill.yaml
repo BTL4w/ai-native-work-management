@@ -1,0 +1,15 @@
+schema_version: "1.0"
+name: create_project_plan
+version: "1.0.0"
+owner: planning-agent
+description: Create, resume, or explain an immutable Manager-reviewed Planning proposal.
+runnable_by_agents: [planning]
+allowed_tools: [planning.manage_run@1]
+risk_level: PROPOSAL_ONLY
+input_contract: work_management_ai.skills.create_project_plan.contracts.CreateProjectPlanInput
+output_contract: work_management_ai.skills.create_project_plan.contracts.CreateProjectPlanOutput
+evaluators: [planning_schema@1, planning_invariants@1, planning_grounding@1]
+triggers: ["vi:lập kế hoạch project", "en:create a project plan"]
+required_context: [authenticated_actor, tenant_scope, context_references]
+approval: ALWAYS
+stop_conditions: [manager_input_required, manager_decision_required, verifier_failure, tool_failure]

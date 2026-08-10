@@ -11,14 +11,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt, interrupt
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from work_management_ai.model_gateway.contracts import (
     ModelGateway,
     StructuredModelRequest,
 )
 from work_management_ai.model_gateway.errors import ModelGatewayError, ModelInvalidOutputError
-from work_management_ai.prompts.planning import build_planning_messages
+from work_management_ai.prompts.planning import build_planning_messages, build_revision_messages
 from work_management_ai.schemas.planning import PlanningModelOutput
 from work_management_ai.tracing import NoopTracePort, TraceMetadata, TracePort, record_safely
 from work_management_ai.workflows.planning.context import (
@@ -32,8 +32,15 @@ from work_management_ai.workflows.planning.ports import (
     PlanningPersistencePort,
     PlanningProgressEvent,
     PlanningProposalDraft,
+    PlanningRevisionBase,
+    PlanningRevisionDraft,
 )
-from work_management_ai.workflows.planning.state import PlanningState, checkpoint_state
+from work_management_ai.workflows.planning.state import (
+    PlanningRevisionError,
+    PlanningState,
+    checkpoint_state,
+    merge_revision_assignees,
+)
 from work_management_ai.workflows.planning.verifier import (
     PlanningValidationItem,
     PlanningValidationResult,
@@ -65,6 +72,13 @@ class PlanningInterrupt:
 class PlanningGraphResult:
     state: PlanningState
     interrupt: PlanningInterrupt | None
+
+
+class _RevisionModelOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    content: PlanningModelOutput
+    change_summary: str = Field(min_length=1, max_length=4_000)
 
 
 class PlanningGraph:
@@ -132,6 +146,48 @@ class PlanningGraph:
         )
         raw = await self._compiled.ainvoke(None, config=config)
         return self._result(raw)
+
+    async def generate_revision(
+        self,
+        *,
+        base: PlanningRevisionBase,
+        instruction: str,
+        context: PermittedPlanningContext,
+    ) -> PlanningRevisionDraft:
+        """Generate and verify a revision without invoking any persistence port."""
+
+        normalized_instruction = instruction.strip()
+        if not normalized_instruction or len(normalized_instruction) > 8_000:
+            raise PlanningRevisionError("REVISION_INSTRUCTION_INVALID")
+        request = StructuredModelRequest(
+            invocation_key=f"planning.{base.locale}.proposal_revision",
+            messages=build_revision_messages(
+                locale=base.locale,
+                base=base.content,
+                instruction=normalized_instruction,
+                structured_context=context.structured_facts,
+            ),
+            output_schema=_RevisionModelOutput,
+            timeout_seconds=120,
+        )
+        response = await self._model_gateway.generate_structured(request)
+        merged = merge_revision_assignees(base.content, response.parsed.content)
+        validation = verify_plan(
+            merged,
+            PlanningVerificationContext(
+                active_membership_ids=context.active_membership_ids,
+            ),
+        )
+        invalid = tuple(item for item in validation.errors if item.code != "ASSIGNEE_REQUIRED")
+        if invalid:
+            raise PlanningRevisionError(invalid[0].code)
+        return PlanningRevisionDraft(
+            base_proposal_id=base.proposal_id,
+            base_version=base.version,
+            content=merged,
+            change_summary=response.parsed.change_summary,
+            model_reference=response.model_ref,
+        )
 
     def _compile(self) -> CompiledStateGraph[PlanningState, None, PlanningState, PlanningState]:
         builder = StateGraph(PlanningState)

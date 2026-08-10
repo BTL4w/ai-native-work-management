@@ -1,0 +1,51 @@
+{
+  "content": {
+    "project": {
+      "title": "Hội thảo khách hàng",
+      "description": "Kế hoạch hội thảo cho 300 khách",
+      "start_date": "2026-08-10",
+      "due_date": "2026-10-07"
+    },
+    "goal": {
+      "title": "Tăng tương tác với khách hàng",
+      "description": null,
+      "expected_outcomes": ["300 khách tham dự hội thảo"],
+      "target_date": "2026-10-07"
+    },
+    "milestones": [
+      {
+        "ref": "m1",
+        "title": "Xác nhận địa điểm",
+        "description": null,
+        "due_date": "2026-09-08"
+      }
+    ],
+    "tasks": [
+      {
+        "ref": "t1",
+        "milestone_ref": "m1",
+        "title": "Ký hợp đồng địa điểm",
+        "description": null,
+        "due_date": "2026-09-01",
+        "assignee_membership_id": "00000000-0000-0000-0000-000000000999",
+        "acceptance_criteria": ["Hợp đồng địa điểm đã được ký"]
+      },
+      {
+        "ref": "t2",
+        "milestone_ref": "m1",
+        "title": "Xác nhận dịch vụ ăn uống",
+        "description": null,
+        "due_date": "2026-09-02",
+        "assignee_membership_id": "00000000-0000-0000-0000-000000000999",
+        "acceptance_criteria": ["Hợp đồng ăn uống đã được ký"]
+      }
+    ],
+    "dependencies": [
+      {"predecessor_ref": "t1", "successor_ref": "t2"}
+    ],
+    "assumptions": [
+      {"description": "Hội thảo tổ chức trực tiếp", "source": "manager_input"}
+    ]
+  },
+  "change_summary": "Dời mốc cuối một tuần và thêm công việc ăn uống."
+}

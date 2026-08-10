@@ -4,8 +4,10 @@ import json
 from typing import Literal
 
 from work_management_ai.model_gateway.contracts import ModelMessage
+from work_management_ai.schemas.planning import PlanningModelOutput
 
 PLANNING_PROMPT_VERSION = "1.0.0"
+PLANNING_REVISION_PROMPT_VERSION = "planning-revision.v1"
 
 _TRUSTED_INSTRUCTIONS = {
     "en": (
@@ -62,4 +64,38 @@ def build_planning_messages(
         ),
         ModelMessage(role="system", content=f"[TRUSTED_STRUCTURED_CONTEXT]\n{trusted_context}"),
         ModelMessage(role="user", content=f"[UNTRUSTED_USER_INPUT]\n{untrusted_input}"),
+    )
+
+
+def build_revision_messages(
+    *,
+    locale: Literal["vi", "en"],
+    base: PlanningModelOutput,
+    instruction: str,
+    structured_context: dict[str, object],
+) -> tuple[ModelMessage, ...]:
+    """Build an exact-base revision request without granting persistence authority."""
+
+    trusted = json.dumps(
+        {
+            "base_proposal": base.model_dump(mode="json"),
+            "permitted_context": structured_context,
+            "schema_version": "planning-proposal.v1",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    untrusted = json.dumps({"manager_instruction": instruction}, ensure_ascii=False)
+    return (
+        ModelMessage(
+            role="system",
+            content=(
+                f"[TRUSTED_INSTRUCTIONS]\n{_TRUSTED_INSTRUCTIONS[locale]}\n"
+                "Revise only the exact supplied proposal. Preserve stable refs. "
+                "Do not persist, approve, apply, or create business records."
+            ),
+        ),
+        ModelMessage(role="system", content=f"[TRUSTED_REVISION_CONTEXT]\n{trusted}"),
+        ModelMessage(role="user", content=f"[UNTRUSTED_MANAGER_INSTRUCTION]\n{untrusted}"),
     )

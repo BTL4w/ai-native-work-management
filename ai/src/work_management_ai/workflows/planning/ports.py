@@ -1,7 +1,7 @@
 """Persistence contracts owned by the planning workflow."""
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from work_management_ai.schemas.planning import PlanningModelOutput
@@ -47,6 +47,23 @@ class PlanningProposalDraft:
 class PersistedProposalReference:
     proposal_id: UUID
     version: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningRevisionBase:
+    proposal_id: UUID
+    version: int
+    locale: Literal["vi", "en"]
+    content: PlanningModelOutput
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningRevisionDraft:
+    base_proposal_id: UUID
+    base_version: int
+    content: PlanningModelOutput
+    change_summary: str
+    model_reference: str
 
 
 class PlanningPersistencePort(Protocol):
