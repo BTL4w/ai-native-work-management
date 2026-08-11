@@ -3,12 +3,19 @@
 from sqlalchemy import ForeignKeyConstraint, UniqueConstraint
 
 from app.core.database import Base
+from app.modules.assistant.adapters import database_models as assistant_models
 from app.modules.audit.adapters import database_models as audit_models
 from app.modules.identity.adapters import database_models as identity_models
 from app.modules.organization.adapters import database_models as organization_models
 from app.modules.work.adapters import database_models as work_models
 
-_MODEL_MODULES = (audit_models, identity_models, organization_models, work_models)
+_MODEL_MODULES = (
+    assistant_models,
+    audit_models,
+    identity_models,
+    organization_models,
+    work_models,
+)
 
 
 def test_active_phase_tables_are_registered() -> None:
@@ -36,6 +43,19 @@ def test_active_phase_tables_are_registered() -> None:
         "model_invocations",
         "context_references",
         "outbox_events",
+        "assistant_conversations",
+        "assistant_messages",
+        "assistant_turns",
+        "orchestration_runs",
+        "agent_runs",
+        "agent_handoffs",
+        "agent_checkpoints",
+        "agent_context_references",
+        "skill_invocations",
+        "tool_invocations",
+        "agent_model_invocations",
+        "assistant_events",
+        "assistant_jobs",
     }
 
 
