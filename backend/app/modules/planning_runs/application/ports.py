@@ -65,6 +65,16 @@ class PlanningRunRepository(Protocol):
         self, **values: object
     ) -> "ProposalMutationResult | None": ...
 
+    async def request_ai_revision_mutation(
+        self, **values: object
+    ) -> "ProposalRevisionRequestResult": ...
+
+    async def get_ai_revision_preflight(
+        self, **values: object
+    ) -> "ProposalAIRevisionPreflight | None": ...
+
+    async def finalize_ai_revision_mutation(self, **values: object) -> ProposalVersion | None: ...
+
     async def find_invalid_active_membership_ids(
         self,
         *,
@@ -335,6 +345,25 @@ class ProposalMutationResult:
     proposal: Proposal
     version: ProposalVersion
     replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalRevisionRequestResult:
+    proposal_id: UUID
+    base_version: int
+    workflow_run_id: UUID
+    revision_job_id: UUID
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalAIRevisionPreflight:
+    run: WorkflowRun
+    proposal: Proposal
+    version: ProposalVersion
+    approval: Approval
+    active_membership_ids: frozenset[UUID]
+    locale: str
 
 
 @dataclass(frozen=True, slots=True)

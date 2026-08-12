@@ -34,7 +34,9 @@ from app.modules.planning_runs.application.approval_ports import (
 from app.modules.planning_runs.application.ports import (
     PlanningRunRepository,
     PlanningRuntimePort,
+    ProposalAIRevisionPreflight,
     ProposalMutationResult,
+    ProposalRevisionRequestResult,
     WorkflowRunMutationResult,
 )
 from app.modules.planning_runs.domain.models import (
@@ -1423,6 +1425,323 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         if proposal is None or version is None:
             raise PlanningRunDomainError("idempotency replay resource is unavailable")
         return ProposalMutationResult(proposal=proposal, version=version, replayed=True)
+
+    async def request_ai_revision_mutation(self, **values: object) -> ProposalRevisionRequestResult:
+        actor = values["actor"]
+        proposal_id = values["proposal_id"]
+        job = values["job"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(proposal_id, UUID)
+        assert isinstance(job, WorkflowJob)
+        expected_version_value = values["expected_version"]
+        assert isinstance(expected_version_value, int)
+        expected_version = expected_version_value
+        request_id = str(values["request_id"])
+        idempotency_key = str(values["idempotency_key"])
+        request_fingerprint = str(values["request_fingerprint"])
+        operation = f"proposal.ai_revise:{proposal_id}"
+        replay = await self._find_replay(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        if replay is not None:
+            return ProposalRevisionRequestResult(
+                proposal_id=UUID(str(replay["proposal_id"])),
+                base_version=int(replay["base_version"]),
+                workflow_run_id=UUID(str(replay["workflow_run_id"])),
+                revision_job_id=UUID(str(replay["revision_job_id"])),
+                replayed=True,
+            )
+        proposal = await self._session.scalar(
+            select(ProposalModel)
+            .where(
+                ProposalModel.organization_id == actor.organization_id,
+                ProposalModel.id == proposal_id,
+            )
+            .with_for_update()
+        )
+        if proposal is None:
+            raise PlanningRunNotFoundError
+        if proposal.current_version_number != expected_version:
+            raise ResourceVersionMismatchError(proposal.current_version_number)
+        if (
+            proposal.status != ProposalStatus.READY_FOR_DECISION.value
+            or proposal.approval_id is None
+        ):
+            raise ApprovalStateConflictError
+        approval = await self._session.scalar(
+            select(ApprovalModel)
+            .where(
+                ApprovalModel.organization_id == actor.organization_id,
+                ApprovalModel.id == proposal.approval_id,
+                ApprovalModel.proposal_id == proposal.id,
+                ApprovalModel.proposal_version_number == expected_version,
+                ApprovalModel.status == ApprovalStatus.PENDING.value,
+            )
+            .with_for_update()
+        )
+        version = await self._session.scalar(
+            select(ProposalVersionModel).where(
+                ProposalVersionModel.organization_id == actor.organization_id,
+                ProposalVersionModel.proposal_id == proposal.id,
+                ProposalVersionModel.version_number == expected_version,
+            )
+        )
+        if approval is None or version is None:
+            raise ApprovalStateConflictError
+        now = datetime.now(UTC)
+        record = self._new_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            now=now,
+        )
+        self._session.add(
+            WorkflowJobModel(
+                id=job.id,
+                organization_id=actor.organization_id,
+                workflow_run_id=proposal.workflow_run_id,
+                job_type=job.job_type,
+                status=job.status.value,
+                payload=job.payload,
+                attempt_count=job.attempt_count,
+                max_attempts=job.max_attempts,
+                available_at=job.available_at,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+        body: dict[str, object] = {
+            "proposal_id": str(proposal.id),
+            "base_version": expected_version,
+            "workflow_run_id": str(proposal.workflow_run_id),
+            "revision_job_id": str(job.id),
+        }
+        self._audit_success(
+            actor=actor,
+            action="proposal.ai_revision_requested",
+            resource_type="proposal",
+            resource_id=proposal.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            after_data=body,
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 202
+        record.response_body = body
+        await self._session.flush()
+        return ProposalRevisionRequestResult(
+            proposal_id=proposal.id,
+            base_version=expected_version,
+            workflow_run_id=proposal.workflow_run_id,
+            revision_job_id=job.id,
+            replayed=False,
+        )
+
+    async def get_ai_revision_preflight(
+        self, **values: object
+    ) -> ProposalAIRevisionPreflight | None:
+        actor = values["actor"]
+        proposal_id = values["proposal_id"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(proposal_id, UUID)
+        base_version_value = values["base_version"]
+        assert isinstance(base_version_value, int)
+        base_version = base_version_value
+        proposal = await self.get_proposal(actor=actor, proposal_id=proposal_id)
+        if (
+            proposal is None
+            or proposal.status is not ProposalStatus.READY_FOR_DECISION
+            or proposal.current_version_number != base_version
+            or proposal.approval_id is None
+        ):
+            return None
+        version = await self.get_proposal_version(
+            actor=actor,
+            proposal_id=proposal_id,
+            version_number=base_version,
+        )
+        approval = await self.get_approval(actor=actor, approval_id=proposal.approval_id)
+        run = await self.get_workflow_run(actor=actor, run_id=proposal.workflow_run_id)
+        if (
+            version is None
+            or approval is None
+            or run is None
+            or approval.status is not ApprovalStatus.PENDING
+            or approval.proposal_version_number != base_version
+        ):
+            return None
+        try:
+            await self._verify_source_freshness(
+                actor=actor,
+                snapshot=version.source_reference_snapshot,
+            )
+        except ProposalStaleError:
+            return None
+        active = await self.list_active_membership_ids(organization_id=actor.organization_id)
+        checkpoint = await self.get_latest_checkpoint(actor=actor, run_id=run.id)
+        locale = "en"
+        if checkpoint is not None and checkpoint.state.get("locale") in {"vi", "en"}:
+            locale = str(checkpoint.state["locale"])
+        return ProposalAIRevisionPreflight(
+            run=run,
+            proposal=proposal,
+            version=version,
+            approval=approval,
+            active_membership_ids=active,
+            locale=locale,
+        )
+
+    async def finalize_ai_revision_mutation(self, **values: object) -> ProposalVersion | None:
+        actor = values["actor"]
+        proposal_id = values["proposal_id"]
+        content = values["content"]
+        validation_result = values["validation_result"]
+        assert isinstance(actor, AuthenticatedActor)
+        assert isinstance(proposal_id, UUID)
+        assert isinstance(content, dict)
+        assert isinstance(validation_result, dict)
+        typed_content = cast(dict[str, object], content)
+        typed_validation = cast(dict[str, object], validation_result)
+        base_version_value = values["base_version"]
+        assert isinstance(base_version_value, int)
+        base_version = base_version_value
+        if actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
+            return None
+        proposal = await self._session.scalar(
+            select(ProposalModel)
+            .where(
+                ProposalModel.organization_id == actor.organization_id,
+                ProposalModel.id == proposal_id,
+                ProposalModel.current_version_number == base_version,
+                ProposalModel.status == ProposalStatus.READY_FOR_DECISION.value,
+            )
+            .with_for_update()
+        )
+        if proposal is None or proposal.approval_id is None:
+            return None
+        base = await self._session.scalar(
+            select(ProposalVersionModel).where(
+                ProposalVersionModel.organization_id == actor.organization_id,
+                ProposalVersionModel.proposal_id == proposal_id,
+                ProposalVersionModel.version_number == base_version,
+            )
+        )
+        approval = await self._session.scalar(
+            select(ApprovalModel)
+            .where(
+                ApprovalModel.organization_id == actor.organization_id,
+                ApprovalModel.id == proposal.approval_id,
+                ApprovalModel.proposal_id == proposal_id,
+                ApprovalModel.proposal_version_number == base_version,
+                ApprovalModel.status == ApprovalStatus.PENDING.value,
+            )
+            .with_for_update()
+        )
+        if base is None or approval is None:
+            return None
+        try:
+            await self._verify_source_freshness(
+                actor=actor,
+                snapshot=base.source_reference_snapshot,
+            )
+        except ProposalStaleError:
+            return None
+        assignees = {
+            UUID(str(task["assignee_membership_id"]))
+            for task in _items(typed_content.get("tasks"), "tasks")
+            if task.get("assignee_membership_id") is not None
+        }
+        if await self.find_invalid_active_membership_ids(
+            actor=actor,
+            membership_ids=assignees,
+        ):
+            return None
+        new_version = ProposalVersion(
+            id=uuid4(),
+            organization_id=actor.organization_id,
+            proposal_id=proposal_id,
+            version_number=base_version + 1,
+            created_by_membership_id=actor.membership_id,
+            content=cast(dict[str, Any], typed_content),
+            assumptions=list(base.assumptions),
+            change_summary=str(values["change_summary"])[:4_000],
+            field_provenance={"default": "AI_PROPOSED"},
+            validation_result=cast(dict[str, Any], typed_validation),
+            source_reference_snapshot=list(base.source_reference_snapshot),
+            workflow_version=base.workflow_version,
+            prompt_version=base.prompt_version,
+            schema_version=base.schema_version,
+            model_reference=str(values["model_reference"])[:255],
+            verifier_version=base.verifier_version,
+            creator_type="AI_SYSTEM",
+        )
+        await self.append_proposal_version(version=new_version)
+        now = datetime.now(UTC)
+        approval.status = ApprovalStatus.SUPERSEDED.value
+        approval.version += 1
+        approval.updated_at = now
+        proposal.status = ProposalStatus.DRAFT.value
+        proposal.current_version_number = new_version.version_number
+        proposal.superseded_approval_id = proposal.approval_id
+        proposal.approval_id = None
+        proposal.version += 1
+        proposal.updated_at = now
+        revalidate = WorkflowJob(
+            id=uuid4(),
+            organization_id=actor.organization_id,
+            workflow_run_id=proposal.workflow_run_id,
+            job_type="proposal.revalidate",
+            status=WorkflowJobStatus.QUEUED,
+            payload={
+                "instruction": "REVALIDATE",
+                "proposal_id": str(proposal_id),
+                "proposal_version": new_version.version_number,
+            },
+        )
+        self._session.add(
+            WorkflowJobModel(
+                id=revalidate.id,
+                organization_id=revalidate.organization_id,
+                workflow_run_id=revalidate.workflow_run_id,
+                job_type=revalidate.job_type,
+                status=revalidate.status.value,
+                payload=revalidate.payload,
+                attempt_count=0,
+                max_attempts=revalidate.max_attempts,
+                available_at=revalidate.available_at,
+                created_at=revalidate.created_at,
+                updated_at=revalidate.updated_at,
+            )
+        )
+        self._audit_success(
+            actor=actor,
+            action="proposal.ai_revised",
+            resource_type="proposal",
+            resource_id=proposal_id,
+            request_id=str(values["request_id"]),
+            idempotency_key=str(values["idempotency_key"]),
+            after_data={
+                "base_version": base_version,
+                "version": new_version.version_number,
+                "revalidation_job_id": str(revalidate.id),
+            },
+        )
+        await self.append_event(
+            actor=actor,
+            run_id=proposal.workflow_run_id,
+            event_type="proposal.superseded",
+            public_payload={
+                "proposal_id": str(proposal_id),
+                "base_version": base_version,
+                "current_version": new_version.version_number,
+            },
+        )
+        await self._session.flush()
+        return new_version
 
     async def update_workflow_run(
         self,

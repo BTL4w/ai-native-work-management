@@ -2,9 +2,10 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.assistant.adapters.database_models import (
@@ -24,6 +25,7 @@ from app.modules.assistant.application.ports import (
     AssistantConversationMutationResult,
     AssistantConversationSnapshot,
     AssistantTurnMutationResult,
+    LinkedWorkflowEvent,
 )
 from app.modules.assistant.domain.models import (
     AgentCheckpoint,
@@ -49,6 +51,8 @@ from app.modules.assistant.domain.models import (
 from app.modules.audit.adapters.database_models import AuditEventModel
 from app.modules.audit.domain.events import AuditOutcome
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.planning_runs.adapters.database_models import WorkflowEventModel
+from app.modules.planning_runs.domain.models import WorkflowEvent
 from app.modules.work.adapters.database_models import IdempotencyRecordModel, IdempotencyState
 
 _IDEMPOTENCY_TTL = timedelta(hours=24)
@@ -883,6 +887,261 @@ class PostgreSQLAssistantRepository:
             )
         )
         return _agent_run(model) if model is not None else None
+
+    async def get_agent_run_turn_context(
+        self, *, organization_id: UUID, run_id: UUID
+    ) -> tuple[AgentRun, UUID] | None:
+        row = (
+            await self._session.execute(
+                select(AgentRunModel, OrchestrationRunModel.turn_id)
+                .join(
+                    OrchestrationRunModel,
+                    (OrchestrationRunModel.organization_id == AgentRunModel.organization_id)
+                    & (OrchestrationRunModel.id == AgentRunModel.orchestration_run_id),
+                )
+                .where(
+                    AgentRunModel.organization_id == organization_id,
+                    AgentRunModel.id == run_id,
+                    AgentRunModel.agent_id == "planning",
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return _agent_run(row[0]), row[1]
+
+    async def get_accepted_planning_action(
+        self, *, organization_id: UUID, turn_id: UUID
+    ) -> dict[str, object] | None:
+        blocks = await self._session.scalar(
+            select(AssistantMessageModel.content_blocks)
+            .join(
+                AssistantTurnModel,
+                (AssistantTurnModel.organization_id == AssistantMessageModel.organization_id)
+                & (AssistantTurnModel.user_message_id == AssistantMessageModel.id),
+            )
+            .where(
+                AssistantTurnModel.organization_id == organization_id,
+                AssistantTurnModel.id == turn_id,
+                AssistantMessageModel.organization_id == organization_id,
+                AssistantMessageModel.role == MessageRole.USER.value,
+            )
+        )
+        if blocks is None:
+            return None
+        return next(
+            (
+                cast(dict[str, object], block)
+                for block in blocks
+                if block.get("kind") == "accepted_card_action"
+            ),
+            None,
+        )
+
+    async def link_agent_workflow_run(
+        self, *, organization_id: UUID, agent_run_id: UUID, workflow_run_id: UUID
+    ) -> AgentRun:
+        model = await self._session.scalar(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == organization_id,
+                AgentRunModel.id == agent_run_id,
+                AgentRunModel.agent_id == "planning",
+            )
+            .with_for_update()
+        )
+        if model is None or model.workflow_run_id not in {None, workflow_run_id}:
+            raise AssistantDomainLookupError("AGENT_WORKFLOW_LINK_CONFLICT")
+        model.workflow_run_id = workflow_run_id
+        if model.projected_workflow_sequence is None:
+            model.projected_workflow_sequence = 0
+        model.updated_at = datetime.now(UTC)
+        await self._session.flush()
+        return _agent_run(model)
+
+    async def list_unprojected_workflow_events(
+        self, *, organization_id: UUID, limit: int
+    ) -> tuple[LinkedWorkflowEvent, ...]:
+        rows = (
+            await self._session.execute(
+                select(
+                    AgentRunModel,
+                    OrchestrationRunModel.turn_id,
+                    AssistantTurnModel.conversation_id,
+                    WorkflowEventModel,
+                )
+                .join(
+                    OrchestrationRunModel,
+                    (OrchestrationRunModel.organization_id == AgentRunModel.organization_id)
+                    & (OrchestrationRunModel.id == AgentRunModel.orchestration_run_id),
+                )
+                .join(
+                    AssistantTurnModel,
+                    (AssistantTurnModel.organization_id == OrchestrationRunModel.organization_id)
+                    & (AssistantTurnModel.id == OrchestrationRunModel.turn_id),
+                )
+                .join(
+                    WorkflowEventModel,
+                    (WorkflowEventModel.organization_id == AgentRunModel.organization_id)
+                    & (WorkflowEventModel.workflow_run_id == AgentRunModel.workflow_run_id)
+                    & (
+                        WorkflowEventModel.sequence
+                        > func.coalesce(AgentRunModel.projected_workflow_sequence, 0)
+                    ),
+                )
+                .where(
+                    AgentRunModel.organization_id == organization_id,
+                    AgentRunModel.agent_id == "planning",
+                    AgentRunModel.workflow_run_id.is_not(None),
+                    OrchestrationRunModel.organization_id == organization_id,
+                    AssistantTurnModel.organization_id == organization_id,
+                    WorkflowEventModel.organization_id == organization_id,
+                )
+                .order_by(AgentRunModel.created_at, AgentRunModel.id, WorkflowEventModel.sequence)
+                .limit(limit)
+                .with_for_update(of=AgentRunModel, skip_locked=True)
+            )
+        ).all()
+        return tuple(
+            LinkedWorkflowEvent(
+                agent_run=_agent_run(row[0]),
+                turn_id=row[1],
+                conversation_id=row[2],
+                event=WorkflowEvent(
+                    id=row[3].id,
+                    organization_id=row[3].organization_id,
+                    workflow_run_id=row[3].workflow_run_id,
+                    sequence=row[3].sequence,
+                    event_type=row[3].event_type,
+                    public_payload=row[3].public_payload,
+                    created_at=row[3].created_at,
+                ),
+            )
+            for row in rows
+        )
+
+    async def project_workflow_event(
+        self,
+        *,
+        item: LinkedWorkflowEvent,
+        blocks: tuple[dict[str, object], ...],
+        status: str | None,
+        safe_error_code: str | None,
+    ) -> bool:
+        event = item.event
+        organization_id = item.agent_run.organization_id
+        if (
+            event.organization_id != organization_id
+            or event.workflow_run_id != item.agent_run.workflow_run_id
+        ):
+            return False
+        agent = await self._session.scalar(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == organization_id,
+                AgentRunModel.id == item.agent_run.id,
+                AgentRunModel.workflow_run_id == event.workflow_run_id,
+            )
+            .with_for_update()
+        )
+        if agent is None or (agent.projected_workflow_sequence or 0) >= event.sequence:
+            return False
+        conversation = await self._session.scalar(
+            select(AssistantConversationModel)
+            .where(
+                AssistantConversationModel.organization_id == organization_id,
+                AssistantConversationModel.id == item.conversation_id,
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            return False
+        dedupe_key = f"workflow:{event.workflow_run_id}:{event.sequence}"
+        existing = await self._session.scalar(
+            select(AssistantMessageModel.id).where(
+                AssistantMessageModel.organization_id == organization_id,
+                AssistantMessageModel.conversation_id == item.conversation_id,
+                AssistantMessageModel.dedupe_key == dedupe_key,
+            )
+        )
+        now = datetime.now(UTC)
+        if existing is None:
+            message_id = uuid4()
+            message_sequence = conversation.last_message_sequence + 1
+            assistant_event_sequence = conversation.last_event_sequence + 1
+            self._session.add(
+                AssistantMessageModel(
+                    id=message_id,
+                    organization_id=organization_id,
+                    conversation_id=item.conversation_id,
+                    sequence=message_sequence,
+                    role=MessageRole.ASSISTANT.value,
+                    content_blocks=list(blocks),
+                    created_by_membership_id=None,
+                    turn_id=item.turn_id,
+                    dedupe_key=dedupe_key,
+                    created_at=now,
+                )
+            )
+            self._session.add(
+                AssistantEventModel(
+                    id=uuid4(),
+                    organization_id=organization_id,
+                    conversation_id=item.conversation_id,
+                    sequence=assistant_event_sequence,
+                    event_type="assistant.workflow.projected.v1",
+                    public_payload={
+                        "turn_id": str(item.turn_id),
+                        "agent_run_id": str(item.agent_run.id),
+                        "workflow_run_id": str(event.workflow_run_id),
+                        "workflow_sequence": event.sequence,
+                        "message_id": str(message_id),
+                        "message_sequence": message_sequence,
+                    },
+                    turn_id=item.turn_id,
+                    orchestration_run_id=item.agent_run.orchestration_run_id,
+                    agent_run_id=item.agent_run.id,
+                    source_type="WORKFLOW_EVENT",
+                    source_id=event.workflow_run_id,
+                    source_sequence=event.sequence,
+                    dedupe_key=f"event:{dedupe_key}",
+                    occurred_at=now,
+                )
+            )
+            conversation.last_message_sequence = message_sequence
+            conversation.last_event_sequence = assistant_event_sequence
+            conversation.version += 1
+            conversation.updated_at = now
+        agent.projected_workflow_sequence = event.sequence
+        agent.updated_at = now
+        if status is not None:
+            agent.status = status
+            agent.safe_error_code = safe_error_code
+            if status in {"COMPLETED", "FAILED"}:
+                agent.completed_at = now
+            await self._session.execute(
+                update(OrchestrationRunModel)
+                .where(
+                    OrchestrationRunModel.organization_id == organization_id,
+                    OrchestrationRunModel.id == item.agent_run.orchestration_run_id,
+                )
+                .values(
+                    status=status,
+                    safe_error_code=safe_error_code,
+                    completed_at=now if status in {"COMPLETED", "FAILED"} else None,
+                    updated_at=now,
+                )
+            )
+            await self._session.execute(
+                update(AssistantTurnModel)
+                .where(
+                    AssistantTurnModel.organization_id == organization_id,
+                    AssistantTurnModel.id == item.turn_id,
+                )
+                .values(status=status, safe_error_code=safe_error_code, updated_at=now)
+            )
+        await self._session.flush()
+        return existing is None
 
     async def finish_agent_run(self, *, run: AgentRun) -> None:
         model = await self._session.scalar(

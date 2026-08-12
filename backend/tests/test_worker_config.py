@@ -52,6 +52,7 @@ def test_task_8_worker_registers_planning_and_finalization_handlers() -> None:
         "planning.start",
         "planning.resume",
         "planning.finalize",
+        "proposal.ai_revise",
         "proposal.revalidate",
     }
     assert "approval.apply" not in handlers

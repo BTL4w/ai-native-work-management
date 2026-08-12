@@ -12,8 +12,12 @@ from pydantic import BaseModel
 
 from app.core.config import Settings
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.organization.domain.roles import MembershipRole
 from app.modules.planning_runs.application.job_service import JobHandler
-from app.modules.planning_runs.application.ports import PlanningRunTransaction
+from app.modules.planning_runs.application.ports import (
+    PlanningRuntimePort,
+    PlanningRunTransaction,
+)
 from app.modules.planning_runs.domain.models import (
     ApprovalStatus,
     ModelInvocation,
@@ -47,6 +51,7 @@ from work_management_ai.workflows.planning.ports import (
     PlanningCheckpoint,
     PlanningProgressEvent,
     PlanningProposalDraft,
+    PlanningRevisionBase,
 )
 from work_management_ai.workflows.planning.state import (
     PLANNING_SCHEMA_VERSION,
@@ -154,6 +159,13 @@ def build_model_gateway(settings: Settings) -> ModelGateway:
                 f"planning.{locale}.{mode}": fixture
                 for locale in ("vi", "en")
                 for mode in ("generate", "repair", "revision")
+            }
+            | {
+                f"planning.{locale}.proposal_revision": {
+                    "content": fixture,
+                    "change_summary": "AI revision",
+                }
+                for locale in ("vi", "en")
             }
         )
     return _DisabledModelGateway()
@@ -349,6 +361,22 @@ class _PlanningPersistenceAdapter:
             )
 
 
+class _RevisionOnlyPersistenceAdapter:
+    """Fail closed if the revision-only graph tries any persistence callback."""
+
+    async def save_checkpoint(self, checkpoint: PlanningCheckpoint) -> None:
+        del checkpoint
+        raise RuntimeError("AI_REVISION_PERSISTENCE_FORBIDDEN")
+
+    async def append_progress(self, event: PlanningProgressEvent) -> None:
+        del event
+        raise RuntimeError("AI_REVISION_PERSISTENCE_FORBIDDEN")
+
+    async def persist_proposal(self, draft: PlanningProposalDraft) -> PersistedProposalReference:
+        del draft
+        raise RuntimeError("AI_REVISION_PERSISTENCE_FORBIDDEN")
+
+
 class PlanningJobHandler:
     """Execute only bounded Task 7 start/resume instructions."""
 
@@ -376,7 +404,7 @@ class PlanningJobHandler:
             organization_id=run.organization_id,
             membership_id=run.requested_by_membership_id,
         )
-        if actor is None:
+        if actor is None or actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
             raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
         gateway = WorkflowRecordingModelGateway(
             gateway=build_model_gateway(self._settings),
@@ -475,7 +503,7 @@ class ProposalRevalidationJobHandler:
         actor = await self._actors.resolve(
             organization_id=job.organization_id, membership_id=creator_id
         )
-        if actor is None:
+        if actor is None or actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
             raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
         async with self._transactions(actor) as transaction:
             version = await transaction.repository.get_proposal_version(
@@ -533,6 +561,144 @@ class ProposalRevalidationJobHandler:
                     },
                 )
             )
+            await transaction.commit()
+
+
+class ProposalAIRevisionJobHandler:
+    """Generate outside a transaction, then append once behind locked predicates."""
+
+    def __init__(
+        self,
+        *,
+        transaction_factory: PlanningTransactionFactory,
+        actor_resolver: CurrentActorResolver,
+        graph_factory: Callable[[WorkflowRun], PlanningGraph],
+        runtime: PlanningRuntimePort,
+    ) -> None:
+        self._transactions = transaction_factory
+        self._actors = actor_resolver
+        self._graphs = graph_factory
+        self._runtime = runtime
+
+    async def __call__(self, *, job: WorkflowJob, worker_id: str) -> None:
+        del worker_id
+        try:
+            proposal_id = UUID(str(job.payload["proposal_id"]))
+            base_version = int(job.payload["base_version"])
+            requester_id = UUID(str(job.payload["requester_membership_id"]))
+            instruction = str(job.payload["instruction"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("AI_REVISION_PAYLOAD_INVALID") from error
+        actor = await self._actors.resolve(
+            organization_id=job.organization_id,
+            membership_id=requester_id,
+        )
+        if actor is None or actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
+            raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
+        async with self._transactions(actor) as transaction:
+            preflight = await transaction.repository.get_ai_revision_preflight(
+                actor=actor,
+                proposal_id=proposal_id,
+                base_version=base_version,
+            )
+            await transaction.commit()
+        if preflight is None or preflight.run.id != job.workflow_run_id:
+            return
+        try:
+            context = PermittedPlanningContext(
+                reference_ids=tuple(
+                    str(item.get("reference_id", ""))
+                    for item in preflight.version.source_reference_snapshot
+                ),
+                active_membership_ids=preflight.active_membership_ids,
+                required_questions=(),
+                structured_facts={"proposal_version": base_version},
+            )
+            revision = await self._graphs(preflight.run).generate_revision(
+                base=PlanningRevisionBase(
+                    proposal_id=proposal_id,
+                    version=base_version,
+                    locale=cast(PlanningLocale, preflight.locale),
+                    content=PlanningModelOutput.model_validate(preflight.version.content),
+                ),
+                instruction=instruction,
+                context=context,
+            )
+        except Exception:
+            if job.attempt_count >= job.max_attempts:
+                async with self._transactions(actor) as transaction:
+                    await transaction.repository.append_event(
+                        actor=actor,
+                        run_id=job.workflow_run_id,
+                        event_type="proposal.revision_failed",
+                        public_payload={
+                            "proposal_id": str(proposal_id),
+                            "base_version": base_version,
+                            "safe_error_code": "AI_REVISION_MODEL_FAILED",
+                            "manual_fallback": "PROJECT_TASK_EDITOR",
+                        },
+                    )
+                    await transaction.commit()
+            raise RuntimeError("AI_REVISION_MODEL_FAILED") from None
+
+        current_actor = await self._actors.resolve(
+            organization_id=job.organization_id,
+            membership_id=requester_id,
+        )
+        if current_actor is None or current_actor.role not in {
+            MembershipRole.ADMIN,
+            MembershipRole.MANAGER,
+        }:
+            raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
+        content = cast(dict[str, object], revision.content.model_dump(mode="json"))
+        assignees = {
+            UUID(str(task["assignee_membership_id"]))
+            for task in cast(list[dict[str, object]], content.get("tasks", []))
+            if task.get("assignee_membership_id") is not None
+        }
+        async with self._transactions(current_actor) as transaction:
+            active = await transaction.repository.list_active_membership_ids(
+                organization_id=current_actor.organization_id
+            )
+            if not assignees.issubset(active):
+                await transaction.repository.append_event(
+                    actor=current_actor,
+                    run_id=job.workflow_run_id,
+                    event_type="proposal.revision_stale",
+                    public_payload={
+                        "proposal_id": str(proposal_id),
+                        "base_version": base_version,
+                        "safe_error_code": "ASSIGNEE_NOT_PERMITTED",
+                    },
+                )
+                await transaction.commit()
+                return
+            validation = self._runtime.validate_proposal_deterministically(
+                content,
+                active_membership_ids=active,
+            )
+            appended = await transaction.repository.finalize_ai_revision_mutation(
+                actor=current_actor,
+                proposal_id=proposal_id,
+                base_version=base_version,
+                content=content,
+                change_summary=revision.change_summary,
+                model_reference=revision.model_reference,
+                validation_result=validation,
+                request_id=f"workflow-job:{job.id}",
+                idempotency_key=f"proposal-ai-revise:{job.id}",
+            )
+            if appended is None:
+                await transaction.repository.append_event(
+                    actor=current_actor,
+                    run_id=job.workflow_run_id,
+                    event_type="proposal.revision_stale",
+                    public_payload={
+                        "proposal_id": str(proposal_id),
+                        "base_version": base_version,
+                        "safe_error_code": "PROPOSAL_REVISION_STALE",
+                    },
+                )
             await transaction.commit()
 
 
@@ -657,9 +823,29 @@ def build_planning_job_handlers(
     actor_resolver: CurrentActorResolver,
 ) -> dict[str, JobHandler]:
     planning = PlanningJobHandler(settings, transaction_factory, actor_resolver)
+    runtime = PlanningAIRuntime()
+
+    def revision_graph(run: WorkflowRun) -> PlanningGraph:
+        return PlanningGraph(
+            model_gateway=WorkflowRecordingModelGateway(
+                gateway=build_model_gateway(settings),
+                transaction_factory=transaction_factory,
+                organization_id=run.organization_id,
+                workflow_run_id=run.id,
+            ),
+            context_port=_PlanningContextAdapter(transaction_factory, run),
+            persistence_port=_RevisionOnlyPersistenceAdapter(),
+        )
+
     return {
         "planning.start": planning,
         "planning.resume": planning,
+        "proposal.ai_revise": ProposalAIRevisionJobHandler(
+            transaction_factory=transaction_factory,
+            actor_resolver=actor_resolver,
+            graph_factory=revision_graph,
+            runtime=runtime,
+        ),
         "proposal.revalidate": ProposalRevalidationJobHandler(transaction_factory, actor_resolver),
         "planning.finalize": PlanningFinalizationJobHandler(transaction_factory, actor_resolver),
     }

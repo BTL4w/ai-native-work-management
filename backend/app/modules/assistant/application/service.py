@@ -291,13 +291,22 @@ class AssistantService:
         job_id = uuid4()
         event_id = uuid4()
 
+        content_blocks: tuple[dict[str, Any], ...] = ({"kind": "text", "text": normalized_message},)
+        if card_kind is not None:
+            trusted_action = dict(card_action or {})
+            if if_match_version is not None:
+                trusted_action["expected_version"] = if_match_version
+            content_blocks = (
+                *content_blocks,
+                {"kind": "accepted_card_action", **trusted_action},
+            )
         user_message = AssistantMessage(
             id=message_id,
             organization_id=actor.organization_id,
             conversation_id=conversation_id,
             sequence=1,  # Repository enforces correct sequence via conversation lock
             role=MessageRole.USER,
-            content_blocks=({"kind": "text", "text": normalized_message},),
+            content_blocks=content_blocks,
             created_by_membership_id=actor.membership_id,
             turn_id=turn_id,
             dedupe_key=f"user:{idempotency_key}",

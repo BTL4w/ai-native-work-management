@@ -14,18 +14,20 @@ from app.core.config import get_settings
 from app.modules.assistant.adapters.agent_runtime import (
     AssistantAgentRuntime,
     AssistantTurnExecutor,
-    InactivePlanningToolExecutor,
     build_agent_registry,
     build_execution_engine_factory,
 )
+from app.modules.assistant.adapters.planning_tools import AssistantPlanningToolAdapter
 from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransactionFactory
 from app.modules.assistant.adapters.work_tools import RecordingToolExecutor, WorkToolExecutor
 from app.modules.assistant.application.execution_service import AssistantExecutionService
 from app.modules.assistant.application.job_service import AssistantJobService
+from app.modules.assistant.application.projection_service import AssistantProjectionService
 from app.modules.identity.adapters.auth_repository import SqlAlchemyAuthTransactionFactory
 from app.modules.identity.adapters.current_actor import CurrentActorResolver
 from app.modules.identity.application.current_actor_service import CurrentActorService
 from app.modules.planning_runs.adapters.ai_runtime import (
+    PlanningAIRuntime,
     build_model_gateway,
     build_planning_job_handlers,
 )
@@ -35,6 +37,8 @@ from app.modules.planning_runs.application.outbox_service import (
     OutboxService,
     UnsupportedOutboxPublisher,
 )
+from app.modules.planning_runs.application.proposal_service import ProposalService
+from app.modules.planning_runs.application.run_service import PlanningRunService
 from app.modules.work.adapters.project_repository import SqlAlchemyProjectTransactionFactory
 from app.modules.work.adapters.task_repository import SqlAlchemyTaskTransactionFactory
 from app.modules.work.application.project_service import ProjectService
@@ -59,6 +63,10 @@ class _PlanningRunner(Protocol):
     async def run_once(self, worker_id: str, organization_id: UUID) -> bool: ...
 
 
+class _ProjectionRunner(Protocol):
+    async def project_once(self, *, organization_id: UUID, limit: int = 50) -> int: ...
+
+
 async def process_tenant_once(
     *,
     worker_id: str,
@@ -66,8 +74,9 @@ async def process_tenant_once(
     outbox_service: _OutboxRunner,
     assistant_job_service: _AssistantRunner,
     planning_job_service: _PlanningRunner,
+    projection_service: _ProjectionRunner | None = None,
 ) -> bool:
-    """Process at most one item from each Task-7 queue in fair fixed order."""
+    """Process bounded Task-8 work in fair fixed order."""
     processed = False
     try:
         processed = await outbox_service.dispatch_once(worker_id, organization_id) or processed
@@ -86,6 +95,22 @@ async def process_tenant_once(
         processed = await planning_job_service.run_once(worker_id, organization_id) or processed
     except Exception:
         logger.exception("Error processing Planning jobs for organization %s", organization_id)
+    if projection_service is not None:
+        try:
+            processed = (
+                bool(
+                    await projection_service.project_once(
+                        organization_id=organization_id,
+                        limit=50,
+                    )
+                )
+                or processed
+            )
+        except Exception:
+            logger.exception(
+                "Error projecting linked Planning workflows for organization %s",
+                organization_id,
+            )
     return processed
 
 
@@ -133,6 +158,15 @@ async def _run_worker() -> None:
         lease_seconds=settings.worker_lease_seconds,
     )
     registry, tool_registry = build_agent_registry()
+    planning_runtime = PlanningAIRuntime()
+    planning_run_service = PlanningRunService(
+        transaction_factory=planning_transaction_factory,
+        runtime=planning_runtime,
+    )
+    proposal_service = ProposalService(
+        transaction_factory=planning_transaction_factory,
+        runtime=planning_runtime,
+    )
     work_tool_backend = WorkToolExecutor(
         actor_resolver=actor_resolver,
         tool_registry=tool_registry,
@@ -150,7 +184,12 @@ async def _run_worker() -> None:
     planning_tool_executor = RecordingToolExecutor(
         transaction_factory=assistant_transaction_factory,
         tool_registry=tool_registry,
-        backend=InactivePlanningToolExecutor(),
+        backend=AssistantPlanningToolAdapter(
+            actor_resolver=actor_resolver,
+            assistant_transaction_factory=assistant_transaction_factory,
+            planning_run_service=planning_run_service,
+            proposal_service=proposal_service,
+        ),
     )
     turn_executor = AssistantTurnExecutor(
         transaction_factory=assistant_transaction_factory,
@@ -173,6 +212,9 @@ async def _run_worker() -> None:
         handler=assistant_execution_service.execute,
         organization_scopes=scopes,
         lease_seconds=settings.worker_lease_seconds,
+    )
+    projection_service = AssistantProjectionService(
+        transaction_factory=assistant_transaction_factory
     )
 
     logger.info("Worker %s started", worker_id)
@@ -207,6 +249,7 @@ async def _run_worker() -> None:
                     outbox_service=outbox_service,
                     assistant_job_service=assistant_job_service,
                     planning_job_service=planning_job_service,
+                    projection_service=projection_service,
                 )
                 or processed_any
             )

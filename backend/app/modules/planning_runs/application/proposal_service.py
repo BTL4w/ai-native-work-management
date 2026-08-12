@@ -12,6 +12,7 @@ from app.modules.planning_runs.application.ports import (
     PlanningRuntimePort,
     PlanningRunTransaction,
     ProposalMutationResult,
+    ProposalRevisionRequestResult,
 )
 from app.modules.planning_runs.application.run_service import fingerprint
 from app.modules.planning_runs.domain.models import (
@@ -190,4 +191,74 @@ class ProposalService:
                 idempotency_key=idempotency_key,
                 error=error,
             )
+            raise
+
+    async def request_ai_revision(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        proposal_id: UUID,
+        expected_version: int,
+        instruction: str,
+        request_id: str,
+        idempotency_key: str,
+    ) -> ProposalRevisionRequestResult:
+        """Queue an exact-version AI revision without changing proposal lifecycle."""
+
+        if actor.role not in _WRITE_ROLES:
+            async with self._transaction_factory(actor) as transaction:
+                await transaction.repository.audit_rejection(
+                    actor=actor,
+                    action="proposal.ai_revision_requested",
+                    request_id=request_id,
+                    reason_code="FORBIDDEN",
+                    resource_id=proposal_id,
+                )
+            raise PlanningRunForbiddenError
+        try:
+            normalized = " ".join(instruction.split())
+            if not normalized or len(normalized) > 8_000:
+                raise ValueError("REVISION_INSTRUCTION_INVALID")
+            request_fingerprint = fingerprint(
+                "proposal.ai_revise",
+                {
+                    "proposal_id": str(proposal_id),
+                    "base_version": expected_version,
+                    "instruction": normalized,
+                },
+            )
+            job = WorkflowJob(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                workflow_run_id=uuid4(),
+                job_type="proposal.ai_revise",
+                status=WorkflowJobStatus.QUEUED,
+                payload={
+                    "proposal_id": str(proposal_id),
+                    "base_version": expected_version,
+                    "instruction": normalized,
+                    "requester_membership_id": str(actor.membership_id),
+                    "locale": "en",
+                },
+            )
+            async with self._transaction_factory(actor) as transaction:
+                return await transaction.repository.request_ai_revision_mutation(
+                    actor=actor,
+                    proposal_id=proposal_id,
+                    expected_version=expected_version,
+                    job=job,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+        except (PlanningRunDomainError, ValueError) as error:
+            async with self._transaction_factory(actor) as transaction:
+                await transaction.repository.audit_rejection(
+                    actor=actor,
+                    action="proposal.ai_revision_requested",
+                    request_id=request_id,
+                    reason_code=type(error).__name__,
+                    idempotency_key=idempotency_key,
+                    resource_id=proposal_id,
+                )
             raise

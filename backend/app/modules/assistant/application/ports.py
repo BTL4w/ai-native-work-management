@@ -19,6 +19,7 @@ from app.modules.assistant.domain.models import (
     ToolInvocation,
 )
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.planning_runs.domain.models import WorkflowEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,14 @@ class AssistantConversationSnapshot:
     turns: tuple[AssistantTurn, ...]
     orchestration_runs: tuple[OrchestrationRun, ...]
     events: tuple[AssistantEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedWorkflowEvent:
+    agent_run: AgentRun
+    turn_id: UUID
+    conversation_id: UUID
+    event: WorkflowEvent
 
 
 class AssistantRepository(Protocol):
@@ -117,6 +126,31 @@ class AssistantRepository(Protocol):
     async def append_agent_run(self, *, run: AgentRun) -> AgentRun: ...
 
     async def get_agent_run(self, *, organization_id: UUID, run_id: UUID) -> AgentRun | None: ...
+
+    async def get_agent_run_turn_context(
+        self, *, organization_id: UUID, run_id: UUID
+    ) -> tuple[AgentRun, UUID] | None: ...
+
+    async def get_accepted_planning_action(
+        self, *, organization_id: UUID, turn_id: UUID
+    ) -> dict[str, Any] | None: ...
+
+    async def link_agent_workflow_run(
+        self, *, organization_id: UUID, agent_run_id: UUID, workflow_run_id: UUID
+    ) -> AgentRun: ...
+
+    async def list_unprojected_workflow_events(
+        self, *, organization_id: UUID, limit: int
+    ) -> tuple[LinkedWorkflowEvent, ...]: ...
+
+    async def project_workflow_event(
+        self,
+        *,
+        item: LinkedWorkflowEvent,
+        blocks: tuple[dict[str, Any], ...],
+        status: str | None,
+        safe_error_code: str | None,
+    ) -> bool: ...
 
     async def finish_agent_run(self, *, run: AgentRun) -> None: ...
 
