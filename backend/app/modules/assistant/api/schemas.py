@@ -1,0 +1,183 @@
+"""Request/response schemas for the Assistant conversation API — Task 6."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated, Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+from app.modules.assistant.domain.models import AssistantConversation, AssistantMessage
+
+# ---------------------------------------------------------------------------
+# Request schemas
+# ---------------------------------------------------------------------------
+
+
+class CreateConversationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    locale: Literal["vi", "en"]
+    title: str | None = Field(default=None, max_length=120)
+
+
+class CardAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["PLANNING_INPUT", "PLANNING_REVISE"]
+    workflow_run_id: UUID
+    proposal_id: UUID | None = None
+
+
+class PostAssistantMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(min_length=1, max_length=8000)
+    locale: Literal["vi", "en"]
+    card_action: CardAction | None = None
+
+
+# ---------------------------------------------------------------------------
+# Content block discriminated union (strict)
+# ---------------------------------------------------------------------------
+
+
+class TextBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["text"] = "text"
+    text: str
+
+
+class ActivityBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["activity"] = "activity"
+    label_key: str
+    status: Literal["PENDING", "RUNNING", "COMPLETED", "FAILED"]
+    agent_id: str | None = None
+
+
+class WorkEvidenceBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["work_evidence"] = "work_evidence"
+    summary: str
+    evidence: list[dict[str, Any]]
+
+
+class QuestionBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["question"] = "question"
+    question: str
+    response_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class CapabilityUnavailableBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["capability_unavailable"] = "capability_unavailable"
+    capability: str
+    message_key: str
+
+
+class PlanningRunBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["planning_run"] = "planning_run"
+    workflow_run_id: UUID
+    status: str
+
+
+class ProposalBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["proposal"] = "proposal"
+    workflow_run_id: UUID
+    proposal_id: UUID
+    proposal_version: int
+    approval_id: UUID | None = None
+
+
+class SafeErrorBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["safe_error"] = "safe_error"
+    code: str
+    message_key: str
+
+
+ContentBlock = Annotated[
+    TextBlock
+    | ActivityBlock
+    | WorkEvidenceBlock
+    | QuestionBlock
+    | CapabilityUnavailableBlock
+    | PlanningRunBlock
+    | ProposalBlock
+    | SafeErrorBlock,
+    Field(discriminator="kind"),
+]
+_CONTENT_BLOCKS = TypeAdapter(list[ContentBlock])
+
+
+# ---------------------------------------------------------------------------
+# Response schemas
+# ---------------------------------------------------------------------------
+
+
+class ConversationResponse(BaseModel):
+    id: UUID
+    locale: Literal["vi", "en"]
+    title: str | None
+    status: str
+    last_message_sequence: int
+    last_event_sequence: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, c: AssistantConversation) -> ConversationResponse:
+        return cls(
+            id=c.id,
+            locale=c.locale,
+            title=c.title,
+            status=c.status.value if hasattr(c.status, "value") else str(c.status),
+            last_message_sequence=c.last_message_sequence,
+            last_event_sequence=c.last_event_sequence,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+
+
+class ConversationListResponse(BaseModel):
+    items: list[ConversationResponse]
+
+
+class MessageResponse(BaseModel):
+    id: UUID
+    sequence: int
+    role: str
+    content_blocks: list[ContentBlock]
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, m: AssistantMessage) -> MessageResponse:
+        return cls(
+            id=m.id,
+            sequence=m.sequence,
+            role=m.role.value if hasattr(m.role, "value") else str(m.role),
+            content_blocks=_CONTENT_BLOCKS.validate_python(m.content_blocks),
+            created_at=m.created_at,
+        )
+
+
+class TurnResponse(BaseModel):
+    id: UUID
+    status: str
+    locale: Literal["vi", "en"]
+    created_at: str
+
+
+class ConversationSnapshotResponse(BaseModel):
+    conversation: ConversationResponse
+    messages: list[MessageResponse]
+
+
+class AssistantTurnAcceptedResponse(BaseModel):
+    conversation_id: UUID
+    message_id: UUID
+    turn_id: UUID
+    orchestration_run_id: UUID
+    status: Literal["QUEUED"]

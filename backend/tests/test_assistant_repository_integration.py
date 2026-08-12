@@ -23,6 +23,7 @@ from app.modules.assistant.adapters.database_models import (
     OrchestrationRunModel,
 )
 from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransactionFactory
+from app.modules.assistant.application.service import AssistantService, ResourceNotFoundError
 from app.modules.assistant.domain.models import (
     AgentCheckpoint,
     AgentHandoffRecord,
@@ -56,6 +57,13 @@ def _actor(org: UUID, membership: UUID) -> AuthenticatedActor:
         organization_name="Assistant test",
         role=MembershipRole.MANAGER,
     )
+
+
+class _NoPlanningSnapshot:
+    async def get_proposal_version(
+        self, *, actor: AuthenticatedActor, proposal_id: UUID
+    ) -> int | None:
+        return None
 
 
 async def _seed_members(connection: object, pairs: tuple[tuple[UUID, UUID], ...]) -> None:
@@ -502,5 +510,102 @@ async def test_worker_claim_is_tenant_scoped_and_retry_lease_safe() -> None:
                 )
                 is None
             )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_service_persists_two_ordered_turns_and_lists_only_owner_data() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    organization_id, owner_id, other_id = uuid4(), uuid4(), uuid4()
+    owner = _actor(organization_id, owner_id)
+    other = _actor(organization_id, other_id)
+    try:
+        async with engine.begin() as connection:
+            await _seed_members(connection, ((organization_id, owner_id),))
+            other_user = uuid4()
+            await connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(id, email_normalized, email_display, display_name, password_hash) "
+                    "VALUES (:id, :email, :email, 'Other', 'hash')"
+                ),
+                {"id": other_user, "email": f"{other_user.hex}@example.test"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO memberships (id, organization_id, user_id, role) "
+                    "VALUES (:id, :org, :user, 'EMPLOYEE')"
+                ),
+                {"id": other_id, "org": organization_id, "user": other_user},
+            )
+        factory = PostgreSQLAssistantTransactionFactory(create_session_factory(engine))
+        service = AssistantService(
+            transaction_factory=factory,
+            planning_snapshot=_NoPlanningSnapshot(),
+            orchestrator_version="1.0.0",
+            orchestrator_fingerprint="orchestrator-manifest-fingerprint",
+        )
+        created = await service.create_conversation(
+            actor=owner,
+            locale="en",
+            title="Ordered transcript",
+            request_id="request-create-ordered",
+            idempotency_key="conversation-ordered-key",
+        )
+        first = await service.post_message(
+            actor=owner,
+            conversation_id=created.conversation.id,
+            message="First message",
+            locale="en",
+            card_action=None,
+            if_match_version=None,
+            request_id="request-first-ordered",
+            idempotency_key="message-ordered-key-1",
+        )
+        second = await service.post_message(
+            actor=owner,
+            conversation_id=created.conversation.id,
+            message="Second message",
+            locale="en",
+            card_action=None,
+            if_match_version=None,
+            request_id="request-second-ordered",
+            idempotency_key="message-ordered-key-2",
+        )
+
+        assert (first.message.sequence, second.message.sequence) == (1, 2)
+        assert (first.event.sequence, second.event.sequence) == (1, 2)
+        assert [item.id for item in await service.list_conversations(actor=owner)] == [
+            created.conversation.id
+        ]
+        assert await service.list_conversations(actor=other) == []
+        with pytest.raises(ResourceNotFoundError):
+            await service.post_message(
+                actor=other,
+                conversation_id=created.conversation.id,
+                message="Try another owner's conversation",
+                locale="en",
+                card_action=None,
+                if_match_version=None,
+                request_id="request-other-owner-rejected",
+                idempotency_key="message-other-owner-key",
+            )
+        async with factory(other) as transaction:
+            rejected_audits = await transaction.session.scalars(
+                select(AuditEventModel).where(
+                    AuditEventModel.action == "assistant.message.submit",
+                    AuditEventModel.resource_id == created.conversation.id,
+                )
+            )
+            audit = rejected_audits.one()
+            assert audit.reason_data == {"code": "RESOURCE_NOT_FOUND"}
+            assert "Try another" not in str(audit.reason_data)
+        snapshot = await service.get_conversation(
+            actor=owner,
+            conversation_id=created.conversation.id,
+        )
+        assert [message.sequence for message in snapshot.messages] == [1, 2]
+        assert [event.sequence for event in snapshot.events] == [1, 2]
     finally:
         await engine.dispose()

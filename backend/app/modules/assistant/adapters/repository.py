@@ -1,5 +1,6 @@
 """PostgreSQL repository for durable Assistant transcript and Agent execution state."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -367,10 +368,16 @@ class PostgreSQLAssistantRepository:
         )
         if conversation_model is None:
             raise AssistantDomainLookupError("ASSISTANT_CONVERSATION_NOT_FOUND")
+        message = replace(
+            message,
+            sequence=conversation_model.last_message_sequence + 1,
+        )
+        event = replace(
+            event,
+            sequence=conversation_model.last_event_sequence + 1,
+        )
         if (
-            message.sequence != conversation_model.last_message_sequence + 1
-            or event.sequence != conversation_model.last_event_sequence + 1
-            or message.turn_id != turn.id
+            message.turn_id != turn.id
             or turn.user_message_id != message.id
             or run.turn_id != turn.id
             or job.orchestration_run_id != run.id
@@ -605,6 +612,79 @@ class PostgreSQLAssistantRepository:
             orchestration_runs=tuple(_run(model) for model in run_models),
             events=tuple(_event(model) for model in event_models),
         )
+
+    async def list_conversations(
+        self, *, actor: AuthenticatedActor, limit: int
+    ) -> list[AssistantConversation]:
+        models = await self._session.scalars(
+            select(AssistantConversationModel)
+            .where(
+                AssistantConversationModel.organization_id == actor.organization_id,
+                AssistantConversationModel.owner_membership_id == actor.membership_id,
+            )
+            .order_by(
+                AssistantConversationModel.updated_at.desc(),
+                AssistantConversationModel.id.desc(),
+            )
+            .limit(limit)
+        )
+        return [_conversation(m) for m in models]
+
+    async def list_events(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        conversation_id: UUID,
+        after_sequence: int,
+    ) -> list[AssistantEvent]:
+        # Verify owner before listing
+        conv = await self._session.scalar(
+            select(AssistantConversationModel).where(
+                AssistantConversationModel.organization_id == actor.organization_id,
+                AssistantConversationModel.owner_membership_id == actor.membership_id,
+                AssistantConversationModel.id == conversation_id,
+            )
+        )
+        if conv is None:
+            return []
+        models = await self._session.scalars(
+            select(AssistantEventModel)
+            .where(
+                AssistantEventModel.organization_id == actor.organization_id,
+                AssistantEventModel.conversation_id == conversation_id,
+                AssistantEventModel.sequence > after_sequence,
+            )
+            .order_by(AssistantEventModel.sequence)
+        )
+        return [_event(m) for m in models]
+
+    async def append_rejected_audit(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        resource_type: str,
+        resource_id: UUID | None,
+        request_id: str,
+        reason_code: str,
+    ) -> None:
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                actor_membership_id=actor.membership_id,
+                action=action,
+                outcome=AuditOutcome.REJECTED,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                request_id=request_id,
+                idempotency_key=None,
+                before_data={},
+                after_data={},
+                reason_data={"code": reason_code},
+            )
+        )
+        await self._session.flush()
 
     async def claim_job(
         self,

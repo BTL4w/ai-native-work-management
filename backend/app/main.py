@@ -14,6 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.api.errors import register_error_handlers
 from app.core.config import Settings, get_settings
 from app.core.database import create_database_engine, create_session_factory
+from app.modules.assistant.adapters.planning_snapshot import PostgreSQLPlanningSnapshot
+from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransactionFactory
+from app.modules.assistant.api.routes import router as assistant_router
+from app.modules.assistant.application.event_service import AssistantEventService
+from app.modules.assistant.application.service import AssistantService
 from app.modules.identity.adapters.runtime import create_auth_runtime
 from app.modules.identity.api.routes import router as auth_router
 from app.modules.identity.application.auth_service import AuthService
@@ -40,6 +45,11 @@ from app.modules.work.planning.adapters.manual_repository import (
 )
 from app.modules.work.planning.api.routes import router as planning_router
 from app.modules.work.planning.application.manual_service import ManualPlanningService
+from work_management_ai.runtime.manifests import (
+    AgentManifest,
+    canonical_manifest_fingerprint,
+    load_yaml_resource,
+)
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -62,6 +72,8 @@ def create_app(
     proposal_service: ProposalService | None = None,
     workflow_event_service: WorkflowEventService | None = None,
     approval_service: ApprovalService | None = None,
+    assistant_service: AssistantService | None = None,
+    assistant_event_service: AssistantEventService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -134,6 +146,31 @@ def create_app(
                 runtime=runtime,
             )
 
+    resolved_assistant_service = assistant_service
+    resolved_assistant_event_service = assistant_event_service
+    if resolved_assistant_service is None or resolved_assistant_event_service is None:
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        assistant_transaction_factory = PostgreSQLAssistantTransactionFactory(
+            create_session_factory(database_engine)
+        )
+        if resolved_assistant_service is None:
+            orchestrator_manifest = load_yaml_resource(
+                "work_management_ai.agents.orchestrator", "agent.yaml", AgentManifest
+            )
+            resolved_assistant_service = AssistantService(
+                transaction_factory=assistant_transaction_factory,
+                planning_snapshot=PostgreSQLPlanningSnapshot(
+                    PostgreSQLPlanningRunTransactionFactory(create_session_factory(database_engine))
+                ),
+                orchestrator_version=orchestrator_manifest.agent.version,
+                orchestrator_fingerprint=canonical_manifest_fingerprint(orchestrator_manifest),
+            )
+        if resolved_assistant_event_service is None:
+            resolved_assistant_event_service = AssistantEventService(
+                transaction_factory=assistant_transaction_factory,
+            )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         try:
@@ -158,6 +195,8 @@ def create_app(
     app.state.proposal_service = resolved_proposal_service
     app.state.workflow_event_service = resolved_workflow_event_service
     app.state.approval_service = resolved_approval_service
+    app.state.assistant_service = resolved_assistant_service
+    app.state.assistant_event_service = resolved_assistant_event_service
     app.state.database_engine = database_engine
     app.add_middleware(
         CORSMiddleware,
@@ -185,6 +224,7 @@ def create_app(
     app.include_router(member_router, prefix="/api/v1")
     app.include_router(planning_router, prefix="/api/v1")
     app.include_router(planning_run_router, prefix="/api/v1")
+    app.include_router(assistant_router, prefix="/api/v1")
     return app
 
 

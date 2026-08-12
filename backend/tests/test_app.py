@@ -60,6 +60,10 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/workflow-runs/{run_id}/events",
         "/api/v1/proposals/{proposal_id}",
         "/api/v1/approvals/{approval_id}/decision",
+        "/api/v1/ai/conversations",
+        "/api/v1/ai/conversations/{conversation_id}",
+        "/api/v1/ai/conversations/{conversation_id}/messages",
+        "/api/v1/ai/conversations/{conversation_id}/events",
     }
     login_responses = response.json()["paths"]["/api/v1/auth/login"]["post"]["responses"]
     assert login_responses["422"]["content"]["application/json"]["schema"] == {

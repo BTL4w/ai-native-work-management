@@ -80,3 +80,18 @@ def test_frontend_work_contract_manifest_matches_openapi() -> None:
             "properties": {name: _describe(value, schemas) for name, value in properties.items()},
         }
         assert actual == expected, schema_name
+
+
+def test_assistant_openapi_exposes_typed_transcript_contract() -> None:
+    schema = app.openapi()
+    message = schema["components"]["schemas"]["MessageResponse"]
+    block_items = message["properties"]["content_blocks"]["items"]
+
+    assert block_items["discriminator"]["propertyName"] == "kind"
+    assert set(schema["paths"]["/api/v1/ai/conversations"]) == {"get", "post"}
+    assert set(schema["paths"]["/api/v1/ai/conversations/{conversation_id}/messages"]) == {"post"}
+    assert schema["paths"]["/api/v1/ai/conversations/{conversation_id}/messages"]["post"][
+        "responses"
+    ]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/AssistantTurnAcceptedResponse"
+    }

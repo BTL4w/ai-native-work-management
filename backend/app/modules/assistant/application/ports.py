@@ -73,6 +73,25 @@ class AssistantRepository(Protocol):
         self, *, actor: AuthenticatedActor, conversation_id: UUID
     ) -> AssistantConversationSnapshot | None: ...
 
+    async def list_conversations(
+        self, *, actor: AuthenticatedActor, limit: int
+    ) -> list[AssistantConversation]: ...
+
+    async def list_events(
+        self, *, actor: AuthenticatedActor, conversation_id: UUID, after_sequence: int
+    ) -> list[AssistantEvent]: ...
+
+    async def append_rejected_audit(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        resource_type: str,
+        resource_id: UUID | None,
+        request_id: str,
+        reason_code: str,
+    ) -> None: ...
+
     async def claim_job(
         self,
         *,
@@ -102,6 +121,12 @@ class AssistantRepository(Protocol):
         error_code: str,
         next_available_at: datetime,
     ) -> None: ...
+
+
+class AssistantTransactionFactory(Protocol):
+    """Factory that creates tenant-scoped transactions from an actor or UUID."""
+
+    def __call__(self, context: AuthenticatedActor | UUID) -> "AssistantTransaction": ...
 
 
 class AssistantTransaction(Protocol):
