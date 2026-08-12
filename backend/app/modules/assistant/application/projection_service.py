@@ -46,13 +46,15 @@ class AssistantProjectionService:
                 (
                     {
                         "kind": "question",
-                        "text": str(
+                        "question": str(
                             payload.get(
                                 "question",
                                 "Additional planning input is required.",
                             )
                         ),
-                        "workflow_run_id": str(event.workflow_run_id),
+                        "response_context": {
+                            "workflow_run_id": str(event.workflow_run_id),
+                        },
                     },
                 ),
                 "AWAITING_INPUT",
@@ -63,6 +65,7 @@ class AssistantProjectionService:
                 (
                     {
                         "kind": "proposal",
+                        "workflow_run_id": str(event.workflow_run_id),
                         "proposal_id": str(payload.get("proposal_id", "")),
                         "proposal_version": int(payload.get("version", 0)),
                         "state": "READY_FOR_DECISION",
@@ -78,6 +81,7 @@ class AssistantProjectionService:
                 (
                     {
                         "kind": "proposal",
+                        "workflow_run_id": str(event.workflow_run_id),
                         "proposal_id": str(payload.get("proposal_id", "")),
                         "proposal_version": int(payload.get("version", 0)),
                         "state": "VALIDATION_FAILED",
@@ -95,6 +99,7 @@ class AssistantProjectionService:
                 (
                     {
                         "kind": "proposal",
+                        "workflow_run_id": str(event.workflow_run_id),
                         "proposal_id": str(payload.get("proposal_id", "")),
                         "proposal_version": int(payload.get("base_version", 0)),
                         "current_version": int(payload.get("current_version", 0)),
@@ -112,6 +117,7 @@ class AssistantProjectionService:
                 (
                     {
                         "kind": "decision_result",
+                        "workflow_run_id": str(event.workflow_run_id),
                         "decision": str(payload.get("decision", "UNKNOWN")),
                         "proposal_id": str(payload.get("proposal_id", "")),
                         "proposal_version": int(payload.get("proposal_version", 0)),
@@ -126,7 +132,8 @@ class AssistantProjectionService:
                 (
                     {
                         "kind": "safe_error",
-                        "safe_error_code": code,
+                        "code": code,
+                        "message_key": "ai.error.workflowUnavailable",
                         "manual_fallback": "PROJECT_TASK_EDITOR",
                     },
                 ),
@@ -137,9 +144,9 @@ class AssistantProjectionService:
             (
                 {
                     "kind": "activity",
-                    "activity_type": event.event_type,
-                    "stage": str(payload.get("stage", "IN_PROGRESS")),
-                    "workflow_run_id": str(event.workflow_run_id),
+                    "label_key": f"ai.activity.{event.event_type.replace('.', '_')}",
+                    "status": "COMPLETED",
+                    "agent_id": "planning",
                 },
             ),
             None,

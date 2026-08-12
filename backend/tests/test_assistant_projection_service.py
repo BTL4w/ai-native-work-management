@@ -9,9 +9,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.assistant.api.schemas import MessageResponse
 from app.modules.assistant.application.ports import LinkedWorkflowEvent
 from app.modules.assistant.application.projection_service import AssistantProjectionService
-from app.modules.assistant.domain.models import AgentRun
+from app.modules.assistant.domain.models import AgentRun, AssistantMessage, MessageRole
 from app.modules.planning_runs.domain.models import WorkflowEvent
 
 
@@ -116,7 +117,7 @@ async def test_question_event_projects_once_and_marks_awaiting_input() -> None:
     row = repository.projected[0]
     assert row["status"] == "AWAITING_INPUT"
     assert row["blocks"][0]["kind"] == "question"
-    assert row["blocks"][0]["text"] == "What is the budget?"
+    assert row["blocks"][0]["question"] == "What is the budget?"
 
 
 @pytest.mark.asyncio
@@ -133,6 +134,7 @@ async def test_proposal_ready_projects_exact_version_card_once() -> None:
     block = repository.projected[0]["blocks"][0]
     assert block == {
         "kind": "proposal",
+        "workflow_run_id": str(item.event.workflow_run_id),
         "proposal_id": str(proposal_id),
         "proposal_version": 4,
         "state": "READY_FOR_DECISION",
@@ -212,3 +214,46 @@ async def test_projection_does_not_apply_business_graph() -> None:
     repository = _Repository([item])
     await _service(repository).project_once(organization_id=item.event.organization_id)
     assert repository.business_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        ("workflow.generating", {"stage": "GENERATING"}),
+        ("workflow.needs_input", {"question": "What is the budget?"}),
+        (
+            "proposal.ready",
+            {"proposal_id": str(uuid4()), "version": 2, "can_approve": True},
+        ),
+        (
+            "proposal.superseded",
+            {"proposal_id": str(uuid4()), "base_version": 2, "current_version": 3},
+        ),
+        (
+            "workflow.completed",
+            {"decision": "APPROVE", "proposal_id": str(uuid4()), "proposal_version": 3},
+        ),
+        ("workflow.failed", {"safe_error_code": "AI_WORKFLOW_UNAVAILABLE"}),
+    ],
+)
+async def test_projected_blocks_match_conversation_snapshot_contract(
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
+    item = _item(event_type, payload)
+    repository = _Repository([item])
+    await _service(repository).project_once(organization_id=item.event.organization_id)
+
+    response = MessageResponse.from_domain(
+        AssistantMessage(
+            id=uuid4(),
+            organization_id=item.event.organization_id,
+            conversation_id=item.conversation_id,
+            sequence=1,
+            role=MessageRole.ASSISTANT,
+            content_blocks=repository.projected[0]["blocks"],
+        )
+    )
+
+    assert response.content_blocks[0].kind == repository.projected[0]["blocks"][0]["kind"]

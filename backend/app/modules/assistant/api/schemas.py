@@ -89,6 +89,21 @@ class ProposalBlock(BaseModel):
     proposal_id: UUID
     proposal_version: int
     approval_id: UUID | None = None
+    state: str | None = None
+    can_approve: bool | None = None
+    read_only: bool = False
+    current_version: int | None = None
+    error_codes: list[str] = Field(default_factory=list)
+    manual_fallback: str | None = None
+
+
+class DecisionResultBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["decision_result"] = "decision_result"
+    workflow_run_id: UUID
+    decision: Literal["APPROVE", "REJECT", "UNKNOWN"]
+    proposal_id: UUID
+    proposal_version: int
 
 
 class SafeErrorBlock(BaseModel):
@@ -96,6 +111,7 @@ class SafeErrorBlock(BaseModel):
     kind: Literal["safe_error"] = "safe_error"
     code: str
     message_key: str
+    manual_fallback: str | None = None
 
 
 ContentBlock = Annotated[
@@ -106,6 +122,7 @@ ContentBlock = Annotated[
     | CapabilityUnavailableBlock
     | PlanningRunBlock
     | ProposalBlock
+    | DecisionResultBlock
     | SafeErrorBlock,
     Field(discriminator="kind"),
 ]
