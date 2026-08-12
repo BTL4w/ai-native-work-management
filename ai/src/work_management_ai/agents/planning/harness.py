@@ -218,9 +218,7 @@ class PlanningAgentHarness:
         # Never trust model-produced authority or mutation fields.
         trusted_input = cast(dict[str, JsonValue], value.model_dump(mode="json"))
         request = ToolExecutionRequest(
-            agent_run_id=uuid5(
-                NAMESPACE_URL, f"planning-agent:{state['handoff'].parent_agent_run_id}"
-            ),
+            agent_run_id=uuid5(NAMESPACE_URL, f"agent-run:{state['handoff'].idempotency_key}"),
             tool_id=plan.tool_id,
             tool_version=tool_manifest.version,
             call_id=f"{state['handoff'].step_id}:manage:1",

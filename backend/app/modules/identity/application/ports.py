@@ -38,6 +38,10 @@ class AuthRepository(Protocol):
         self, organization_id: UUID, identity: LoginIdentity
     ) -> AuthenticatedActor | None: ...
 
+    async def find_current_actor_by_membership(
+        self, *, organization_id: UUID, membership_id: UUID
+    ) -> AuthenticatedActor | None: ...
+
     async def create_session(
         self,
         *,

@@ -88,6 +88,37 @@ class SqlAlchemyAuthRepository:
             role=membership.role,
         )
 
+    async def find_current_actor_by_membership(
+        self, *, organization_id: UUID, membership_id: UUID
+    ) -> AuthenticatedActor | None:
+        """Resolve the live membership; callers must never trust job payload roles."""
+        await self.activate_tenant(organization_id)
+        row = (
+            await self._session.execute(
+                select(MembershipModel, UserModel, OrganizationModel.name)
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .join(OrganizationModel, OrganizationModel.id == MembershipModel.organization_id)
+                .where(
+                    MembershipModel.organization_id == organization_id,
+                    MembershipModel.id == membership_id,
+                    MembershipModel.is_active.is_(True),
+                    UserModel.is_active.is_(True),
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        membership, user, organization_name = row
+        return AuthenticatedActor(
+            user_id=user.id,
+            email=user.email_display,
+            display_name=user.display_name,
+            membership_id=membership.id,
+            organization_id=membership.organization_id,
+            organization_name=organization_name,
+            role=membership.role,
+        )
+
     async def create_session(
         self,
         *,

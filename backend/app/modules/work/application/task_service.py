@@ -94,6 +94,22 @@ class TaskService:
             raise TaskNotFoundError
         return task
 
+    async def get_next_task(self, *, actor: AuthenticatedActor) -> Task | None:
+        """Return the actor-visible next task using repository-owned SQL ordering."""
+        async with self._transactions() as repository:
+            return await repository.get_next_task(actor=actor)
+
+    async def find_visible_tasks_by_title(
+        self, *, actor: AuthenticatedActor, query: str, limit: int = 20
+    ) -> tuple[Task, ...]:
+        normalized = query.strip()
+        if not normalized:
+            return ()
+        async with self._transactions() as repository:
+            return await repository.find_visible_tasks_by_title(
+                actor=actor, query=normalized, limit=min(max(limit, 1), 20)
+            )
+
     async def _require_writer(
         self,
         *,

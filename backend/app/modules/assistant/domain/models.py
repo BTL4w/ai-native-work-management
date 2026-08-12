@@ -505,6 +505,30 @@ class AgentRun:
             updated_at=current,
         )
 
+    def mark_awaiting(
+        self,
+        *,
+        status: AgentRunStatus,
+        typed_output: dict[str, Any],
+        stop_reason: str,
+        usage: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> "AgentRun":
+        if self.status is not AgentRunStatus.RUNNING or status not in {
+            AgentRunStatus.AWAITING_INPUT,
+            AgentRunStatus.AWAITING_HUMAN,
+        }:
+            raise InvalidAssistantTransitionError("AGENT_RUN_TRANSITION_INVALID")
+        current = now or _now()
+        return replace(
+            self,
+            status=status,
+            typed_output=typed_output,
+            stop_reason=stop_reason,
+            usage=usage or self.usage,
+            updated_at=current,
+        )
+
     def mark_failed(self, error_code: str, now: datetime | None = None) -> "AgentRun":
         if self.status.is_terminal:
             raise InvalidAssistantTransitionError("AGENT_RUN_TERMINAL")

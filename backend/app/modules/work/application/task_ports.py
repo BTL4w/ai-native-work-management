@@ -26,6 +26,10 @@ class TaskMutationResult:
 
 
 class TaskRepository(Protocol):
+    async def get_next_task(self, *, actor: AuthenticatedActor) -> Task | None: ...
+    async def find_visible_tasks_by_title(
+        self, *, actor: AuthenticatedActor, query: str, limit: int
+    ) -> tuple[Task, ...]: ...
     async def list_tasks(
         self,
         *,

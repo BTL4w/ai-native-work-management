@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
+from time import monotonic
+from typing import Protocol, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
 from app.core.config import Settings
 from app.modules.identity.domain.auth import AuthenticatedActor
-from app.modules.organization.domain.roles import MembershipRole
 from app.modules.planning_runs.application.job_service import JobHandler
 from app.modules.planning_runs.application.ports import PlanningRunTransaction
 from app.modules.planning_runs.domain.models import (
     ApprovalStatus,
+    ModelInvocation,
     Proposal,
     ProposalStatus,
     ProposalVersion,
@@ -26,6 +28,7 @@ from app.modules.planning_runs.domain.models import (
     WorkflowRunStatus,
 )
 from work_management_ai.model_gateway.contracts import (
+    ModelGateway,
     StructuredModelRequest,
     StructuredModelResponse,
 )
@@ -138,7 +141,7 @@ def _mock_plan() -> dict[str, object]:
     }
 
 
-def _model_gateway(settings: Settings):
+def build_model_gateway(settings: Settings) -> ModelGateway:
     if settings.ai_provider == "openai" and settings.openai_api_key is not None:
         return OpenAIModelGateway(
             model_name=settings.ai_model,
@@ -156,21 +159,68 @@ def _model_gateway(settings: Settings):
     return _DisabledModelGateway()
 
 
-def _worker_actor(run: WorkflowRun, role: str) -> AuthenticatedActor:
-    return AuthenticatedActor(
-        user_id=UUID(int=0),
-        email="workflow-worker@internal.invalid",
-        display_name="Workflow worker",
-        membership_id=run.requested_by_membership_id,
-        organization_id=run.organization_id,
-        organization_name="Tenant",
-        role=MembershipRole(role),
-    )
+class CurrentActorResolver(Protocol):
+    async def resolve(
+        self, *, organization_id: UUID, membership_id: UUID
+    ) -> AuthenticatedActor | None: ...
+
+
+type PlanningTransactionFactory = Callable[[AuthenticatedActor | UUID], PlanningRunTransaction]
+
+
+class WorkflowRecordingModelGateway:
+    """Record allowlisted invocation metadata after a transaction-free model call."""
+
+    def __init__(
+        self,
+        *,
+        gateway: ModelGateway,
+        transaction_factory: PlanningTransactionFactory,
+        organization_id: UUID,
+        workflow_run_id: UUID,
+    ) -> None:
+        self._gateway = gateway
+        self._transactions = transaction_factory
+        self._organization_id = organization_id
+        self._run_id = workflow_run_id
+
+    async def generate_structured[StructuredOutputT: BaseModel](
+        self, request: StructuredModelRequest[StructuredOutputT]
+    ) -> StructuredModelResponse[StructuredOutputT]:
+        started = monotonic()
+        status = "SUCCESS"
+        model_ref = "unavailable"
+        try:
+            response = await self._gateway.generate_structured(request)
+            model_ref = response.model_ref
+        except Exception:
+            status = "FAILED"
+            model_ref = "unavailable"
+            raise
+        finally:
+            provider, _, model_name = model_ref.partition(":")
+            async with self._transactions(self._organization_id) as transaction:
+                await transaction.repository.record_model_invocation(
+                    invocation=ModelInvocation(
+                        id=uuid4(),
+                        organization_id=self._organization_id,
+                        workflow_run_id=self._run_id,
+                        provider=provider or "unknown",
+                        model_name=model_name or model_ref,
+                        prompt_version=request.invocation_key,
+                        schema_version=PLANNING_SCHEMA_VERSION,
+                        invocation_key=request.invocation_key,
+                        duration_ms=max(0, int((monotonic() - started) * 1000)),
+                        status=status,
+                    )
+                )
+                await transaction.commit()
+        return response
 
 
 class _PlanningContextAdapter:
-    def __init__(self, transaction: PlanningRunTransaction, run: WorkflowRun) -> None:
-        self._transaction = transaction
+    def __init__(self, transaction_factory: PlanningTransactionFactory, run: WorkflowRun) -> None:
+        self._transactions = transaction_factory
         self._run = run
 
     async def load_permitted_context(
@@ -182,9 +232,11 @@ class _PlanningContextAdapter:
             or request.actor_membership_id != self._run.requested_by_membership_id
         ):
             raise PermissionError("planning context scope mismatch")
-        active = await self._transaction.repository.list_active_membership_ids(
-            organization_id=request.organization_id
-        )
+        async with self._transactions(request.organization_id) as transaction:
+            active = await transaction.repository.list_active_membership_ids(
+                organization_id=request.organization_id
+            )
+            await transaction.commit()
         questions: tuple[str, ...] = ()
         if len(request.user_brief.split()) < 4 and not request.manager_answers:
             questions = ("Please provide more planning detail.",)
@@ -197,129 +249,154 @@ class _PlanningContextAdapter:
 
 
 class _PlanningPersistenceAdapter:
-    def __init__(self, transaction: PlanningRunTransaction, actor: AuthenticatedActor) -> None:
-        self._transaction = transaction
+    def __init__(
+        self, transaction_factory: PlanningTransactionFactory, actor: AuthenticatedActor
+    ) -> None:
+        self._transactions = transaction_factory
         self._actor = actor
 
     async def save_checkpoint(self, checkpoint: PlanningCheckpoint) -> None:
-        latest = await self._transaction.repository.get_latest_checkpoint(
-            actor=self._actor, run_id=checkpoint.run_id
-        )
-        state = {**checkpoint.state, "_persistence_key": checkpoint.idempotency_key}
-        if (
-            latest is not None
-            and latest.state.get("_persistence_key") == checkpoint.idempotency_key
-        ):
-            return
-        await self._transaction.repository.save_checkpoint(
-            checkpoint=WorkflowCheckpoint(
-                id=uuid4(),
-                organization_id=checkpoint.organization_id,
-                workflow_run_id=checkpoint.run_id,
-                node=checkpoint.node,
-                sequence=1 if latest is None else latest.sequence + 1,
-                state=state,
+        async with self._transactions(self._actor) as transaction:
+            latest = await transaction.repository.get_latest_checkpoint(
+                actor=self._actor, run_id=checkpoint.run_id
             )
-        )
+            state = {**checkpoint.state, "_persistence_key": checkpoint.idempotency_key}
+            if latest is None or latest.state.get("_persistence_key") != checkpoint.idempotency_key:
+                await transaction.repository.save_checkpoint(
+                    checkpoint=WorkflowCheckpoint(
+                        id=uuid4(),
+                        organization_id=checkpoint.organization_id,
+                        workflow_run_id=checkpoint.run_id,
+                        node=checkpoint.node,
+                        sequence=1 if latest is None else latest.sequence + 1,
+                        state=state,
+                    )
+                )
+            await transaction.commit()
 
     async def append_progress(self, event: PlanningProgressEvent) -> None:
         payload = {**event.public_payload, "stage": event.stage}
-        existing = await self._transaction.repository.list_events(
-            actor=self._actor, run_id=event.run_id
-        )
-        event_type = f"workflow.{event.stage.casefold()}"
-        if (
-            existing
-            and existing[-1].event_type == event_type
-            and existing[-1].public_payload == payload
-        ):
-            return
-        await self._transaction.repository.append_event(
-            event=WorkflowEvent(
-                id=uuid4(),
-                organization_id=event.organization_id,
-                workflow_run_id=event.run_id,
-                sequence=0,
-                event_type=event_type,
-                public_payload=payload,
+        async with self._transactions(self._actor) as transaction:
+            existing = await transaction.repository.list_events(
+                actor=self._actor, run_id=event.run_id
             )
-        )
+            event_type = f"workflow.{event.stage.casefold()}"
+            if not (
+                existing
+                and existing[-1].event_type == event_type
+                and existing[-1].public_payload == payload
+            ):
+                await transaction.repository.append_event(
+                    event=WorkflowEvent(
+                        id=uuid4(),
+                        organization_id=event.organization_id,
+                        workflow_run_id=event.run_id,
+                        sequence=0,
+                        event_type=event_type,
+                        public_payload=payload,
+                    )
+                )
+            await transaction.commit()
 
     async def persist_proposal(self, draft: PlanningProposalDraft) -> PersistedProposalReference:
-        existing = await self._transaction.repository.get_proposal_by_run_id(
-            actor=self._actor, run_id=draft.run_id
-        )
-        if existing is not None:
-            return PersistedProposalReference(
-                proposal_id=existing.id,
-                version=existing.current_version_number,
+        async with self._transactions(self._actor) as transaction:
+            existing = await transaction.repository.get_proposal_by_run_id(
+                actor=self._actor, run_id=draft.run_id
             )
-        proposal = Proposal.create(
-            organization_id=draft.organization_id,
-            workflow_run_id=draft.run_id,
-        )
-        validation = _validation_json(draft.validation)
-        version = ProposalVersion(
-            id=uuid4(),
-            organization_id=draft.organization_id,
-            proposal_id=proposal.id,
-            version_number=1,
-            created_by_membership_id=draft.actor_membership_id,
-            content=cast(dict[str, object], draft.content.model_dump(mode="json")),
-            assumptions=[item.model_dump(mode="json") for item in draft.content.assumptions],
-            field_provenance={"default": "AI_PROPOSED"},
-            validation_result=validation,
-            source_reference_snapshot=[
-                {"reference_id": value} for value in draft.context_reference_ids
-            ],
-            workflow_version=draft.workflow_version,
-            prompt_version=draft.prompt_version,
-            schema_version=draft.schema_version,
-            model_reference=draft.model_reference,
-            verifier_version=draft.verifier_version,
-            creator_type="AI_SYSTEM",
-        )
-        await self._transaction.repository.create_proposal(
-            proposal=proposal, initial_version=version
-        )
-        ready_proposal = await self._transaction.repository.complete_proposal_revalidation(
-            actor=self._actor,
-            proposal_id=proposal.id,
-            version_number=1,
-            validation_result=validation,
-            request_id=f"workflow-run:{draft.run_id}",
-        )
-        return PersistedProposalReference(
-            proposal_id=ready_proposal.id,
-            version=ready_proposal.current_version_number,
-        )
+            if existing is not None:
+                await transaction.commit()
+                return PersistedProposalReference(
+                    proposal_id=existing.id,
+                    version=existing.current_version_number,
+                )
+            proposal = Proposal.create(
+                organization_id=draft.organization_id,
+                workflow_run_id=draft.run_id,
+            )
+            validation = _validation_json(draft.validation)
+            version = ProposalVersion(
+                id=uuid4(),
+                organization_id=draft.organization_id,
+                proposal_id=proposal.id,
+                version_number=1,
+                created_by_membership_id=draft.actor_membership_id,
+                content=cast(dict[str, object], draft.content.model_dump(mode="json")),
+                assumptions=[item.model_dump(mode="json") for item in draft.content.assumptions],
+                field_provenance={"default": "AI_PROPOSED"},
+                validation_result=validation,
+                source_reference_snapshot=[
+                    {"reference_id": value} for value in draft.context_reference_ids
+                ],
+                workflow_version=draft.workflow_version,
+                prompt_version=draft.prompt_version,
+                schema_version=draft.schema_version,
+                model_reference=draft.model_reference,
+                verifier_version=draft.verifier_version,
+                creator_type="AI_SYSTEM",
+            )
+            await transaction.repository.create_proposal(proposal=proposal, initial_version=version)
+            ready_proposal = await transaction.repository.complete_proposal_revalidation(
+                actor=self._actor,
+                proposal_id=proposal.id,
+                version_number=1,
+                validation_result=validation,
+                request_id=f"workflow-run:{draft.run_id}",
+            )
+            await transaction.commit()
+            return PersistedProposalReference(
+                proposal_id=ready_proposal.id,
+                version=ready_proposal.current_version_number,
+            )
 
 
 class PlanningJobHandler:
     """Execute only bounded Task 7 start/resume instructions."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        transaction_factory: PlanningTransactionFactory,
+        actor_resolver: CurrentActorResolver,
+    ) -> None:
         self._settings = settings
+        self._transactions = transaction_factory
+        self._actors = actor_resolver
 
-    async def __call__(self, transaction: PlanningRunTransaction, job: WorkflowJob) -> None:
-        run = await transaction.repository.get_workflow_run_by_scope(
-            organization_id=job.organization_id,
-            run_id=job.workflow_run_id,
-        )
+    async def __call__(self, *, job: WorkflowJob, worker_id: str) -> None:
+        del worker_id
+        async with self._transactions(job.organization_id) as transaction:
+            run = await transaction.repository.get_workflow_run_by_scope(
+                organization_id=job.organization_id,
+                run_id=job.workflow_run_id,
+            )
+            await transaction.commit()
         if run is None:
-            raise RuntimeError("workflow run is unavailable")
-        actor = _worker_actor(run, str(job.payload.get("actor_role", MembershipRole.MANAGER.value)))
+            raise RuntimeError("WORKFLOW_RUN_UNAVAILABLE")
+        actor = await self._actors.resolve(
+            organization_id=run.organization_id,
+            membership_id=run.requested_by_membership_id,
+        )
+        if actor is None:
+            raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
+        gateway = WorkflowRecordingModelGateway(
+            gateway=build_model_gateway(self._settings),
+            transaction_factory=self._transactions,
+            organization_id=run.organization_id,
+            workflow_run_id=run.id,
+        )
         graph = PlanningGraph(
-            model_gateway=_model_gateway(self._settings),
-            context_port=_PlanningContextAdapter(transaction, run),
-            persistence_port=_PlanningPersistenceAdapter(transaction, actor),
+            model_gateway=gateway,
+            context_port=_PlanningContextAdapter(self._transactions, run),
+            persistence_port=_PlanningPersistenceAdapter(self._transactions, actor),
         )
         result: PlanningGraphResult
         if job.job_type == "planning.start":
             if run.status is WorkflowRunStatus.QUEUED:
-                run = await transaction.repository.update_workflow_run(
-                    actor=actor, run=run.mark_running()
-                )
+                async with self._transactions(actor) as transaction:
+                    run = await transaction.repository.update_workflow_run(
+                        actor=actor, run=run.mark_running()
+                    )
+                    await transaction.commit()
             result = await graph.run(
                 create_planning_state(
                     run_id=run.id,
@@ -331,9 +408,11 @@ class PlanningJobHandler:
                 )
             )
         elif job.job_type == "planning.resume":
-            checkpoint = await transaction.repository.get_latest_checkpoint(
-                actor=actor, run_id=run.id
-            )
+            async with self._transactions(actor) as transaction:
+                checkpoint = await transaction.repository.get_latest_checkpoint(
+                    actor=actor, run_id=run.id
+                )
+                await transaction.commit()
             if checkpoint is None or checkpoint.node != "await_manager_input":
                 raise RuntimeError("manager-input checkpoint is unavailable")
             result = await graph.resume_from_checkpoint(
@@ -342,11 +421,10 @@ class PlanningJobHandler:
             )
         else:
             raise RuntimeError("unsupported planning job type")
-        await self._apply_result(transaction, actor, run, result)
+        await self._apply_result(actor, run, result)
 
-    @staticmethod
     async def _apply_result(
-        transaction: PlanningRunTransaction,
+        self,
         actor: AuthenticatedActor,
         run: WorkflowRun,
         result: PlanningGraphResult,
@@ -359,175 +437,229 @@ class PlanningJobHandler:
             updated = run.mark_failed("AI_WORKFLOW_UNAVAILABLE")
         else:
             return
-        await transaction.repository.update_workflow_run(actor=actor, run=updated)
+        async with self._transactions(actor) as transaction:
+            await transaction.repository.update_workflow_run(actor=actor, run=updated)
+            await transaction.commit()
 
 
 class ProposalRevalidationJobHandler:
     """Deterministically validate the edited immutable version without applying it."""
 
-    async def __call__(self, transaction: PlanningRunTransaction, job: WorkflowJob) -> None:
-        run = await transaction.repository.get_workflow_run_by_scope(
-            organization_id=job.organization_id,
-            run_id=job.workflow_run_id,
-        )
-        if run is None:
-            raise RuntimeError("workflow run is unavailable")
-        actor = _worker_actor(run, MembershipRole.MANAGER.value)
+    def __init__(
+        self,
+        transaction_factory: PlanningTransactionFactory,
+        actor_resolver: CurrentActorResolver,
+    ) -> None:
+        self._transactions = transaction_factory
+        self._actors = actor_resolver
+
+    async def __call__(self, *, job: WorkflowJob, worker_id: str) -> None:
+        del worker_id
         proposal_id = UUID(str(job.payload.get("proposal_id", "")))
         version_number = int(job.payload.get("proposal_version", 0))
-        version = await transaction.repository.get_proposal_version(
-            actor=actor,
-            proposal_id=proposal_id,
-            version_number=version_number,
-        )
-        if version is None:
-            raise RuntimeError("proposal version is unavailable")
-        content = PlanningModelOutput.model_validate(version.content)
-        active = await transaction.repository.list_active_membership_ids(
-            organization_id=job.organization_id
-        )
-        validation = verify_plan(
-            content,
-            PlanningVerificationContext(active_membership_ids=active),
-        )
-        public_validation = _validation_json(validation)
-        await transaction.repository.append_event(
-            event=WorkflowEvent(
-                id=uuid4(),
+        async with self._transactions(job.organization_id) as transaction:
+            run = await transaction.repository.get_workflow_run_by_scope(
                 organization_id=job.organization_id,
-                workflow_run_id=job.workflow_run_id,
-                sequence=0,
-                event_type="proposal.validating",
-                public_payload={
-                    "proposal_id": str(job.payload.get("proposal_id", "")),
-                    "version": int(job.payload.get("proposal_version", 0)),
-                },
-                created_at=datetime.now(UTC),
+                run_id=job.workflow_run_id,
             )
-        )
-        proposal = await transaction.repository.complete_proposal_revalidation(
-            actor=actor,
-            proposal_id=proposal_id,
-            version_number=version_number,
-            validation_result=public_validation,
-            request_id=f"workflow-job:{job.id}",
-        )
-        await transaction.repository.append_event(
-            event=WorkflowEvent(
-                id=uuid4(),
+            creator_id = await transaction.repository.get_proposal_version_creator_by_scope(
                 organization_id=job.organization_id,
-                workflow_run_id=job.workflow_run_id,
-                sequence=0,
-                event_type=(
-                    "proposal.ready"
-                    if proposal.status.value == "READY_FOR_DECISION"
-                    else "proposal.validation_failed"
-                ),
-                public_payload={
-                    "proposal_id": str(proposal_id),
-                    "version": version_number,
-                    "can_approve": validation.can_approve,
-                    "error_codes": [item.code for item in validation.errors],
-                },
+                proposal_id=proposal_id,
+                version_number=version_number,
             )
+            await transaction.commit()
+        if run is None:
+            raise RuntimeError("WORKFLOW_RUN_UNAVAILABLE")
+        if creator_id is None:
+            raise RuntimeError("PROPOSAL_VERSION_UNAVAILABLE")
+        actor = await self._actors.resolve(
+            organization_id=job.organization_id, membership_id=creator_id
         )
+        if actor is None:
+            raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
+        async with self._transactions(actor) as transaction:
+            version = await transaction.repository.get_proposal_version(
+                actor=actor,
+                proposal_id=proposal_id,
+                version_number=version_number,
+            )
+            if version is None:
+                raise RuntimeError("PROPOSAL_VERSION_UNAVAILABLE")
+            active = await transaction.repository.list_active_membership_ids(
+                organization_id=job.organization_id
+            )
+            validation = verify_plan(
+                PlanningModelOutput.model_validate(version.content),
+                PlanningVerificationContext(active_membership_ids=active),
+            )
+            public_validation = _validation_json(validation)
+            await transaction.repository.append_event(
+                event=WorkflowEvent(
+                    id=uuid4(),
+                    organization_id=job.organization_id,
+                    workflow_run_id=job.workflow_run_id,
+                    sequence=0,
+                    event_type="proposal.validating",
+                    public_payload={
+                        "proposal_id": str(job.payload.get("proposal_id", "")),
+                        "version": int(job.payload.get("proposal_version", 0)),
+                    },
+                    created_at=datetime.now(UTC),
+                )
+            )
+            proposal = await transaction.repository.complete_proposal_revalidation(
+                actor=actor,
+                proposal_id=proposal_id,
+                version_number=version_number,
+                validation_result=public_validation,
+                request_id=f"workflow-job:{job.id}",
+            )
+            await transaction.repository.append_event(
+                event=WorkflowEvent(
+                    id=uuid4(),
+                    organization_id=job.organization_id,
+                    workflow_run_id=job.workflow_run_id,
+                    sequence=0,
+                    event_type=(
+                        "proposal.ready"
+                        if proposal.status.value == "READY_FOR_DECISION"
+                        else "proposal.validation_failed"
+                    ),
+                    public_payload={
+                        "proposal_id": str(proposal_id),
+                        "version": version_number,
+                        "can_approve": validation.can_approve,
+                        "error_codes": [item.code for item in validation.errors],
+                    },
+                )
+            )
+            await transaction.commit()
 
 
 class PlanningFinalizationJobHandler:
     """Finalize a committed Manager decision without invoking the model."""
 
-    async def __call__(self, transaction: PlanningRunTransaction, job: WorkflowJob) -> None:
-        run = await transaction.repository.get_workflow_run_by_scope(
-            organization_id=job.organization_id,
-            run_id=job.workflow_run_id,
-        )
+    def __init__(
+        self,
+        transaction_factory: PlanningTransactionFactory,
+        actor_resolver: CurrentActorResolver,
+    ) -> None:
+        self._transactions = transaction_factory
+        self._actors = actor_resolver
+
+    async def __call__(self, *, job: WorkflowJob, worker_id: str) -> None:
+        del worker_id
+        try:
+            approval_id = UUID(str(job.payload["approval_id"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("FINALIZATION_PAYLOAD_INVALID") from error
+        async with self._transactions(job.organization_id) as scope_transaction:
+            run = await scope_transaction.repository.get_workflow_run_by_scope(
+                organization_id=job.organization_id,
+                run_id=job.workflow_run_id,
+            )
+            decider_id = await scope_transaction.repository.get_approval_decider_by_scope(
+                organization_id=job.organization_id, approval_id=approval_id
+            )
+            await scope_transaction.commit()
         if run is None:
-            raise RuntimeError("workflow run is unavailable")
+            raise RuntimeError("WORKFLOW_RUN_UNAVAILABLE")
         if run.status is WorkflowRunStatus.COMPLETED:
             return
         if run.status is not WorkflowRunStatus.WAITING_FOR_DECISION:
-            raise RuntimeError("workflow run is not waiting for decision")
-        actor = _worker_actor(run, MembershipRole.MANAGER.value)
+            raise RuntimeError("WORKFLOW_RUN_NOT_WAITING_FOR_DECISION")
+        if decider_id is None:
+            raise RuntimeError("APPROVAL_DECIDER_UNAVAILABLE")
+        actor = await self._actors.resolve(
+            organization_id=job.organization_id, membership_id=decider_id
+        )
+        if actor is None:
+            raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
         try:
-            approval_id = UUID(str(job.payload["approval_id"]))
             proposal_id = UUID(str(job.payload["proposal_id"]))
             proposal_version = int(job.payload["proposal_version"])
             checkpoint_sequence = int(job.payload["checkpoint_sequence"])
             decision = str(job.payload["decision"])
         except (KeyError, TypeError, ValueError) as error:
-            raise RuntimeError("finalization payload is invalid") from error
-        approval = await transaction.repository.get_approval(
-            actor=actor,
-            approval_id=approval_id,
-        )
-        proposal = await transaction.repository.get_proposal(
-            actor=actor,
-            proposal_id=proposal_id,
-        )
-        checkpoint = await transaction.repository.get_latest_checkpoint(
-            actor=actor,
-            run_id=run.id,
-        )
-        expected = {
-            "APPROVE": (ApprovalStatus.APPROVED, ProposalStatus.APPROVED),
-            "REJECT": (ApprovalStatus.REJECTED, ProposalStatus.REJECTED),
-        }.get(decision)
-        if (
-            approval is None
-            or proposal is None
-            or expected is None
-            or approval.status is not expected[0]
-            or proposal.status is not expected[1]
-            or approval.proposal_id != proposal.id
-            or approval.proposal_version_number != proposal_version
-            or proposal.current_version_number != proposal_version
-            or proposal.workflow_run_id != run.id
-            or checkpoint is None
-            or checkpoint.node != "await_manager_decision"
-            or checkpoint.sequence != checkpoint_sequence
-        ):
-            raise RuntimeError("committed decision does not match finalization checkpoint")
-        completed = run.mark_completed()
-        await transaction.repository.update_workflow_run(actor=actor, run=completed)
-        await transaction.repository.save_checkpoint(
-            checkpoint=WorkflowCheckpoint(
-                id=uuid4(),
-                organization_id=run.organization_id,
-                workflow_run_id=run.id,
-                node="completed",
-                sequence=checkpoint.sequence + 1,
-                state={
-                    "stage": "COMPLETED",
-                    "decision": decision,
-                    "proposal_id": str(proposal.id),
-                    "proposal_version": proposal_version,
-                    "approval_id": str(approval.id),
-                },
+            raise RuntimeError("FINALIZATION_PAYLOAD_INVALID") from error
+        async with self._transactions(actor) as transaction:
+            approval = await transaction.repository.get_approval(
+                actor=actor,
+                approval_id=approval_id,
             )
-        )
-        await transaction.repository.append_event(
-            event=WorkflowEvent(
-                id=uuid4(),
-                organization_id=run.organization_id,
-                workflow_run_id=run.id,
-                sequence=0,
-                event_type="workflow.completed",
-                public_payload={
-                    "status": "COMPLETED",
-                    "decision": decision,
-                    "proposal_id": str(proposal.id),
-                    "proposal_version": proposal_version,
-                    "approval_id": str(approval.id),
-                },
+            proposal = await transaction.repository.get_proposal(
+                actor=actor,
+                proposal_id=proposal_id,
             )
-        )
+            checkpoint = await transaction.repository.get_latest_checkpoint(
+                actor=actor,
+                run_id=run.id,
+            )
+            expected = {
+                "APPROVE": (ApprovalStatus.APPROVED, ProposalStatus.APPROVED),
+                "REJECT": (ApprovalStatus.REJECTED, ProposalStatus.REJECTED),
+            }.get(decision)
+            if (
+                approval is None
+                or proposal is None
+                or expected is None
+                or approval.status is not expected[0]
+                or proposal.status is not expected[1]
+                or approval.proposal_id != proposal.id
+                or approval.proposal_version_number != proposal_version
+                or proposal.current_version_number != proposal_version
+                or proposal.workflow_run_id != run.id
+                or checkpoint is None
+                or checkpoint.node != "await_manager_decision"
+                or checkpoint.sequence != checkpoint_sequence
+            ):
+                raise RuntimeError("COMMITTED_DECISION_MISMATCH")
+            completed = run.mark_completed()
+            await transaction.repository.update_workflow_run(actor=actor, run=completed)
+            await transaction.repository.save_checkpoint(
+                checkpoint=WorkflowCheckpoint(
+                    id=uuid4(),
+                    organization_id=run.organization_id,
+                    workflow_run_id=run.id,
+                    node="completed",
+                    sequence=checkpoint.sequence + 1,
+                    state={
+                        "stage": "COMPLETED",
+                        "decision": decision,
+                        "proposal_id": str(proposal.id),
+                        "proposal_version": proposal_version,
+                        "approval_id": str(approval.id),
+                    },
+                )
+            )
+            await transaction.repository.append_event(
+                event=WorkflowEvent(
+                    id=uuid4(),
+                    organization_id=run.organization_id,
+                    workflow_run_id=run.id,
+                    sequence=0,
+                    event_type="workflow.completed",
+                    public_payload={
+                        "status": "COMPLETED",
+                        "decision": decision,
+                        "proposal_id": str(proposal.id),
+                        "proposal_version": proposal_version,
+                        "approval_id": str(approval.id),
+                    },
+                )
+            )
+            await transaction.commit()
 
 
-def build_planning_job_handlers(settings: Settings) -> dict[str, JobHandler]:
-    planning = PlanningJobHandler(settings)
+def build_planning_job_handlers(
+    settings: Settings,
+    transaction_factory: PlanningTransactionFactory,
+    actor_resolver: CurrentActorResolver,
+) -> dict[str, JobHandler]:
+    planning = PlanningJobHandler(settings, transaction_factory, actor_resolver)
     return {
         "planning.start": planning,
         "planning.resume": planning,
-        "proposal.revalidate": ProposalRevalidationJobHandler(),
-        "planning.finalize": PlanningFinalizationJobHandler(),
+        "proposal.revalidate": ProposalRevalidationJobHandler(transaction_factory, actor_resolver),
+        "planning.finalize": PlanningFinalizationJobHandler(transaction_factory, actor_resolver),
     }

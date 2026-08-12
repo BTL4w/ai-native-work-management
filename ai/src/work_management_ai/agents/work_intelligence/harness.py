@@ -185,7 +185,7 @@ class WorkIntelligenceHarness:
         except (AttributeError, TypeError, ValidationError, ValueError):
             return self._failure("WORK_TOOL_INPUT_INVALID")
         request = ToolExecutionRequest(
-            agent_run_id=uuid5(NAMESPACE_URL, f"work-agent:{state['handoff'].parent_agent_run_id}"),
+            agent_run_id=uuid5(NAMESPACE_URL, f"agent-run:{state['handoff'].idempotency_key}"),
             tool_id=plan.tool_id,
             tool_version=tool_manifest.version,
             call_id=f"{state['handoff'].step_id}:read:1",

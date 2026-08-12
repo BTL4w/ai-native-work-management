@@ -105,9 +105,7 @@ class PlanningRunRepository(Protocol):
         self, *, organization_id: UUID, run_id: UUID
     ) -> WorkflowRun | None: ...
 
-    async def list_active_membership_ids(
-        self, *, organization_id: UUID
-    ) -> frozenset[UUID]: ...
+    async def list_active_membership_ids(self, *, organization_id: UUID) -> frozenset[UUID]: ...
 
     async def update_workflow_run(
         self,
@@ -180,6 +178,14 @@ class PlanningRunRepository(Protocol):
         version_number: int,
     ) -> ProposalVersion | None: ...
 
+    async def get_proposal_version_creator_by_scope(
+        self,
+        *,
+        organization_id: UUID,
+        proposal_id: UUID,
+        version_number: int,
+    ) -> UUID | None: ...
+
     async def create_approval(
         self,
         *,
@@ -192,6 +198,10 @@ class PlanningRunRepository(Protocol):
         actor: AuthenticatedActor,
         approval_id: UUID,
     ) -> Approval | None: ...
+
+    async def get_approval_decider_by_scope(
+        self, *, organization_id: UUID, approval_id: UUID
+    ) -> UUID | None: ...
 
     async def decide_approval(
         self,
@@ -345,9 +355,7 @@ class PlanningRuntimePort(Protocol):
 
     def validate_capability(self, message: str) -> None: ...
 
-    def validate_proposal_content(
-        self, content: dict[str, object]
-    ) -> dict[str, object]: ...
+    def validate_proposal_content(self, content: dict[str, object]) -> dict[str, object]: ...
 
     def validate_proposal_deterministically(
         self,

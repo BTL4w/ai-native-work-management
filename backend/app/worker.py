@@ -5,20 +5,88 @@ import contextlib
 import logging
 import signal
 import sys
-from typing import NoReturn
+from typing import NoReturn, Protocol
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
-from app.modules.planning_runs.adapters.ai_runtime import build_planning_job_handlers
+from app.modules.assistant.adapters.agent_runtime import (
+    AssistantAgentRuntime,
+    AssistantTurnExecutor,
+    InactivePlanningToolExecutor,
+    build_agent_registry,
+    build_execution_engine_factory,
+)
+from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransactionFactory
+from app.modules.assistant.adapters.work_tools import RecordingToolExecutor, WorkToolExecutor
+from app.modules.assistant.application.execution_service import AssistantExecutionService
+from app.modules.assistant.application.job_service import AssistantJobService
+from app.modules.identity.adapters.auth_repository import SqlAlchemyAuthTransactionFactory
+from app.modules.identity.adapters.current_actor import CurrentActorResolver
+from app.modules.identity.application.current_actor_service import CurrentActorService
+from app.modules.planning_runs.adapters.ai_runtime import (
+    build_model_gateway,
+    build_planning_job_handlers,
+)
 from app.modules.planning_runs.adapters.transaction import PostgreSQLPlanningRunTransactionFactory
 from app.modules.planning_runs.application.job_service import JobService
 from app.modules.planning_runs.application.outbox_service import (
     OutboxService,
     UnsupportedOutboxPublisher,
 )
+from app.modules.work.adapters.project_repository import SqlAlchemyProjectTransactionFactory
+from app.modules.work.adapters.task_repository import SqlAlchemyTaskTransactionFactory
+from app.modules.work.application.project_service import ProjectService
+from app.modules.work.application.task_service import TaskService
+from app.modules.work.planning.adapters.manual_repository import (
+    SqlAlchemyManualPlanningTransactionFactory,
+)
+from app.modules.work.planning.application.manual_service import ManualPlanningService
 
 logger = logging.getLogger(__name__)
+
+
+class _OutboxRunner(Protocol):
+    async def dispatch_once(self, worker_id: str, organization_id: UUID) -> bool: ...
+
+
+class _AssistantRunner(Protocol):
+    async def run_once(self, *, worker_id: str, organization_id: UUID) -> bool: ...
+
+
+class _PlanningRunner(Protocol):
+    async def run_once(self, worker_id: str, organization_id: UUID) -> bool: ...
+
+
+async def process_tenant_once(
+    *,
+    worker_id: str,
+    organization_id: UUID,
+    outbox_service: _OutboxRunner,
+    assistant_job_service: _AssistantRunner,
+    planning_job_service: _PlanningRunner,
+) -> bool:
+    """Process at most one item from each Task-7 queue in fair fixed order."""
+    processed = False
+    try:
+        processed = await outbox_service.dispatch_once(worker_id, organization_id) or processed
+    except Exception:
+        logger.exception("Error processing outbox for organization %s", organization_id)
+    try:
+        processed = (
+            await assistant_job_service.run_once(
+                worker_id=worker_id, organization_id=organization_id
+            )
+            or processed
+        )
+    except Exception:
+        logger.exception("Error processing Assistant jobs for organization %s", organization_id)
+    try:
+        processed = await planning_job_service.run_once(worker_id, organization_id) or processed
+    except Exception:
+        logger.exception("Error processing Planning jobs for organization %s", organization_id)
+    return processed
 
 
 async def _run_worker() -> None:
@@ -41,20 +109,68 @@ async def _run_worker() -> None:
         max_overflow=20,
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    transaction_factory = PostgreSQLPlanningRunTransactionFactory(session_factory)
+    planning_transaction_factory = PostgreSQLPlanningRunTransactionFactory(session_factory)
+    assistant_transaction_factory = PostgreSQLAssistantTransactionFactory(session_factory)
+    actor_resolver = CurrentActorResolver(
+        CurrentActorService(SqlAlchemyAuthTransactionFactory(session_factory))
+    )
 
     scopes = set(organization_ids)
 
     # Initialize services
-    job_service = JobService(
-        transaction_factory=transaction_factory,
-        handlers=build_planning_job_handlers(settings),
+    planning_job_service = JobService(
+        transaction_factory=planning_transaction_factory,
+        handlers=build_planning_job_handlers(
+            settings, planning_transaction_factory, actor_resolver
+        ),
         organization_scopes=scopes,
         lease_seconds=settings.worker_lease_seconds,
     )
     outbox_service = OutboxService(
-        transaction_factory=transaction_factory,
+        transaction_factory=planning_transaction_factory,
         publisher=UnsupportedOutboxPublisher(),
+        organization_scopes=scopes,
+        lease_seconds=settings.worker_lease_seconds,
+    )
+    registry, tool_registry = build_agent_registry()
+    work_tool_backend = WorkToolExecutor(
+        actor_resolver=actor_resolver,
+        tool_registry=tool_registry,
+        task_service=TaskService(SqlAlchemyTaskTransactionFactory(session_factory)),
+        project_service=ProjectService(SqlAlchemyProjectTransactionFactory(session_factory)),
+        planning_service=ManualPlanningService(
+            SqlAlchemyManualPlanningTransactionFactory(session_factory)
+        ),
+    )
+    work_tool_executor = RecordingToolExecutor(
+        transaction_factory=assistant_transaction_factory,
+        tool_registry=tool_registry,
+        backend=work_tool_backend,
+    )
+    planning_tool_executor = RecordingToolExecutor(
+        transaction_factory=assistant_transaction_factory,
+        tool_registry=tool_registry,
+        backend=InactivePlanningToolExecutor(),
+    )
+    turn_executor = AssistantTurnExecutor(
+        transaction_factory=assistant_transaction_factory,
+        registry=registry,
+        engine_factory=build_execution_engine_factory(
+            model_gateway=build_model_gateway(settings),
+            registry=registry,
+            actor_resolver=actor_resolver,
+            work_tool_executor=work_tool_executor,
+            transaction_factory=assistant_transaction_factory,
+            planning_tool_executor=planning_tool_executor,
+        ),
+    )
+    assistant_execution_service = AssistantExecutionService(
+        actor_resolver=actor_resolver,
+        runtime=AssistantAgentRuntime(turn_executor),
+    )
+    assistant_job_service = AssistantJobService(
+        transaction_factory=assistant_transaction_factory,
+        handler=assistant_execution_service.execute,
         organization_scopes=scopes,
         lease_seconds=settings.worker_lease_seconds,
     )
@@ -84,20 +200,16 @@ async def _run_worker() -> None:
             if not running:
                 break
 
-            try:
-                if await outbox_service.dispatch_once(worker_id, org_id):
-                    processed_any = True
-            except Exception:
-                logger.exception("Error processing outbox for organization %s", org_id)
-
-            if not running:
-                break
-
-            try:
-                if await job_service.run_once(worker_id, org_id):
-                    processed_any = True
-            except Exception:
-                logger.exception("Error processing jobs for organization %s", org_id)
+            processed_any = (
+                await process_tenant_once(
+                    worker_id=worker_id,
+                    organization_id=org_id,
+                    outbox_service=outbox_service,
+                    assistant_job_service=assistant_job_service,
+                    planning_job_service=planning_job_service,
+                )
+                or processed_any
+            )
 
         if not processed_any and running:
             await asyncio.sleep(poll_interval)
@@ -107,15 +219,15 @@ async def _run_worker() -> None:
 
 def main() -> NoReturn:
     """Synchronous entrypoint for the worker script."""
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    
+
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(_run_worker())
-    
+
     sys.exit(0)
 
 

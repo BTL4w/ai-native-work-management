@@ -1,22 +1,45 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import BaseModel
 
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.planning_runs.adapters.ai_runtime import WorkflowRecordingModelGateway
 from app.modules.planning_runs.application.ports import (
     PlanningRunRepository,
     PlanningRunTransaction,
 )
 from app.modules.planning_runs.domain.models import (
+    ModelInvocation,
     OutboxEvent,
     OutboxStatus,
     PlanningRunDomainError,
     WorkflowJob,
     WorkflowJobStatus,
 )
+from work_management_ai.model_gateway.contracts import (
+    StructuredModelRequest,
+    StructuredModelResponse,
+)
 
 _TEST_ORG_ID = UUID("00000000-0000-0000-0000-000000000001")
+
+
+def pending_job(job_type: str = "planning.start") -> WorkflowJob:
+    now = datetime.now(UTC)
+    return WorkflowJob(
+        id=uuid4(),
+        organization_id=_TEST_ORG_ID,
+        workflow_run_id=uuid4(),
+        job_type=job_type,
+        status=WorkflowJobStatus.QUEUED,
+        payload={},
+        created_at=now,
+        updated_at=now,
+        available_at=now,
+    )
+
 
 def pending_outbox_event(max_attempts: int = 3) -> OutboxEvent:
     return OutboxEvent(
@@ -34,11 +57,10 @@ def pending_outbox_event(max_attempts: int = 3) -> OutboxEvent:
         last_error=None,
     )
 
+
 class FakeJobRepository:
     def __init__(
-        self, 
-        jobs: list[WorkflowJob] | None = None, 
-        outbox_events: list[OutboxEvent] | None = None
+        self, jobs: list[WorkflowJob] | None = None, outbox_events: list[OutboxEvent] | None = None
     ) -> None:
         self.jobs = jobs or []
         self.outbox_events = outbox_events or []
@@ -50,12 +72,14 @@ class FakeJobRepository:
     async def claim_job(
         self,
         *,
+        organization_id: UUID,
         worker_id: str,
         now: datetime,
         lease_until: datetime,
     ) -> WorkflowJob | None:
+        del now
         for i, job in enumerate(self.jobs):
-            if job.status == WorkflowJobStatus.QUEUED:
+            if job.organization_id == organization_id and job.status == WorkflowJobStatus.QUEUED:
                 job = WorkflowJob(
                     id=job.id,
                     workflow_run_id=job.workflow_run_id,
@@ -204,9 +228,24 @@ class FakeJobTransaction(PlanningRunTransaction):
 class FakeJobTransactionFactory:
     def __init__(self, repo: FakeJobRepository) -> None:
         self.repo = repo
+        self.active = 0
+        self.commits = 0
 
     def __call__(self, context: AuthenticatedActor | UUID) -> PlanningRunTransaction:
-        return FakeJobTransaction(self.repo)
+        factory = self
+
+        class TrackingTransaction(FakeJobTransaction):
+            async def __aenter__(self) -> PlanningRunTransaction:
+                factory.active += 1
+                return await super().__aenter__()
+
+            async def commit(self) -> None:
+                factory.commits += 1
+
+            async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+                factory.active -= 1
+
+        return TrackingTransaction(self.repo)
 
 
 def test_compute_backoff_seconds_cap() -> None:
@@ -290,3 +329,115 @@ async def test_job_service_custom_lease_seconds() -> None:
         lease_seconds=120,
     )
     assert service.lease_seconds == 120
+
+
+@pytest.mark.asyncio
+async def test_planning_job_claim_commits_before_handler_and_execution_has_no_transaction() -> None:
+    from app.modules.planning_runs.application.job_service import JobService
+
+    job = pending_job()
+    repo = FakeJobRepository(jobs=[job])
+    factory = FakeJobTransactionFactory(repo)
+    observed: list[tuple[int, int]] = []
+
+    async def handler(*, job: WorkflowJob, worker_id: str) -> None:
+        del job, worker_id
+        observed.append((factory.active, factory.commits))
+
+    service = JobService(
+        transaction_factory=factory,
+        handlers={"planning.start": handler},
+        organization_scopes={_TEST_ORG_ID},
+    )
+
+    assert await service.run_once(worker_id="w-1", organization_id=_TEST_ORG_ID)
+    assert observed == [(0, 1)]
+    assert repo.completed_jobs == {job.id}
+    assert factory.commits == 2
+
+
+@pytest.mark.asyncio
+async def test_planning_job_failure_persists_only_safe_error_code() -> None:
+    from app.modules.planning_runs.application.job_service import JobService
+
+    job = pending_job()
+    repo = FakeJobRepository(jobs=[job])
+
+    async def handler(*, job: WorkflowJob, worker_id: str) -> None:
+        del job, worker_id
+        raise RuntimeError("sk-secret raw provider failure")
+
+    service = JobService(
+        transaction_factory=FakeJobTransactionFactory(repo),
+        handlers={"planning.start": handler},
+        organization_scopes={_TEST_ORG_ID},
+    )
+
+    assert await service.run_once(worker_id="w-1", organization_id=_TEST_ORG_ID)
+    assert repo.failed_jobs == [(job.id, "PLANNING_JOB_FAILED")]
+
+
+@pytest.mark.asyncio
+async def test_planning_model_call_has_no_active_transaction_and_records_no_prompt() -> None:
+    workflow_run_id = uuid4()
+
+    class Output(BaseModel):
+        answer: str
+
+    class Repository:
+        invocation: ModelInvocation | None = None
+
+        async def record_model_invocation(self, *, invocation: ModelInvocation) -> None:
+            self.invocation = invocation
+
+    repository = Repository()
+
+    class Transaction:
+        active = False
+
+        async def __aenter__(self) -> "Transaction":
+            self.active = True
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            self.active = False
+
+        @property
+        def repository(self) -> Repository:
+            return repository
+
+        async def commit(self) -> None:
+            self.active = False
+
+    transaction = Transaction()
+
+    class Gateway:
+        async def generate_structured[OutputT: BaseModel](
+            self, request: StructuredModelRequest[OutputT]
+        ) -> StructuredModelResponse[OutputT]:
+            assert transaction.active is False
+            return StructuredModelResponse(
+                parsed=request.output_schema.model_validate({"answer": "safe"}),
+                model_ref="mock:planning-v1",
+            )
+
+    gateway = WorkflowRecordingModelGateway(
+        gateway=Gateway(),
+        transaction_factory=lambda _: transaction,  # type: ignore[arg-type]
+        organization_id=_TEST_ORG_ID,
+        workflow_run_id=workflow_run_id,
+    )
+
+    await gateway.generate_structured(
+        StructuredModelRequest(
+            invocation_key="planning.en.generate",
+            messages=(),
+            output_schema=Output,
+            timeout_seconds=5,
+        )
+    )
+
+    recorded = repository.invocation
+    assert recorded is not None
+    assert recorded.workflow_run_id == workflow_run_id
+    assert not hasattr(recorded, "messages")

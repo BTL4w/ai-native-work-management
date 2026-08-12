@@ -8,8 +8,9 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.audit.adapters.database_models import AuditEventModel
 from app.modules.audit.domain.events import AuditOutcome
@@ -179,6 +180,53 @@ class SqlAlchemyTaskRepository:
             predicates.append(TaskModel.assignee_membership_id == actor.membership_id)
         row = (await self._session.execute(self._base().where(*predicates))).one_or_none()
         return _task_from_row(row[0], row[1]) if row else None
+
+    def _visible_predicates(self, actor: AuthenticatedActor) -> list[ColumnElement[bool]]:
+        predicates: list[ColumnElement[bool]] = [TaskModel.organization_id == actor.organization_id]
+        if actor.role is MembershipRole.EMPLOYEE:
+            predicates.append(TaskModel.assignee_membership_id == actor.membership_id)
+        return predicates
+
+    async def get_next_task(self, *, actor: AuthenticatedActor) -> Task | None:
+        await self._activate(actor)
+        priority = case(
+            (TaskModel.status == TaskStatus.IN_PROGRESS, 0),
+            (TaskModel.status == TaskStatus.TO_DO, 1),
+            else_=2,
+        )
+        due_missing = case((TaskModel.due_date.is_(None), 1), else_=0)
+        row = (
+            await self._session.execute(
+                self._base()
+                .where(
+                    *self._visible_predicates(actor),
+                    TaskModel.status.in_((TaskStatus.IN_PROGRESS, TaskStatus.TO_DO)),
+                )
+                .order_by(
+                    priority,
+                    due_missing,
+                    TaskModel.due_date.asc(),
+                    TaskModel.created_at.asc(),
+                    TaskModel.id.asc(),
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        return _task_from_row(row[0], row[1]) if row else None
+
+    async def find_visible_tasks_by_title(
+        self, *, actor: AuthenticatedActor, query: str, limit: int
+    ) -> tuple[Task, ...]:
+        await self._activate(actor)
+        rows = (
+            await self._session.execute(
+                self._base()
+                .where(*self._visible_predicates(actor), TaskModel.title.ilike(f"%{query}%"))
+                .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
+                .limit(min(max(limit, 1), 20))
+            )
+        ).all()
+        return tuple(_task_from_row(model, name) for model, name in rows)
 
     async def _assignee_name(self, actor: AuthenticatedActor, membership_id: UUID) -> str:
         row = (

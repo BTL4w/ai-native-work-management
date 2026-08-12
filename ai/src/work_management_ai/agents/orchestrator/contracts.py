@@ -70,6 +70,7 @@ class ActiveConversationContext(_StrictFrozenModel):
 
 
 class OrchestratorInput(_StrictFrozenModel):
+    orchestration_run_id: UUID | None = None
     conversation_id: UUID
     turn_id: UUID
     message: str = Field(min_length=1, max_length=8_000)

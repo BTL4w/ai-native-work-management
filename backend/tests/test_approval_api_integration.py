@@ -17,7 +17,10 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.core.database import create_database_engine, create_session_factory
 from app.main import create_app
+from app.modules.identity.adapters.auth_repository import SqlAlchemyAuthTransactionFactory
+from app.modules.identity.adapters.current_actor import CurrentActorResolver
 from app.modules.identity.api.dependencies import get_authenticated_actor
+from app.modules.identity.application.current_actor_service import CurrentActorService
 from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.domain.roles import MembershipRole
 from app.modules.planning_runs.adapters.ai_runtime import build_planning_job_handlers
@@ -574,11 +577,20 @@ async def test_postgres_approval_is_atomic_idempotent_and_reject_has_no_business
         assert stale_source.status_code == 422
         assert stale_source.json()["error"]["code"] == "PROPOSAL_STALE"
         assert forbidden.status_code == 403
+        planning_transactions = PostgreSQLPlanningRunTransactionFactory(
+            create_session_factory(engine)
+        )
         job_service = JobService(
-            transaction_factory=PostgreSQLPlanningRunTransactionFactory(
-                create_session_factory(engine)
+            transaction_factory=planning_transactions,
+            handlers=build_planning_job_handlers(
+                settings,
+                planning_transactions,
+                CurrentActorResolver(
+                    CurrentActorService(
+                        SqlAlchemyAuthTransactionFactory(create_session_factory(engine))
+                    )
+                ),
             ),
-            handlers=build_planning_job_handlers(settings),
             organization_scopes={organization_id},
         )
         for _ in range(3):

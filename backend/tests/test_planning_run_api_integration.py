@@ -17,7 +17,10 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.core.database import create_database_engine, create_session_factory
 from app.main import create_app
+from app.modules.identity.adapters.auth_repository import SqlAlchemyAuthTransactionFactory
+from app.modules.identity.adapters.current_actor import CurrentActorResolver
 from app.modules.identity.api.dependencies import get_authenticated_actor
+from app.modules.identity.application.current_actor_service import CurrentActorService
 from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.domain.roles import MembershipRole
 from app.modules.planning_runs.adapters.ai_runtime import build_planning_job_handlers
@@ -483,7 +486,15 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
             )
             job_service = JobService(
                 transaction_factory=transaction_factory,
-                handlers=build_planning_job_handlers(settings),
+                handlers=build_planning_job_handlers(
+                    settings,
+                    transaction_factory,
+                    CurrentActorResolver(
+                        CurrentActorService(
+                            SqlAlchemyAuthTransactionFactory(create_session_factory(engine))
+                        )
+                    ),
+                ),
                 organization_scopes={organization_id},
             )
             assert await job_service.run_once("task7-test-worker", organization_id) is True

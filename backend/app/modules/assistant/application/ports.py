@@ -8,6 +8,7 @@ from uuid import UUID
 from app.modules.assistant.domain.models import (
     AgentCheckpoint,
     AgentHandoffRecord,
+    AgentModelInvocation,
     AgentRun,
     AssistantConversation,
     AssistantEvent,
@@ -15,6 +16,7 @@ from app.modules.assistant.domain.models import (
     AssistantMessage,
     AssistantTurn,
     OrchestrationRun,
+    ToolInvocation,
 )
 from app.modules.identity.domain.auth import AuthenticatedActor
 
@@ -103,11 +105,64 @@ class AssistantRepository(Protocol):
 
     async def begin_orchestration(self, *, job: AssistantJob) -> OrchestrationRun: ...
 
+    async def finish_orchestration(
+        self,
+        *,
+        job: AssistantJob,
+        status: str,
+        stop_reason: str,
+        safe_error_code: str | None,
+    ) -> None: ...
+
     async def append_agent_run(self, *, run: AgentRun) -> AgentRun: ...
+
+    async def get_agent_run(self, *, organization_id: UUID, run_id: UUID) -> AgentRun | None: ...
+
+    async def finish_agent_run(self, *, run: AgentRun) -> None: ...
 
     async def append_handoff(self, *, handoff: AgentHandoffRecord) -> None: ...
 
     async def save_checkpoint(self, *, checkpoint: AgentCheckpoint) -> None: ...
+
+    async def load_orchestration_checkpoint(
+        self, *, organization_id: UUID, orchestration_run_id: UUID
+    ) -> dict[str, Any] | None: ...
+
+    async def save_orchestration_checkpoint(
+        self,
+        *,
+        organization_id: UUID,
+        orchestration_run_id: UUID,
+        checkpoint: dict[str, Any],
+        execution_plan: dict[str, Any],
+    ) -> None: ...
+
+    async def append_assistant_blocks(
+        self,
+        *,
+        job: AssistantJob,
+        blocks: tuple[dict[str, Any], ...],
+        dedupe_key: str,
+    ) -> None: ...
+
+    async def get_tool_invocation(
+        self, *, organization_id: UUID, agent_run_id: UUID, dedupe_key: str
+    ) -> ToolInvocation | None: ...
+
+    async def append_tool_invocation(self, *, invocation: ToolInvocation) -> None: ...
+
+    async def finish_tool_invocation(
+        self,
+        *,
+        organization_id: UUID,
+        invocation_id: UUID,
+        status: str,
+        typed_output: dict[str, Any],
+        context_references: tuple[dict[str, Any], ...],
+        safe_error_code: str | None,
+    ) -> None: ...
+
+    async def append_agent_model_invocation(self, *, invocation: AgentModelInvocation) -> None: ...
 
     async def append_event(self, *, event: AssistantEvent) -> AssistantEvent: ...
 

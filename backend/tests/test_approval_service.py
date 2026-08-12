@@ -378,6 +378,9 @@ class FakeFinalizationRepository:
     async def get_approval(self, **_: object) -> Approval:
         return self.approval
 
+    async def get_approval_decider_by_scope(self, **_: object) -> UUID | None:
+        return self.approval.decided_by_membership_id
+
     async def get_proposal(self, **_: object) -> Proposal:
         return self.proposal
 
@@ -397,6 +400,15 @@ class FakeFinalizationRepository:
 class FakeFinalizationTransaction:
     def __init__(self, repository: FakeFinalizationRepository) -> None:
         self.repository = repository
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -449,10 +461,20 @@ async def test_graph_finalization_completes_waiting_checkpoint_without_model_cal
             "checkpoint_sequence": 4,
         },
     )
-    handler = PlanningFinalizationJobHandler()
 
-    await handler(FakeFinalizationTransaction(repository), job)  # type: ignore[arg-type]
-    await handler(FakeFinalizationTransaction(repository), job)  # type: ignore[arg-type]
+    class Resolver:
+        async def resolve(self, *, organization_id: UUID, membership_id: UUID):
+            assert organization_id == current_actor.organization_id
+            assert membership_id == current_actor.membership_id
+            return current_actor
+
+    handler = PlanningFinalizationJobHandler(
+        lambda _: FakeFinalizationTransaction(repository),  # type: ignore[arg-type]
+        Resolver(),
+    )
+
+    await handler(job=job, worker_id="test-worker")
+    await handler(job=job, worker_id="test-worker")
 
     assert repository.run.status is WorkflowRunStatus.COMPLETED
     assert repository.checkpoints[-1].node == "completed"

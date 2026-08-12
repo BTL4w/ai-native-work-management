@@ -17,24 +17,25 @@ class JobHandler(Protocol):
 
     async def __call__(
         self,
-        transaction: PlanningRunTransaction,
+        *,
         job: WorkflowJob,
+        worker_id: str,
     ) -> None:
         """Execute the job's business logic.
-        
+
         Args:
-            transaction: A tenant-scoped transaction boundary.
             job: The job to execute.
+            worker_id: The worker holding the durable lease.
         """
         ...
 
 
 def compute_backoff_seconds(attempt_count: int) -> int:
     """Compute exponential backoff in seconds capped at 300s (5 mins).
-    
+
     Args:
         attempt_count: The number of previous attempts (1 for the first failure).
-        
+
     Returns:
         Seconds to wait before the next attempt.
     """
@@ -67,14 +68,14 @@ class JobService:
 
     async def run_once(self, worker_id: str, organization_id: UUID) -> bool:
         """Attempt to claim and execute one pending job.
-        
+
         Args:
             worker_id: The identity of the worker process.
             organization_id: The tenant scope to operate within.
-            
+
         Returns:
             True if a job was executed, False if no jobs were pending.
-            
+
         Raises:
             PlanningRunDomainError: If organization_id is outside allowed scopes.
         """
@@ -98,13 +99,13 @@ class JobService:
         handler = self._handlers.get(job.job_type)
         if not handler:
             # We don't have a handler, so we must fail the job immediately
-            error_msg = f"No handler registered for job type: {job.job_type}"
-            logger.error(error_msg)
+            error_code = "PLANNING_JOB_HANDLER_NOT_REGISTERED"
+            logger.error("No handler registered for job type %s", job.job_type)
             async with self._transaction_factory(organization_id) as txn:
                 await txn.repository.fail_job(
                     job_id=job.id,
                     worker_id=worker_id,
-                    error_message=error_msg,
+                    error_message=error_code,
                     next_available_at=now
                     + timedelta(seconds=compute_backoff_seconds(job.attempt_count)),
                 )
@@ -112,27 +113,27 @@ class JobService:
             return True
 
         try:
-            async with self._transaction_factory(organization_id) as txn:
-                await handler(txn, job)
-                await txn.repository.complete_job(job_id=job.id, worker_id=worker_id)
-                await txn.commit()
-        except Exception as exc:
-            safe_msg = str(exc)[:1000] or exc.__class__.__name__
+            await handler(job=job, worker_id=worker_id)
+        except Exception:
+            error_code = "PLANNING_JOB_FAILED"
             logger.warning(
-                "Job %s handler failed (attempt %d/%d): %s",
+                "Planning job %s failed (attempt %d/%d)",
                 job.id,
                 job.attempt_count,
                 job.max_attempts,
-                safe_msg,
             )
             async with self._transaction_factory(organization_id) as txn:
                 backoff = compute_backoff_seconds(job.attempt_count)
                 await txn.repository.fail_job(
                     job_id=job.id,
                     worker_id=worker_id,
-                    error_message=safe_msg,
+                    error_message=error_code,
                     next_available_at=now + timedelta(seconds=backoff),
                 )
+                await txn.commit()
+        else:
+            async with self._transaction_factory(organization_id) as txn:
+                await txn.repository.complete_job(job_id=job.id, worker_id=worker_id)
                 await txn.commit()
 
         return True

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.assistant.adapters.database_models import (
     AgentCheckpointModel,
     AgentHandoffModel,
+    AgentModelInvocationModel,
     AgentRunModel,
     AssistantConversationModel,
     AssistantEventModel,
@@ -17,6 +18,7 @@ from app.modules.assistant.adapters.database_models import (
     AssistantMessageModel,
     AssistantTurnModel,
     OrchestrationRunModel,
+    ToolInvocationModel,
 )
 from app.modules.assistant.application.ports import (
     AssistantConversationMutationResult,
@@ -26,7 +28,9 @@ from app.modules.assistant.application.ports import (
 from app.modules.assistant.domain.models import (
     AgentCheckpoint,
     AgentHandoffRecord,
+    AgentModelInvocation,
     AgentRun,
+    AgentRunStatus,
     AssistantConversation,
     AssistantEvent,
     AssistantIdempotencyKeyReusedError,
@@ -36,9 +40,11 @@ from app.modules.assistant.domain.models import (
     AssistantTurn,
     AssistantTurnStatus,
     ConversationStatus,
+    InvocationStatus,
     MessageRole,
     OrchestrationRun,
     OrchestrationRunStatus,
+    ToolInvocation,
 )
 from app.modules.audit.adapters.database_models import AuditEventModel
 from app.modules.audit.domain.events import AuditOutcome
@@ -154,6 +160,54 @@ def _event(model: AssistantEventModel) -> AssistantEvent:
         source_sequence=model.source_sequence,
         dedupe_key=model.dedupe_key,
         occurred_at=model.occurred_at,
+    )
+
+
+def _agent_run(model: AgentRunModel) -> AgentRun:
+    return AgentRun(
+        id=model.id,
+        organization_id=model.organization_id,
+        orchestration_run_id=model.orchestration_run_id,
+        parent_agent_run_id=model.parent_agent_run_id,
+        inbound_handoff_id=model.inbound_handoff_id,
+        agent_id=model.agent_id,
+        agent_version=model.agent_version,
+        manifest_fingerprint=model.manifest_fingerprint,
+        capability=model.capability,
+        typed_input=model.typed_input,
+        typed_output=model.typed_output,
+        version_metadata=model.version_metadata,
+        budget=model.budget,
+        usage=model.usage,
+        status=AgentRunStatus(model.status),
+        stop_reason=model.stop_reason,
+        safe_error_code=model.safe_error_code,
+        workflow_run_id=model.workflow_run_id,
+        projected_workflow_sequence=model.projected_workflow_sequence,
+        created_at=model.created_at,
+        started_at=model.started_at,
+        completed_at=model.completed_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _tool_invocation(model: ToolInvocationModel) -> ToolInvocation:
+    return ToolInvocation(
+        id=model.id,
+        organization_id=model.organization_id,
+        agent_run_id=model.agent_run_id,
+        tool_id=model.tool_id,
+        tool_version=model.tool_version,
+        risk_level=model.risk_level,
+        typed_input=model.typed_input,
+        typed_output=model.typed_output,
+        context_references=tuple(model.context_references),
+        status=InvocationStatus(model.status),
+        idempotency_key=model.idempotency_key,
+        dedupe_key=model.dedupe_key,
+        safe_error_code=model.safe_error_code,
+        created_at=model.created_at,
+        completed_at=model.completed_at,
     )
 
 
@@ -731,12 +785,64 @@ class PostgreSQLAssistantRepository:
         )
         if model is None:
             raise AssistantDomainLookupError("ORCHESTRATION_RUN_NOT_FOUND")
-        run = _run(model).mark_running()
+        current = _run(model)
+        if current.status is not OrchestrationRunStatus.QUEUED:
+            return current
+        run = current.mark_running()
         model.status = run.status.value
         model.started_at = run.started_at
         model.updated_at = run.updated_at
+        await self._session.execute(
+            update(AssistantTurnModel)
+            .where(
+                AssistantTurnModel.organization_id == job.organization_id,
+                AssistantTurnModel.id == job.turn_id,
+                AssistantTurnModel.status == AssistantTurnStatus.QUEUED.value,
+            )
+            .values(status=AssistantTurnStatus.RUNNING.value, updated_at=run.updated_at)
+        )
         await self._session.flush()
         return run
+
+    async def finish_orchestration(
+        self,
+        *,
+        job: AssistantJob,
+        status: str,
+        stop_reason: str,
+        safe_error_code: str | None,
+    ) -> None:
+        if status not in {"COMPLETED", "AWAITING_INPUT", "AWAITING_HUMAN", "FAILED"}:
+            raise AssistantDomainLookupError("ORCHESTRATION_STATUS_INVALID")
+        now = datetime.now(UTC)
+        run_result = await self._session.execute(
+            update(OrchestrationRunModel)
+            .where(
+                OrchestrationRunModel.organization_id == job.organization_id,
+                OrchestrationRunModel.id == job.orchestration_run_id,
+                OrchestrationRunModel.status == OrchestrationRunStatus.RUNNING.value,
+            )
+            .values(
+                status=status,
+                stop_reason=stop_reason,
+                safe_error_code=safe_error_code,
+                completed_at=now if status in {"COMPLETED", "FAILED"} else None,
+                updated_at=now,
+            )
+        )
+        turn_result = await self._session.execute(
+            update(AssistantTurnModel)
+            .where(
+                AssistantTurnModel.organization_id == job.organization_id,
+                AssistantTurnModel.id == job.turn_id,
+                AssistantTurnModel.status.in_(
+                    (AssistantTurnStatus.QUEUED.value, AssistantTurnStatus.RUNNING.value)
+                ),
+            )
+            .values(status=status, safe_error_code=safe_error_code, updated_at=now)
+        )
+        if run_result.rowcount != 1 or turn_result.rowcount != 1:  # type: ignore[attr-defined]
+            raise AssistantDomainLookupError("ORCHESTRATION_FINALIZE_CONFLICT")
 
     async def append_agent_run(self, *, run: AgentRun) -> AgentRun:
         self._session.add(
@@ -768,6 +874,36 @@ class PostgreSQLAssistantRepository:
         )
         await self._session.flush()
         return run
+
+    async def get_agent_run(self, *, organization_id: UUID, run_id: UUID) -> AgentRun | None:
+        model = await self._session.scalar(
+            select(AgentRunModel).where(
+                AgentRunModel.organization_id == organization_id,
+                AgentRunModel.id == run_id,
+            )
+        )
+        return _agent_run(model) if model is not None else None
+
+    async def finish_agent_run(self, *, run: AgentRun) -> None:
+        model = await self._session.scalar(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == run.organization_id,
+                AgentRunModel.id == run.id,
+                AgentRunModel.status == AgentRunStatus.RUNNING.value,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise AssistantDomainLookupError("AGENT_RUN_NOT_RUNNING")
+        model.typed_output = run.typed_output
+        model.usage = run.usage
+        model.status = run.status.value
+        model.stop_reason = run.stop_reason
+        model.safe_error_code = run.safe_error_code
+        model.completed_at = run.completed_at
+        model.updated_at = run.updated_at
+        await self._session.flush()
 
     async def append_handoff(self, *, handoff: AgentHandoffRecord) -> None:
         self._session.add(
@@ -803,6 +939,202 @@ class PostgreSQLAssistantRepository:
                 typed_state=checkpoint.typed_state,
                 checkpoint_version=checkpoint.checkpoint_version,
                 created_at=checkpoint.created_at,
+            )
+        )
+        await self._session.flush()
+
+    async def load_orchestration_checkpoint(
+        self, *, organization_id: UUID, orchestration_run_id: UUID
+    ) -> dict[str, object] | None:
+        return await self._session.scalar(
+            select(OrchestrationRunModel.checkpoint).where(
+                OrchestrationRunModel.organization_id == organization_id,
+                OrchestrationRunModel.id == orchestration_run_id,
+            )
+        )
+
+    async def save_orchestration_checkpoint(
+        self,
+        *,
+        organization_id: UUID,
+        orchestration_run_id: UUID,
+        checkpoint: dict[str, object],
+        execution_plan: dict[str, object],
+    ) -> None:
+        result = await self._session.execute(
+            update(OrchestrationRunModel)
+            .where(
+                OrchestrationRunModel.organization_id == organization_id,
+                OrchestrationRunModel.id == orchestration_run_id,
+            )
+            .values(checkpoint=checkpoint, execution_plan=execution_plan)
+        )
+        if result.rowcount != 1:  # type: ignore[attr-defined]
+            raise AssistantDomainLookupError("ORCHESTRATION_RUN_NOT_FOUND")
+
+    async def append_assistant_blocks(
+        self,
+        *,
+        job: AssistantJob,
+        blocks: tuple[dict[str, object], ...],
+        dedupe_key: str,
+    ) -> None:
+        existing = await self._session.scalar(
+            select(AssistantMessageModel.id).where(
+                AssistantMessageModel.organization_id == job.organization_id,
+                AssistantMessageModel.conversation_id == job.conversation_id,
+                AssistantMessageModel.dedupe_key == dedupe_key,
+            )
+        )
+        if existing is not None:
+            return
+        conversation = await self._session.scalar(
+            select(AssistantConversationModel)
+            .where(
+                AssistantConversationModel.organization_id == job.organization_id,
+                AssistantConversationModel.id == job.conversation_id,
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            raise AssistantDomainLookupError("ASSISTANT_CONVERSATION_NOT_FOUND")
+        now = datetime.now(UTC)
+        sequence = conversation.last_message_sequence + 1
+        event_sequence = conversation.last_event_sequence + 1
+        message_id = uuid4()
+        self._session.add(
+            AssistantMessageModel(
+                id=message_id,
+                organization_id=job.organization_id,
+                conversation_id=job.conversation_id,
+                sequence=sequence,
+                role=MessageRole.ASSISTANT.value,
+                content_blocks=list(blocks),
+                created_by_membership_id=None,
+                turn_id=job.turn_id,
+                dedupe_key=dedupe_key,
+                created_at=now,
+            )
+        )
+        self._session.add(
+            AssistantEventModel(
+                id=uuid4(),
+                organization_id=job.organization_id,
+                conversation_id=job.conversation_id,
+                sequence=event_sequence,
+                event_type="assistant.turn.response.v1",
+                public_payload={
+                    "turn_id": str(job.turn_id),
+                    "orchestration_run_id": str(job.orchestration_run_id),
+                    "message_id": str(message_id),
+                    "message_sequence": sequence,
+                    "status": "RESPONSE_AVAILABLE",
+                },
+                turn_id=job.turn_id,
+                orchestration_run_id=job.orchestration_run_id,
+                source_type=None,
+                source_id=None,
+                source_sequence=None,
+                dedupe_key=f"event:{dedupe_key}",
+                occurred_at=now,
+            )
+        )
+        conversation.last_message_sequence = sequence
+        conversation.last_event_sequence = event_sequence
+        conversation.version += 1
+        conversation.updated_at = now
+        await self._session.flush()
+
+    async def get_tool_invocation(
+        self, *, organization_id: UUID, agent_run_id: UUID, dedupe_key: str
+    ) -> ToolInvocation | None:
+        model = await self._session.scalar(
+            select(ToolInvocationModel).where(
+                ToolInvocationModel.organization_id == organization_id,
+                ToolInvocationModel.agent_run_id == agent_run_id,
+                ToolInvocationModel.dedupe_key == dedupe_key,
+            )
+        )
+        return _tool_invocation(model) if model is not None else None
+
+    async def append_tool_invocation(self, *, invocation: ToolInvocation) -> None:
+        self._session.add(
+            ToolInvocationModel(
+                id=invocation.id,
+                organization_id=invocation.organization_id,
+                agent_run_id=invocation.agent_run_id,
+                tool_id=invocation.tool_id,
+                tool_version=invocation.tool_version,
+                risk_level=invocation.risk_level,
+                typed_input=invocation.typed_input,
+                typed_output=invocation.typed_output,
+                context_references=list(invocation.context_references),
+                status=invocation.status.value,
+                idempotency_key=invocation.idempotency_key,
+                dedupe_key=invocation.dedupe_key,
+                safe_error_code=invocation.safe_error_code,
+                created_at=invocation.created_at,
+                completed_at=invocation.completed_at,
+            )
+        )
+        await self._session.flush()
+
+    async def finish_tool_invocation(
+        self,
+        *,
+        organization_id: UUID,
+        invocation_id: UUID,
+        status: str,
+        typed_output: dict[str, object],
+        context_references: tuple[dict[str, object], ...],
+        safe_error_code: str | None,
+    ) -> None:
+        if status not in {"SUCCEEDED", "REJECTED", "FAILED"}:
+            raise AssistantDomainLookupError("TOOL_INVOCATION_STATUS_INVALID")
+        model = await self._session.scalar(
+            select(ToolInvocationModel)
+            .where(
+                ToolInvocationModel.organization_id == organization_id,
+                ToolInvocationModel.id == invocation_id,
+                ToolInvocationModel.status == InvocationStatus.RUNNING.value,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise AssistantDomainLookupError("TOOL_INVOCATION_NOT_RUNNING")
+        model.typed_output = typed_output
+        model.context_references = list(context_references)
+        model.status = status
+        model.safe_error_code = safe_error_code
+        model.completed_at = datetime.now(UTC)
+        await self._session.flush()
+
+    async def append_agent_model_invocation(self, *, invocation: AgentModelInvocation) -> None:
+        existing = await self._session.scalar(
+            select(AgentModelInvocationModel.id).where(
+                AgentModelInvocationModel.organization_id == invocation.organization_id,
+                AgentModelInvocationModel.agent_run_id == invocation.agent_run_id,
+                AgentModelInvocationModel.invocation_key == invocation.invocation_key,
+            )
+        )
+        if existing is not None:
+            return
+        self._session.add(
+            AgentModelInvocationModel(
+                id=invocation.id,
+                organization_id=invocation.organization_id,
+                agent_run_id=invocation.agent_run_id,
+                provider=invocation.provider,
+                model=invocation.model,
+                prompt_version=invocation.prompt_version,
+                schema_version=invocation.schema_version,
+                invocation_key=invocation.invocation_key,
+                status=invocation.status.value,
+                input_tokens=invocation.input_tokens,
+                output_tokens=invocation.output_tokens,
+                duration_ms=invocation.duration_ms,
+                safe_error_code=invocation.safe_error_code,
+                created_at=invocation.created_at,
             )
         )
         await self._session.flush()
@@ -877,16 +1209,84 @@ class PostgreSQLAssistantRepository:
         )
         if model is None:
             raise AssistantDomainLookupError("ASSISTANT_JOB_LEASE_INVALID")
+        terminal = model.attempt_count >= model.max_attempts
         model.status = (
-            AssistantJobStatus.QUEUED.value
-            if model.attempt_count < model.max_attempts
-            else AssistantJobStatus.FAILED.value
+            AssistantJobStatus.FAILED.value if terminal else AssistantJobStatus.QUEUED.value
         )
         model.safe_error_code = error_code
         model.available_at = next_available_at
         model.locked_by = None
         model.lease_until = None
-        model.updated_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        model.updated_at = now
+        if terminal:
+            job = _job(model)
+            await self._session.execute(
+                update(AssistantTurnModel)
+                .where(
+                    AssistantTurnModel.organization_id == model.organization_id,
+                    AssistantTurnModel.id == model.turn_id,
+                    AssistantTurnModel.status.in_(
+                        (
+                            AssistantTurnStatus.QUEUED.value,
+                            AssistantTurnStatus.RUNNING.value,
+                        )
+                    ),
+                )
+                .values(
+                    status=AssistantTurnStatus.FAILED.value,
+                    safe_error_code=error_code,
+                    updated_at=now,
+                )
+            )
+            await self._session.execute(
+                update(OrchestrationRunModel)
+                .where(
+                    OrchestrationRunModel.organization_id == model.organization_id,
+                    OrchestrationRunModel.id == model.orchestration_run_id,
+                    OrchestrationRunModel.status.in_(
+                        (
+                            OrchestrationRunStatus.QUEUED.value,
+                            OrchestrationRunStatus.RUNNING.value,
+                        )
+                    ),
+                )
+                .values(
+                    status=OrchestrationRunStatus.FAILED.value,
+                    stop_reason="JOB_ATTEMPTS_EXHAUSTED",
+                    safe_error_code=error_code,
+                    completed_at=now,
+                    updated_at=now,
+                )
+            )
+            await self._session.execute(
+                update(AgentRunModel)
+                .where(
+                    AgentRunModel.organization_id == model.organization_id,
+                    AgentRunModel.orchestration_run_id == model.orchestration_run_id,
+                    AgentRunModel.status.in_(
+                        (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
+                    ),
+                )
+                .values(
+                    status=AgentRunStatus.FAILED.value,
+                    stop_reason="JOB_ATTEMPTS_EXHAUSTED",
+                    safe_error_code=error_code,
+                    completed_at=now,
+                    updated_at=now,
+                )
+            )
+            await self.append_assistant_blocks(
+                job=job,
+                blocks=(
+                    {
+                        "kind": "safe_error",
+                        "code": error_code,
+                        "message_key": "assistant.manual_fallback",
+                    },
+                ),
+                dedupe_key=f"assistant:{model.turn_id}:manual-fallback",
+            )
         await self._session.flush()
 
 

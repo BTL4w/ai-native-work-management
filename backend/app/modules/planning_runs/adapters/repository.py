@@ -1818,6 +1818,21 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             created_at=model.created_at,
         )
 
+    async def get_proposal_version_creator_by_scope(
+        self,
+        *,
+        organization_id: UUID,
+        proposal_id: UUID,
+        version_number: int,
+    ) -> UUID | None:
+        return await self._session.scalar(
+            select(ProposalVersionModel.created_by_membership_id).where(
+                ProposalVersionModel.organization_id == organization_id,
+                ProposalVersionModel.proposal_id == proposal_id,
+                ProposalVersionModel.version_number == version_number,
+            )
+        )
+
     async def create_approval(
         self,
         *,
@@ -1866,6 +1881,19 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             version=model.version,
             created_at=model.created_at,
             updated_at=model.updated_at,
+        )
+
+    async def get_approval_decider_by_scope(
+        self, *, organization_id: UUID, approval_id: UUID
+    ) -> UUID | None:
+        return await self._session.scalar(
+            select(ApprovalModel.decided_by_membership_id).where(
+                ApprovalModel.organization_id == organization_id,
+                ApprovalModel.id == approval_id,
+                ApprovalModel.status.in_(
+                    (ApprovalStatus.APPROVED.value, ApprovalStatus.REJECTED.value)
+                ),
+            )
         )
 
     async def decide_approval(

@@ -204,8 +204,9 @@ class OrchestratorHarness:
             )
             runtime = registered.manifest.runtime
             handoff = AgentHandoff(
-                orchestration_run_id=uuid5(
-                    NAMESPACE_URL, f"orchestration:{state['value'].turn_id}"
+                orchestration_run_id=(
+                    state["value"].orchestration_run_id
+                    or uuid5(NAMESPACE_URL, f"orchestration:{state['value'].turn_id}")
                 ),
                 parent_agent_run_id=uuid5(NAMESPACE_URL, f"orchestrator:{state['value'].turn_id}"),
                 target_agent_id=step.target_agent_id,
