@@ -174,9 +174,7 @@ class PlanningGraph:
         merged = merge_revision_assignees(base.content, response.parsed.content)
         validation = verify_plan(
             merged,
-            PlanningVerificationContext(
-                active_membership_ids=context.active_membership_ids,
-            ),
+            PlanningVerificationContext(),
         )
         invalid = tuple(item for item in validation.errors if item.code != "ASSIGNEE_REQUIRED")
         if invalid:
@@ -372,18 +370,11 @@ class PlanningGraph:
         proposal = state["proposal"]
         if proposal is None:
             raise RuntimeError("schema-validated proposal is required")
-        context = await self._context(state)
         validation = verify_plan(
             proposal,
-            PlanningVerificationContext(
-                active_membership_ids=context.active_membership_ids,
-            ),
+            PlanningVerificationContext(),
         )
-        repairable_errors = tuple(
-            item
-            for item in validation.errors
-            if item.code not in {"ASSIGNEE_REQUIRED", "ASSIGNEE_NOT_PERMITTED"}
-        )
+        repairable_errors = validation.errors
         if repairable_errors and not state["verifier_revision_count"]:
             updates: dict[str, object] = {
                 "stage": "GENERATING",

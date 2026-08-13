@@ -208,14 +208,18 @@ async def test_same_idempotency_key_different_revision_payload_conflicts() -> No
 
 
 def _plan(assignee: UUID | None, *, include_new: bool = False) -> dict[str, object]:
+    del assignee
     tasks: list[dict[str, object]] = [
         {
             "ref": "existing",
+            "project_week_ref": "week-1",
             "title": "Existing task",
             "description": None,
             "milestone_ref": None,
             "due_date": None,
-            "assignee_membership_id": str(assignee) if assignee else None,
+            "assignee_membership_id": None,
+            "required_skill_labels": ["planning"],
+            "estimated_effort_hours": 8,
             "acceptance_criteria": ["Reviewed"],
         }
     ]
@@ -223,11 +227,14 @@ def _plan(assignee: UUID | None, *, include_new: bool = False) -> dict[str, obje
         tasks.append(
             {
                 "ref": "new",
+                "project_week_ref": "week-1",
                 "title": "New task",
                 "description": None,
                 "milestone_ref": None,
                 "due_date": None,
                 "assignee_membership_id": None,
+                "required_skill_labels": ["coordination"],
+                "estimated_effort_hours": 4,
                 "acceptance_criteria": ["Done"],
             }
         )
@@ -245,6 +252,15 @@ def _plan(assignee: UUID | None, *, include_new: bool = False) -> dict[str, obje
             "target_date": None,
         },
         "milestones": [],
+        "project_weeks": [
+            {
+                "ref": "week-1",
+                "week_number": 1,
+                "start_date": "2026-08-17",
+                "end_date": "2026-08-23",
+                "objective": "Deliver the plan",
+            }
+        ],
         "tasks": tasks,
         "dependencies": [],
         "assumptions": [],
@@ -304,7 +320,6 @@ class _RevisionRepository:
             proposal=self.proposal,
             version=self.version,
             approval=self.approval,
-            active_membership_ids=self.active_memberships,
             locale="en",
         )
 
@@ -445,7 +460,7 @@ async def test_ai_revision_model_call_observes_no_active_transaction() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_revision_preserves_unchanged_selected_assignee_and_nulls_new_task() -> None:
+async def test_ai_revision_keeps_all_planned_tasks_unassigned() -> None:
     actor = _actor()
     repository = _RevisionRepository(actor)
 
@@ -454,7 +469,7 @@ async def test_ai_revision_preserves_unchanged_selected_assignee_and_nulls_new_t
     )
 
     tasks = repository.appended[0].content["tasks"]
-    assert tasks[0]["assignee_membership_id"] == str(actor.membership_id)
+    assert tasks[0]["assignee_membership_id"] is None
     assert tasks[1]["assignee_membership_id"] is None
 
 

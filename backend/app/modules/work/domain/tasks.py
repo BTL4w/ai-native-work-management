@@ -82,13 +82,29 @@ def _normalize_description(value: str | None) -> str | None:
     return normalized or None
 
 
+def _normalize_skill_labels(values: tuple[str, ...]) -> tuple[str, ...]:
+    normalized = tuple(dict.fromkeys(value.strip().lower() for value in values if value.strip()))
+    if len(normalized) > 20 or any(len(value) > 80 for value in normalized):
+        raise InvalidTaskFieldError("required_skill_labels")
+    return normalized
+
+
+def _estimated_effort(value: int) -> int:
+    if not 1 <= value <= 10_000:
+        raise InvalidTaskFieldError("estimated_effort_hours")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class TaskDraft:
     project_id: UUID
+    project_week_id: UUID
     milestone_id: UUID | None
     title: str
     description: str | None
-    assignee_membership_id: UUID
+    assignee_membership_id: UUID | None
+    required_skill_labels: tuple[str, ...]
+    estimated_effort_hours: int
     due_date: date | None
     initial_status: TaskStatus = TaskStatus.TO_DO
 
@@ -97,18 +113,26 @@ class TaskDraft:
         cls,
         *,
         project_id: UUID,
+        project_week_id: UUID | None,
         milestone_id: UUID | None,
         title: str,
         description: str | None,
-        assignee_membership_id: UUID,
+        assignee_membership_id: UUID | None,
+        required_skill_labels: tuple[str, ...],
+        estimated_effort_hours: int,
         due_date: date | None,
     ) -> TaskDraft:
+        if project_week_id is None:
+            raise InvalidTaskFieldError("project_week_id")
         return cls(
             project_id=project_id,
+            project_week_id=project_week_id,
             milestone_id=milestone_id,
             title=_normalize_title(title),
             description=_normalize_description(description),
             assignee_membership_id=assignee_membership_id,
+            required_skill_labels=_normalize_skill_labels(required_skill_labels),
+            estimated_effort_hours=_estimated_effort(estimated_effort_hours),
             due_date=due_date,
         )
 
@@ -125,6 +149,12 @@ class TaskPatch:
     due_date_supplied: bool = False
     milestone_id: UUID | None = None
     milestone_supplied: bool = False
+    project_week_id: UUID | None = None
+    project_week_supplied: bool = False
+    required_skill_labels: tuple[str, ...] = ()
+    required_skill_labels_supplied: bool = False
+    estimated_effort_hours: int | None = None
+    estimated_effort_hours_supplied: bool = False
 
     @classmethod
     def create(
@@ -140,12 +170,22 @@ class TaskPatch:
         due_date_supplied: bool = False,
         milestone_id: UUID | None = None,
         milestone_supplied: bool = False,
+        project_week_id: UUID | None = None,
+        project_week_supplied: bool = False,
+        required_skill_labels: tuple[str, ...] = (),
+        required_skill_labels_supplied: bool = False,
+        estimated_effort_hours: int | None = None,
+        estimated_effort_hours_supplied: bool = False,
     ) -> TaskPatch:
         effective_title_supplied = title_supplied or title is not None
         if effective_title_supplied and title is None:
             raise InvalidTaskFieldError("title")
         if assignee_supplied and assignee_membership_id is None:
             raise InvalidTaskFieldError("assignee_membership_id")
+        if project_week_supplied and project_week_id is None:
+            raise InvalidTaskFieldError("project_week_id")
+        if estimated_effort_hours_supplied and estimated_effort_hours is None:
+            raise InvalidTaskFieldError("estimated_effort_hours")
         return cls(
             title=_normalize_title(title) if title is not None else None,
             title_supplied=effective_title_supplied,
@@ -157,6 +197,20 @@ class TaskPatch:
             due_date_supplied=due_date_supplied,
             milestone_id=milestone_id,
             milestone_supplied=milestone_supplied,
+            project_week_id=project_week_id,
+            project_week_supplied=project_week_supplied,
+            required_skill_labels=(
+                _normalize_skill_labels(required_skill_labels)
+                if required_skill_labels_supplied
+                else ()
+            ),
+            required_skill_labels_supplied=required_skill_labels_supplied,
+            estimated_effort_hours=(
+                _estimated_effort(estimated_effort_hours)
+                if estimated_effort_hours is not None
+                else None
+            ),
+            estimated_effort_hours_supplied=estimated_effort_hours_supplied,
         )
 
     def validate_not_empty(self) -> None:
@@ -167,6 +221,9 @@ class TaskPatch:
                 self.assignee_supplied,
                 self.due_date_supplied,
                 self.milestone_supplied,
+                self.project_week_supplied,
+                self.required_skill_labels_supplied,
+                self.estimated_effort_hours_supplied,
             )
         ):
             raise EmptyTaskPatchError
@@ -180,13 +237,16 @@ class Task:
     milestone_id: UUID | None
     title: str
     description: str | None
-    assignee_membership_id: UUID
-    assignee_display_name: str
+    assignee_membership_id: UUID | None
+    assignee_display_name: str | None
     status: TaskStatus
     due_date: date | None
     version: int
     created_at: datetime
     updated_at: datetime
+    project_week_id: UUID | None = None
+    required_skill_labels: tuple[str, ...] = ()
+    estimated_effort_hours: int | None = None
 
     def apply(self, patch: TaskPatch, *, updated_at: datetime) -> Task:
         patch.validate_not_empty()
@@ -201,6 +261,19 @@ class Task:
             ),
             due_date=patch.due_date if patch.due_date_supplied else self.due_date,
             milestone_id=patch.milestone_id if patch.milestone_supplied else self.milestone_id,
+            project_week_id=(
+                patch.project_week_id if patch.project_week_supplied else self.project_week_id
+            ),
+            required_skill_labels=(
+                patch.required_skill_labels
+                if patch.required_skill_labels_supplied
+                else self.required_skill_labels
+            ),
+            estimated_effort_hours=(
+                patch.estimated_effort_hours
+                if patch.estimated_effort_hours_supplied
+                else self.estimated_effort_hours
+            ),
             version=self.version + 1,
             updated_at=updated_at,
         )

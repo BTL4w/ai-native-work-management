@@ -314,23 +314,38 @@ async def test_postgres_approval_is_atomic_idempotent_and_reject_has_no_business
                 "due_date": "2026-09-15",
             }
         ],
+        "project_weeks": [
+            {
+                "ref": "w1",
+                "week_number": 1,
+                "start_date": "2026-09-01",
+                "end_date": "2026-09-15",
+                "objective": "Secure the venue",
+            }
+        ],
         "tasks": [
             {
                 "ref": "t1",
+                "project_week_ref": "w1",
                 "milestone_ref": "m1",
                 "title": "Shortlist venues",
                 "description": None,
                 "due_date": "2026-09-10",
-                "assignee_membership_id": str(assignee_member),
+                "assignee_membership_id": None,
+                "required_skill_labels": ["procurement"],
+                "estimated_effort_hours": 16,
                 "acceptance_criteria": ["Three venues compared"],
             },
             {
                 "ref": "t2",
+                "project_week_ref": "w1",
                 "milestone_ref": "m1",
                 "title": "Book venue",
                 "description": None,
                 "due_date": "2026-09-15",
-                "assignee_membership_id": str(assignee_member),
+                "assignee_membership_id": None,
+                "required_skill_labels": ["negotiation"],
+                "estimated_effort_hours": 8,
                 "acceptance_criteria": ["Signed booking received"],
             },
         ],
@@ -607,7 +622,10 @@ async def test_postgres_approval_is_atomic_idempotent_and_reject_has_no_business
                         "(SELECT count(*) FROM projects WHERE id = :project), "
                         "(SELECT count(*) FROM goals WHERE project_id = :project), "
                         "(SELECT count(*) FROM milestones WHERE project_id = :project), "
+                        "(SELECT count(*) FROM project_weeks WHERE project_id = :project), "
                         "(SELECT count(*) FROM tasks WHERE project_id = :project), "
+                        "(SELECT count(*) FROM tasks WHERE project_id = :project "
+                        " AND assignee_membership_id IS NULL), "
                         "(SELECT count(*) FROM task_dependencies d JOIN tasks t "
                         " ON t.id = d.predecessor_task_id WHERE t.project_id = :project), "
                         "(SELECT count(*) FROM acceptance_criteria c JOIN tasks t "
@@ -686,7 +704,7 @@ async def test_postgres_approval_is_atomic_idempotent_and_reject_has_no_business
                     },
                 )
             ).one()
-        assert tuple(approved_counts) == (1, 1, 1, 2, 1, 2, 1, 1, 1, "COMPLETED", 1)
+        assert tuple(approved_counts) == (1, 1, 1, 1, 2, 2, 1, 2, 1, 1, 1, "COMPLETED", 1)
         assert tuple(rejected_counts) == ("REJECTED", "REJECTED", 0, 0)
         assert tuple(failed_counts) == ("PENDING", "READY_FOR_DECISION", 0, 0, 0, 0, 0)
         assert tuple(stale_counts) == ("SUPERSEDED", "STALE", 0, 1)

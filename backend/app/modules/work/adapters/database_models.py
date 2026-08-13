@@ -112,6 +112,11 @@ class TaskModel(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["organization_id", "project_week_id"],
+            ["project_weeks.organization_id", "project_weeks.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["organization_id", "created_by_membership_id"],
             ["memberships.organization_id", "memberships.id"],
             ondelete="RESTRICT",
@@ -124,6 +129,7 @@ class TaskModel(Base):
         UniqueConstraint("organization_id", "id"),
         Index("ix_tasks_project_status", "organization_id", "project_id", "status", "id"),
         Index("ix_tasks_milestone", "organization_id", "milestone_id", "id"),
+        Index("ix_tasks_project_week", "organization_id", "project_week_id", "id"),
         Index(
             "ix_tasks_assignee_status_due",
             "organization_id",
@@ -138,9 +144,12 @@ class TaskModel(Base):
     organization_id: Mapped[UUID]
     project_id: Mapped[UUID]
     milestone_id: Mapped[UUID | None]
+    project_week_id: Mapped[UUID | None]
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
-    assignee_membership_id: Mapped[UUID]
+    assignee_membership_id: Mapped[UUID | None]
+    required_skill_labels: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    estimated_effort_hours: Mapped[int | None]
     status: Mapped[TaskStatus] = mapped_column(
         SQLAlchemyEnum(TaskStatus, name="task_status", validate_strings=True)
     )

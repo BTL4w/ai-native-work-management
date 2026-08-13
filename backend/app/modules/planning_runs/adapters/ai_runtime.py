@@ -110,9 +110,7 @@ class PlanningAIRuntime:
         validated = PlanningModelOutput.model_validate(content)
         result = verify_plan(
             validated,
-            PlanningVerificationContext(
-                active_membership_ids=active_membership_ids,
-            ),
+            PlanningVerificationContext(),
         )
         return _validation_json(result)
 
@@ -140,6 +138,7 @@ def _mock_plan() -> dict[str, object]:
             "target_date": None,
         },
         "milestones": [],
+        "project_weeks": [],
         "tasks": [],
         "dependencies": [],
         "assumptions": [],
@@ -244,17 +243,11 @@ class _PlanningContextAdapter:
             or request.actor_membership_id != self._run.requested_by_membership_id
         ):
             raise PermissionError("planning context scope mismatch")
-        async with self._transactions(request.organization_id) as transaction:
-            active = await transaction.repository.list_active_membership_ids(
-                organization_id=request.organization_id
-            )
-            await transaction.commit()
         questions: tuple[str, ...] = ()
         if len(request.user_brief.split()) < 4 and not request.manager_answers:
             questions = ("Please provide more planning detail.",)
         return PermittedPlanningContext(
             reference_ids=(),
-            active_membership_ids=active,
             required_questions=questions,
             structured_facts={},
         )
@@ -513,12 +506,9 @@ class ProposalRevalidationJobHandler:
             )
             if version is None:
                 raise RuntimeError("PROPOSAL_VERSION_UNAVAILABLE")
-            active = await transaction.repository.list_active_membership_ids(
-                organization_id=job.organization_id
-            )
             validation = verify_plan(
                 PlanningModelOutput.model_validate(version.content),
-                PlanningVerificationContext(active_membership_ids=active),
+                PlanningVerificationContext(),
             )
             public_validation = _validation_json(validation)
             await transaction.repository.append_event(
@@ -610,7 +600,6 @@ class ProposalAIRevisionJobHandler:
                     str(item.get("reference_id", ""))
                     for item in preflight.version.source_reference_snapshot
                 ),
-                active_membership_ids=preflight.active_membership_ids,
                 required_questions=(),
                 structured_facts={"proposal_version": base_version},
             )
@@ -651,31 +640,10 @@ class ProposalAIRevisionJobHandler:
         }:
             raise RuntimeError("ACTOR_CONTEXT_UNAVAILABLE")
         content = cast(dict[str, object], revision.content.model_dump(mode="json"))
-        assignees = {
-            UUID(str(task["assignee_membership_id"]))
-            for task in cast(list[dict[str, object]], content.get("tasks", []))
-            if task.get("assignee_membership_id") is not None
-        }
         async with self._transactions(current_actor) as transaction:
-            active = await transaction.repository.list_active_membership_ids(
-                organization_id=current_actor.organization_id
-            )
-            if not assignees.issubset(active):
-                await transaction.repository.append_event(
-                    actor=current_actor,
-                    run_id=job.workflow_run_id,
-                    event_type="proposal.revision_stale",
-                    public_payload={
-                        "proposal_id": str(proposal_id),
-                        "base_version": base_version,
-                        "safe_error_code": "ASSIGNEE_NOT_PERMITTED",
-                    },
-                )
-                await transaction.commit()
-                return
             validation = self._runtime.validate_proposal_deterministically(
                 content,
-                active_membership_ids=active,
+                active_membership_ids=frozenset(),
             )
             appended = await transaction.repository.finalize_ai_revision_mutation(
                 actor=current_actor,

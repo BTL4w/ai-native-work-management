@@ -155,12 +155,27 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
             )
             assert project.status_code == 201
             project_id = project.json()["id"]
+            project_week = await client.post(
+                f"/api/v1/projects/{project_id}/weeks",
+                json={
+                    "week_number": 1,
+                    "start_date": "2026-08-10",
+                    "end_date": "2026-08-16",
+                    "objective": "Collect onboarding documents",
+                },
+                headers={"Idempotency-Key": "task-project-week-create"},
+            )
+            assert project_week.status_code == 201
+            project_week_id = project_week.json()["id"]
 
             body = {
                 "project_id": project_id,
+                "project_week_id": project_week_id,
                 "title": " Collect documents ",
                 "description": " Checklist ",
                 "assignee_membership_id": str(employee_member),
+                "required_skill_labels": ["customer-communication"],
+                "estimated_effort_hours": 8,
                 "due_date": "2026-08-12",
             }
             created = await client.post(

@@ -14,8 +14,8 @@ from work_management_ai.workflows.planning.verifier import (
     PlanningValidationResult,
 )
 
-PLANNING_WORKFLOW_VERSION = "1.0.0"
-PLANNING_SCHEMA_VERSION = "planning-proposal.v1"
+PLANNING_WORKFLOW_VERSION = "2.0.0"
+PLANNING_SCHEMA_VERSION = "planning-proposal.v2"
 
 PlanningLocale = Literal["vi", "en"]
 PlanningActorRole = Literal["ADMIN", "MANAGER", "EMPLOYEE"]
@@ -103,22 +103,11 @@ def merge_revision_assignees(
     base: PlanningModelOutput,
     draft: PlanningModelOutput,
 ) -> PlanningModelOutput:
-    """Preserve Manager selections by stable ref and clear new-task assignments."""
+    """Keep all proposed work unassigned; assignment is a later Manager action."""
 
-    base_by_ref = _unique_tasks(base, code="BASE_TASK_REF_INVALID")
+    _unique_tasks(base, code="BASE_TASK_REF_INVALID")
     _unique_tasks(draft, code="REVISION_TASK_REF_INVALID")
-    tasks = [
-        task.model_copy(
-            update={
-                "assignee_membership_id": (
-                    base_by_ref[task.ref].assignee_membership_id
-                    if task.ref in base_by_ref
-                    else None
-                )
-            }
-        )
-        for task in draft.tasks
-    ]
+    tasks = [task.model_copy(update={"assignee_membership_id": None}) for task in draft.tasks]
     return draft.model_copy(update={"tasks": tasks})
 
 

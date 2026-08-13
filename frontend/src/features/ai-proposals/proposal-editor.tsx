@@ -1,19 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 
-import type { Member } from "@/features/work/contracts";
-
 import type { ProposalContent } from "./contracts";
 
 export function ProposalEditor({
   initial,
-  members,
   saving,
   onCancel,
   onSave,
 }: {
   initial: ProposalContent;
-  members: Member[];
   saving: boolean;
   onCancel: () => void;
   onSave: (content: ProposalContent) => void;
@@ -37,14 +33,18 @@ export function ProposalEditor({
   }
 
   function addTask() {
+    if (!draft.project_weeks.length) return;
     const position = nextPosition(draft.tasks.map((item) => item.ref), "t");
     setDraft({ ...draft, tasks: [...draft.tasks, {
       ref: `t${position}`,
+      project_week_ref: draft.project_weeks[0].ref,
       milestone_ref: draft.milestones[0]?.ref ?? null,
       title: `Task ${position}`,
       description: null,
       due_date: null,
       assignee_membership_id: null,
+      required_skill_labels: [],
+      estimated_effort_hours: 1,
       acceptance_criteria: [],
     }] });
   }
@@ -104,23 +104,30 @@ export function ProposalEditor({
         <button type="button" onClick={addMilestone}>{t("action.addMilestone")}</button>
       </fieldset>
       <fieldset><legend>{t("tasks")}</legend>
+        {draft.project_weeks.toSorted((a, b) => a.week_number - b.week_number).map((week) => (
+          <div className="ai-editor-row" key={week.ref}>
+            <h4>{t("editor.weekNumber", { number: week.week_number })}</h4>
+            <label>{t("editor.weekObjective")}<input value={week.objective} onChange={(event) => setDraft({ ...draft, project_weeks: draft.project_weeks.map((item) => item.ref === week.ref ? { ...item, objective: event.target.value } : item) })} /></label>
+            <label>{t("editor.startDate")}<input type="date" value={week.start_date} onChange={(event) => setDraft({ ...draft, project_weeks: draft.project_weeks.map((item) => item.ref === week.ref ? { ...item, start_date: event.target.value } : item) })} /></label>
+            <label>{t("editor.dueDate")}<input type="date" value={week.end_date} onChange={(event) => setDraft({ ...draft, project_weeks: draft.project_weeks.map((item) => item.ref === week.ref ? { ...item, end_date: event.target.value } : item) })} /></label>
+          </div>
+        ))}
         {draft.tasks.map((task, index) => (
           <div className="ai-editor-row" key={task.ref}>
             <label>{t("editor.taskTitle")}<input value={task.title} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, title: event.target.value } : item) })} /></label>
             <label>{t("editor.description")}<textarea value={task.description ?? ""} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, description: event.target.value || null } : item) })} /></label>
             <label>{t("editor.dueDate")}<input type="date" value={task.due_date ?? ""} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, due_date: event.target.value || null } : item) })} /></label>
             <label>{t("editor.milestone")}<select value={task.milestone_ref ?? ""} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, milestone_ref: event.target.value || null } : item) })}><option value="">{t("editor.unselected")}</option>{draft.milestones.map((milestone) => <option key={milestone.ref} value={milestone.ref}>{milestone.title}</option>)}</select></label>
-            <label>{t("editor.assignee")}<select value={task.assignee_membership_id ?? ""} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, assignee_membership_id: event.target.value || null } : item) })}>
-              <option value="">{t("editor.unselected")}</option>
-              {members.map((member) => <option key={member.membership_id} value={member.membership_id}>{member.display_name}</option>)}
-            </select></label>
+            <label>{t("editor.week")}<select value={task.project_week_ref} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, project_week_ref: event.target.value } : item) })}>{draft.project_weeks.map((week) => <option key={week.ref} value={week.ref}>{t("editor.weekNumber", { number: week.week_number })}</option>)}</select></label>
+            <label>{t("editor.requiredSkills")}<textarea value={task.required_skill_labels.join("\n")} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, required_skill_labels: lines(event.target.value) } : item) })} /></label>
+            <label>{t("editor.effortHours")}<input min={1} type="number" value={task.estimated_effort_hours} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, estimated_effort_hours: Number(event.target.value) } : item) })} /></label>
             <label>{t("editor.criteriaFor", { task: task.title })}<textarea aria-label={t("editor.criteriaFor", { task: task.title })} value={task.acceptance_criteria.join("\n")} onChange={(event) => setDraft({ ...draft, tasks: draft.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, acceptance_criteria: lines(event.target.value) } : item) })} /></label>
             <button aria-label={t("action.moveUp", { item: task.title })} disabled={index === 0} type="button" onClick={() => moveTask(index, -1)}>↑</button>
             <button aria-label={t("action.moveDown", { item: task.title })} disabled={index === draft.tasks.length - 1} type="button" onClick={() => moveTask(index, 1)}>↓</button>
             <button type="button" onClick={() => setDraft({ ...draft, tasks: draft.tasks.filter((_, taskIndex) => taskIndex !== index), dependencies: draft.dependencies.filter((edge) => edge.predecessor_ref !== task.ref && edge.successor_ref !== task.ref) })}>{t("action.remove")}</button>
           </div>
         ))}
-        <button type="button" onClick={addTask}>{t("action.addTask")}</button>
+        <button disabled={!draft.project_weeks.length} type="button" onClick={addTask}>{t("action.addTask")}</button>
       </fieldset>
       <fieldset><legend>{t("dependencies")}</legend>{draft.dependencies.map((edge, index) => <div className="ai-editor-row" key={`${edge.predecessor_ref}-${edge.successor_ref}`}><label>{t("editor.predecessor")}<select value={edge.predecessor_ref} onChange={(event) => {
         const predecessor_ref = event.target.value;

@@ -31,6 +31,12 @@ from app.modules.work.planning.domain.milestones import (
     MilestoneDraft,
     MilestonePatch,
 )
+from app.modules.work.planning.domain.project_weeks import (
+    ProjectWeek,
+    ProjectWeekDraft,
+    ProjectWeekPatch,
+    ProjectWeekStatus,
+)
 
 _WRITERS = frozenset({MembershipRole.ADMIN, MembershipRole.MANAGER})
 
@@ -85,6 +91,14 @@ class MilestoneDateInvariantError(PlanningError):
 
 class DuplicateAcceptanceCriterionError(PlanningError):
     """Criterion text must be unique after normalization within a Task."""
+
+
+class ProjectWeekOverlapError(PlanningError):
+    """Project Week date ranges cannot overlap within a Project."""
+
+
+class ProjectWeekDeleteBlockedError(PlanningError):
+    """A completed or referenced Project Week cannot be deleted."""
 
 
 def _fingerprint(operation: str, values: dict[str, object]) -> str:
@@ -150,6 +164,203 @@ class ManualPlanningService:
             return await repository.list_goals(
                 actor=actor, project_id=project_id, page=page, page_size=page_size
             )
+
+    async def list_project_weeks(
+        self, *, actor: AuthenticatedActor, project_id: UUID, page: int, page_size: int
+    ) -> PlanningPage:
+        async with self._transactions() as repository:
+            return await repository.list_project_weeks(
+                actor=actor, project_id=project_id, page=page, page_size=page_size
+            )
+
+    async def get_project_week(
+        self, *, actor: AuthenticatedActor, project_id: UUID, project_week_id: UUID
+    ) -> ProjectWeek:
+        async with self._transactions() as repository:
+            resource = await repository.get_project_week(
+                actor=actor, project_id=project_id, project_week_id=project_week_id
+            )
+        if resource is None:
+            raise PlanningNotFoundError
+        return resource
+
+    async def create_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        week_number: int,
+        start_date: date,
+        end_date: date,
+        objective: str,
+        status: ProjectWeekStatus,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PlanningMutationResult:
+        action = "project_week.created"
+        await self._require_writer(
+            actor=actor, action=action, request_id=request_id, idempotency_key=idempotency_key
+        )
+        try:
+            draft = ProjectWeekDraft.create(
+                project_id=project_id,
+                week_number=week_number,
+                start_date=start_date,
+                end_date=end_date,
+                objective=objective,
+                status=status,
+            )
+            fingerprint = _fingerprint(
+                "project_week.create",
+                {
+                    "project_id": draft.project_id,
+                    "week_number": draft.week_number,
+                    "start_date": draft.start_date,
+                    "end_date": draft.end_date,
+                    "objective": draft.objective,
+                    "status": draft.status,
+                },
+            )
+            async with self._transactions() as repository:
+                return await repository.create_project_week(
+                    actor=actor,
+                    draft=draft,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
+        except Exception as error:
+            await self._audit_error(
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=None,
+                error=error,
+            )
+            raise
+
+    async def update_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        project_week_id: UUID,
+        week_number: int | None,
+        week_number_supplied: bool,
+        start_date: date | None,
+        start_date_supplied: bool,
+        end_date: date | None,
+        end_date_supplied: bool,
+        objective: str | None,
+        objective_supplied: bool,
+        status: ProjectWeekStatus | None,
+        status_supplied: bool,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PlanningMutationResult:
+        action = "project_week.updated"
+        await self._require_writer(
+            actor=actor,
+            action=action,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            resource_id=project_week_id,
+        )
+        try:
+            patch = ProjectWeekPatch.create(
+                week_number=week_number,
+                week_number_supplied=week_number_supplied,
+                start_date=start_date,
+                start_date_supplied=start_date_supplied,
+                end_date=end_date,
+                end_date_supplied=end_date_supplied,
+                objective=objective,
+                objective_supplied=objective_supplied,
+                status=status,
+                status_supplied=status_supplied,
+            )
+            patch.validate_not_empty()
+            values = {
+                key: value
+                for key, supplied, value in (
+                    ("week_number", patch.week_number_supplied, patch.week_number),
+                    ("start_date", patch.start_date_supplied, patch.start_date),
+                    ("end_date", patch.end_date_supplied, patch.end_date),
+                    ("objective", patch.objective_supplied, patch.objective),
+                    ("status", patch.status_supplied, patch.status),
+                )
+                if supplied
+            }
+            async with self._transactions() as repository:
+                return await repository.update_project_week(
+                    actor=actor,
+                    project_id=project_id,
+                    project_week_id=project_week_id,
+                    patch=patch,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=_fingerprint(
+                        "project_week.update",
+                        {**values, "id": project_week_id, "version": expected_version},
+                    ),
+                )
+        except Exception as error:
+            await self._audit_error(
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=project_week_id,
+                error=error,
+            )
+            raise
+
+    async def delete_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        project_week_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PlanningDeleteResult:
+        action = "project_week.deleted"
+        await self._require_writer(
+            actor=actor,
+            action=action,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            resource_id=project_week_id,
+        )
+        fingerprint = _fingerprint(
+            "project_week.delete",
+            {"id": project_week_id, "project_id": project_id, "version": expected_version},
+        )
+        try:
+            async with self._transactions() as repository:
+                return await repository.delete_project_week(
+                    actor=actor,
+                    project_id=project_id,
+                    project_week_id=project_week_id,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
+        except Exception as error:
+            await self._audit_error(
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=project_week_id,
+                error=error,
+            )
+            raise
 
     async def get_goal(self, *, actor: AuthenticatedActor, goal_id: UUID) -> Goal:
         async with self._transactions() as repository:

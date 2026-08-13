@@ -29,6 +29,7 @@ const proposalContent = {
     target_date: null,
   },
   milestones: [],
+  project_weeks: [],
   tasks: [],
   dependencies: [],
   assumptions: [{ description: "Budget is not yet confirmed", source: "manager_input" }],

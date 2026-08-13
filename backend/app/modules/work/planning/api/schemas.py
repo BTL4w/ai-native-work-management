@@ -11,6 +11,7 @@ from app.modules.work.planning.domain.acceptance_criteria import AcceptanceCrite
 from app.modules.work.planning.domain.dependencies import TaskDependency
 from app.modules.work.planning.domain.goals import Goal
 from app.modules.work.planning.domain.milestones import Milestone
+from app.modules.work.planning.domain.project_weeks import ProjectWeek, ProjectWeekStatus
 
 
 class GoalCreateRequest(BaseModel):
@@ -45,6 +46,24 @@ class MilestoneUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     target_date: date | None = None
     position: int | None = Field(default=None, ge=1)
+
+
+class ProjectWeekCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    week_number: int = Field(ge=1)
+    start_date: date
+    end_date: date
+    objective: str = Field(min_length=1, max_length=2_000)
+    status: ProjectWeekStatus = ProjectWeekStatus.PLANNED
+
+
+class ProjectWeekUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    week_number: int | None = Field(default=None, ge=1)
+    start_date: date | None = None
+    end_date: date | None = None
+    objective: str | None = Field(default=None, min_length=1, max_length=2_000)
+    status: ProjectWeekStatus | None = None
 
 
 class DependencyCreateRequest(BaseModel):
@@ -144,6 +163,34 @@ class DependencyResponse(BaseModel):
         )
 
 
+class ProjectWeekResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    week_number: int
+    start_date: date
+    end_date: date
+    objective: str
+    status: ProjectWeekStatus
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, item: ProjectWeek) -> Self:
+        return cls(
+            id=item.id,
+            project_id=item.project_id,
+            week_number=item.week_number,
+            start_date=item.start_date,
+            end_date=item.end_date,
+            objective=item.objective,
+            status=item.status,
+            version=item.version,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+
+
 class AcceptanceCriterionResponse(BaseModel):
     id: UUID
     task_id: UUID
@@ -167,7 +214,13 @@ class AcceptanceCriterionResponse(BaseModel):
 
 
 class PlanningPageResponse(BaseModel):
-    items: list[GoalResponse | MilestoneResponse | DependencyResponse | AcceptanceCriterionResponse]
+    items: list[
+        GoalResponse
+        | MilestoneResponse
+        | ProjectWeekResponse
+        | DependencyResponse
+        | AcceptanceCriterionResponse
+    ]
     page: int
     page_size: int
     total: int
@@ -201,6 +254,19 @@ class PlanningPageResponse(BaseModel):
                 DependencyResponse.from_domain(item)
                 for item in page.items
                 if isinstance(item, TaskDependency)
+            ],
+            page=page.page,
+            page_size=page.page_size,
+            total=page.total,
+        )
+
+    @classmethod
+    def project_weeks(cls, page: PlanningPage) -> Self:
+        return cls(
+            items=[
+                ProjectWeekResponse.from_domain(item)
+                for item in page.items
+                if isinstance(item, ProjectWeek)
             ],
             page=page.page,
             page_size=page.page_size,

@@ -16,6 +16,7 @@ const project = {
 const task = {
   id: "22222222-2222-4222-8222-222222222222",
   project_id: project.id,
+  project_week_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   milestone_id: null,
   title: "Collect documents",
   description: null,
@@ -23,6 +24,8 @@ const task = {
     membership_id: "33333333-3333-4333-8333-333333333333",
     display_name: "Employee",
   },
+  required_skill_labels: [],
+  estimated_effort_hours: 8,
   status: "IN_PROGRESS",
   due_date: null,
   version: 2,

@@ -29,6 +29,7 @@ VALID_PLAN: dict[str, object] = {
         "target_date": "2026-09-30",
     },
     "milestones": [],
+    "project_weeks": [],
     "tasks": [],
     "dependencies": [],
     "assumptions": [],

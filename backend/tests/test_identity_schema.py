@@ -31,6 +31,7 @@ def test_active_phase_tables_are_registered() -> None:
         "task_status_transitions",
         "goals",
         "milestones",
+        "project_weeks",
         "task_dependencies",
         "acceptance_criteria",
         "workflow_runs",

@@ -37,11 +37,13 @@ describe("planning contracts", () => {
     expect(projectPlanSchema.parse({
       goal: null,
       milestones: [],
+      project_weeks: [],
       dependencies: [],
       acceptance_criteria: [],
     })).toEqual({
       goal: null,
       milestones: [],
+      project_weeks: [],
       dependencies: [],
       acceptance_criteria: [],
     });

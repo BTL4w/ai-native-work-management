@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from app.core.database import Base
+from app.modules.work.planning.domain.project_weeks import ProjectWeekStatus
 
 
 def _actor_foreign_keys() -> tuple[ForeignKeyConstraint, ForeignKeyConstraint]:
@@ -85,6 +86,43 @@ class MilestoneModel(Base):
     description: Mapped[str | None] = mapped_column(Text)
     target_date: Mapped[date | None] = mapped_column(Date)
     position: Mapped[int]
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_by_membership_id: Mapped[UUID]
+    updated_by_membership_id: Mapped[UUID]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProjectWeekModel(Base):
+    __tablename__ = "project_weeks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "project_id"],
+            ["projects.organization_id", "projects.id"],
+            ondelete="CASCADE",
+        ),
+        *_actor_foreign_keys(),
+        UniqueConstraint("organization_id", "id"),
+        UniqueConstraint("organization_id", "project_id", "week_number"),
+        CheckConstraint("week_number > 0", name="ck_project_weeks_number_positive"),
+        CheckConstraint("end_date >= start_date", name="ck_project_weeks_date_order"),
+        Index(
+            "ix_project_weeks_project_number",
+            "organization_id",
+            "project_id",
+            "week_number",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID]
+    project_id: Mapped[UUID]
+    week_number: Mapped[int]
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    objective: Mapped[str] = mapped_column(Text)
+    status: Mapped[ProjectWeekStatus] = mapped_column(String(20))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_by_membership_id: Mapped[UUID]
     updated_by_membership_id: Mapped[UUID]

@@ -3,11 +3,10 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
-from uuid import UUID
 
 from work_management_ai.schemas.planning import PlanningModelOutput
 
-PLANNING_VERIFIER_VERSION = "1.0.0"
+PLANNING_VERIFIER_VERSION = "2.0.0"
 MAX_MILESTONES = 20
 MAX_TASKS = 100
 MAX_DEPENDENCIES = 200
@@ -18,7 +17,7 @@ MAX_ACCEPTANCE_CRITERIA_PER_TASK = 20
 class PlanningVerificationContext:
     """Permitted facts used by deterministic verification."""
 
-    active_membership_ids: frozenset[UUID]
+    # Intentionally empty: weekly planning must not load Employee context.
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +48,7 @@ def verify_plan(
 ) -> PlanningValidationResult:
     """Verify business invariants without invoking a model."""
 
+    del context
     errors: list[PlanningValidationItem] = []
     warnings: list[PlanningValidationItem] = []
 
@@ -92,11 +92,28 @@ def verify_plan(
         error("goal.target_date", "GOAL_AFTER_PROJECT")
 
     milestone_by_ref = {milestone.ref: milestone for milestone in plan.milestones}
+    week_by_ref = {week.ref: week for week in plan.project_weeks}
     task_by_ref = {task.ref: task for task in plan.tasks}
     if len(milestone_by_ref) != len(plan.milestones):
         error("milestones", "MILESTONE_REF_DUPLICATE")
     if len(task_by_ref) != len(plan.tasks):
         error("tasks", "TASK_REF_DUPLICATE")
+    if len(week_by_ref) != len(plan.project_weeks):
+        error("project_weeks", "PROJECT_WEEK_REF_DUPLICATE")
+
+    ordered_weeks = sorted(plan.project_weeks, key=lambda week: week.week_number)
+    if [week.week_number for week in ordered_weeks] != list(range(1, len(ordered_weeks) + 1)):
+        error("project_weeks", "PROJECT_WEEK_NUMBER_SEQUENCE")
+    for index, week in enumerate(ordered_weeks):
+        path = f"project_weeks[{week.ref}]"
+        if week.end_date < week.start_date:
+            error(f"{path}.end_date", "PROJECT_WEEK_DATE_ORDER")
+        if index and ordered_weeks[index - 1].end_date >= week.start_date:
+            error(path, "PROJECT_WEEK_DATE_OVERLAP")
+        if plan.project.start_date is not None and week.start_date < plan.project.start_date:
+            error(f"{path}.start_date", "PROJECT_WEEK_OUTSIDE_PROJECT")
+        if plan.project.due_date is not None and week.end_date > plan.project.due_date:
+            error(f"{path}.end_date", "PROJECT_WEEK_OUTSIDE_PROJECT")
 
     for milestone in plan.milestones:
         if (
@@ -108,10 +125,20 @@ def verify_plan(
 
     for task in plan.tasks:
         task_path = f"tasks[{task.ref}]"
-        if task.assignee_membership_id is None:
-            error(f"{task_path}.assignee_membership_id", "ASSIGNEE_REQUIRED")
-        elif task.assignee_membership_id not in context.active_membership_ids:
-            error(f"{task_path}.assignee_membership_id", "ASSIGNEE_NOT_PERMITTED")
+        week = week_by_ref.get(task.project_week_ref)
+        if week is None:
+            error(f"{task_path}.project_week_ref", "PROJECT_WEEK_REF_OUTSIDE_CONTEXT")
+        elif task.due_date is not None and not week.start_date <= task.due_date <= week.end_date:
+            error(f"{task_path}.due_date", "TASK_OUTSIDE_PROJECT_WEEK")
+        if not 1 <= task.estimated_effort_hours <= 10_000:
+            error(f"{task_path}.estimated_effort_hours", "TASK_EFFORT_INVALID")
+        normalized_skills = [label.strip().casefold() for label in task.required_skill_labels]
+        if (
+            len(normalized_skills) > 20
+            or any(not label or len(label) > 80 for label in normalized_skills)
+            or len(set(normalized_skills)) != len(normalized_skills)
+        ):
+            error(f"{task_path}.required_skill_labels", "TASK_SKILL_LABELS_INVALID")
 
         milestone = (
             milestone_by_ref.get(task.milestone_ref) if task.milestone_ref is not None else None

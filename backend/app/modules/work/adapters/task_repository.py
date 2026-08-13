@@ -38,21 +38,25 @@ from app.modules.work.domain.tasks import (
     TaskStatus,
     TaskVersionMismatchError,
 )
-from app.modules.work.planning.adapters.database_models import MilestoneModel
+from app.modules.work.planning.adapters.database_models import MilestoneModel, ProjectWeekModel
+from app.modules.work.planning.domain.project_weeks import ProjectWeekStatus
 
 _TTL = timedelta(hours=24)
 
 
-def _task_from_row(model: TaskModel, display_name: str) -> Task:
+def _task_from_row(model: TaskModel, display_name: str | None) -> Task:
     return Task(
         id=model.id,
         organization_id=model.organization_id,
         project_id=model.project_id,
+        project_week_id=model.project_week_id,
         milestone_id=model.milestone_id,
         title=model.title,
         description=model.description,
         assignee_membership_id=model.assignee_membership_id,
         assignee_display_name=display_name,
+        required_skill_labels=tuple(model.required_skill_labels),
+        estimated_effort_hours=model.estimated_effort_hours,
         status=model.status,
         due_date=model.due_date,
         version=model.version,
@@ -66,11 +70,16 @@ def _json(task: Task) -> dict[str, Any]:
         "id": str(task.id),
         "organization_id": str(task.organization_id),
         "project_id": str(task.project_id),
+        "project_week_id": str(task.project_week_id) if task.project_week_id else None,
         "milestone_id": str(task.milestone_id) if task.milestone_id else None,
         "title": task.title,
         "description": task.description,
-        "assignee_membership_id": str(task.assignee_membership_id),
+        "assignee_membership_id": (
+            str(task.assignee_membership_id) if task.assignee_membership_id else None
+        ),
         "assignee_display_name": task.assignee_display_name,
+        "required_skill_labels": list(task.required_skill_labels),
+        "estimated_effort_hours": task.estimated_effort_hours,
         "status": task.status.value,
         "due_date": task.due_date.isoformat() if task.due_date else None,
         "version": task.version,
@@ -85,11 +94,28 @@ def _from_json(value: dict[str, Any]) -> Task:
         id=UUID(str(value["id"])),
         organization_id=UUID(str(value["organization_id"])),
         project_id=UUID(str(value["project_id"])),
+        project_week_id=(
+            UUID(str(value["project_week_id"])) if value.get("project_week_id") else None
+        ),
         milestone_id=(UUID(str(value["milestone_id"])) if value.get("milestone_id") else None),
         title=str(value["title"]),
         description=str(value["description"]) if value["description"] is not None else None,
-        assignee_membership_id=UUID(str(value["assignee_membership_id"])),
-        assignee_display_name=str(value["assignee_display_name"]),
+        assignee_membership_id=(
+            UUID(str(value["assignee_membership_id"]))
+            if value.get("assignee_membership_id")
+            else None
+        ),
+        assignee_display_name=(
+            str(value["assignee_display_name"])
+            if value.get("assignee_display_name") is not None
+            else None
+        ),
+        required_skill_labels=tuple(str(item) for item in value.get("required_skill_labels", [])),
+        estimated_effort_hours=(
+            int(value["estimated_effort_hours"])
+            if value.get("estimated_effort_hours") is not None
+            else None
+        ),
         status=TaskStatus(str(value["status"])),
         due_date=date.fromisoformat(str(due)) if due else None,
         version=int(value["version"]),
@@ -116,12 +142,12 @@ class SqlAlchemyTaskRepository:
     def _base(self):
         return (
             select(TaskModel, UserModel.display_name)
-            .join(
+            .outerjoin(
                 MembershipModel,
                 (MembershipModel.organization_id == TaskModel.organization_id)
                 & (MembershipModel.id == TaskModel.assignee_membership_id),
             )
-            .join(UserModel, UserModel.id == MembershipModel.user_id)
+            .outerjoin(UserModel, UserModel.id == MembershipModel.user_id)
         )
 
     async def list_tasks(
@@ -228,7 +254,11 @@ class SqlAlchemyTaskRepository:
         ).all()
         return tuple(_task_from_row(model, name) for model, name in rows)
 
-    async def _assignee_name(self, actor: AuthenticatedActor, membership_id: UUID) -> str:
+    async def _assignee_name(
+        self, actor: AuthenticatedActor, membership_id: UUID | None
+    ) -> str | None:
+        if membership_id is None:
+            return None
         row = (
             await self._session.execute(
                 select(UserModel.display_name)
@@ -278,6 +308,28 @@ class SqlAlchemyTaskRepository:
             and milestone.target_date is not None
             and due_date > milestone.target_date
         ):
+            raise TaskReferenceError("due_date")
+
+    async def _validate_week(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        project_id: UUID,
+        project_week_id: UUID | None,
+        due_date: date | None,
+    ) -> None:
+        if project_week_id is None:
+            raise TaskReferenceError("project_week_id")
+        week = await self._session.scalar(
+            select(ProjectWeekModel).where(
+                ProjectWeekModel.organization_id == actor.organization_id,
+                ProjectWeekModel.id == project_week_id,
+                ProjectWeekModel.project_id == project_id,
+            )
+        )
+        if week is None or week.status == ProjectWeekStatus.COMPLETED:
+            raise TaskReferenceError("project_week_id")
+        if due_date is not None and not week.start_date <= due_date <= week.end_date:
             raise TaskReferenceError("due_date")
 
     async def _replay(
@@ -376,6 +428,12 @@ class SqlAlchemyTaskRepository:
             milestone_id=draft.milestone_id,
             due_date=draft.due_date,
         )
+        await self._validate_week(
+            actor,
+            project_id=draft.project_id,
+            project_week_id=draft.project_week_id,
+            due_date=draft.due_date,
+        )
         display_name = await self._assignee_name(actor, draft.assignee_membership_id)
         now = datetime.now(UTC)
         record = self._record(
@@ -389,10 +447,13 @@ class SqlAlchemyTaskRepository:
             id=uuid4(),
             organization_id=actor.organization_id,
             project_id=draft.project_id,
+            project_week_id=draft.project_week_id,
             milestone_id=draft.milestone_id,
             title=draft.title,
             description=draft.description,
             assignee_membership_id=draft.assignee_membership_id,
+            required_skill_labels=list(draft.required_skill_labels),
+            estimated_effort_hours=draft.estimated_effort_hours,
             status=TaskStatus.TO_DO,
             due_date=draft.due_date,
             version=1,
@@ -413,15 +474,16 @@ class SqlAlchemyTaskRepository:
             before={},
             after={"title": task.title, "status": task.status.value},
         )
-        self._audit(
-            actor=actor,
-            action="task.assigned",
-            task_id=task.id,
-            request_id=request_id,
-            key=idempotency_key,
-            before={},
-            after={"assignee_membership_id": str(task.assignee_membership_id)},
-        )
+        if task.assignee_membership_id is not None:
+            self._audit(
+                actor=actor,
+                action="task.assigned",
+                task_id=task.id,
+                request_id=request_id,
+                key=idempotency_key,
+                before={},
+                after={"assignee_membership_id": str(task.assignee_membership_id)},
+            )
         record.state, record.response_status, record.response_body = (
             IdempotencyState.COMPLETED,
             201,
@@ -468,6 +530,14 @@ class SqlAlchemyTaskRepository:
             milestone_id=patch.milestone_id if patch.milestone_supplied else model.milestone_id,
             due_date=patch.due_date if patch.due_date_supplied else model.due_date,
         )
+        await self._validate_week(
+            actor,
+            project_id=model.project_id,
+            project_week_id=(
+                patch.project_week_id if patch.project_week_supplied else model.project_week_id
+            ),
+            due_date=patch.due_date if patch.due_date_supplied else model.due_date,
+        )
         now = datetime.now(UTC)
         record = self._record(
             actor=actor,
@@ -484,6 +554,17 @@ class SqlAlchemyTaskRepository:
             ("assignee_membership_id", patch.assignee_supplied, patch.assignee_membership_id),
             ("due_date", patch.due_date_supplied, patch.due_date),
             ("milestone_id", patch.milestone_supplied, patch.milestone_id),
+            ("project_week_id", patch.project_week_supplied, patch.project_week_id),
+            (
+                "required_skill_labels",
+                patch.required_skill_labels_supplied,
+                list(patch.required_skill_labels),
+            ),
+            (
+                "estimated_effort_hours",
+                patch.estimated_effort_hours_supplied,
+                patch.estimated_effort_hours,
+            ),
         ):
             if supplied:
                 old = getattr(model, field)

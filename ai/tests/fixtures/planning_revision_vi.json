@@ -20,23 +20,45 @@
         "due_date": "2026-09-08"
       }
     ],
+    "project_weeks": [
+      {
+        "ref": "w1",
+        "week_number": 1,
+        "start_date": "2026-08-10",
+        "end_date": "2026-08-16",
+        "objective": "Xác nhận nền tảng sự kiện"
+      },
+      {
+        "ref": "w2",
+        "week_number": 2,
+        "start_date": "2026-08-17",
+        "end_date": "2026-09-02",
+        "objective": "Chốt các nhà cung cấp"
+      }
+    ],
     "tasks": [
       {
         "ref": "t1",
+        "project_week_ref": "w2",
         "milestone_ref": "m1",
         "title": "Ký hợp đồng địa điểm",
         "description": null,
         "due_date": "2026-09-01",
-        "assignee_membership_id": "00000000-0000-0000-0000-000000000999",
+        "assignee_membership_id": null,
+        "required_skill_labels": ["đàm phán nhà cung cấp"],
+        "estimated_effort_hours": 16,
         "acceptance_criteria": ["Hợp đồng địa điểm đã được ký"]
       },
       {
         "ref": "t2",
+        "project_week_ref": "w2",
         "milestone_ref": "m1",
         "title": "Xác nhận dịch vụ ăn uống",
         "description": null,
         "due_date": "2026-09-02",
-        "assignee_membership_id": "00000000-0000-0000-0000-000000000999",
+        "assignee_membership_id": null,
+        "required_skill_labels": ["đàm phán nhà cung cấp"],
+        "estimated_effort_hours": 12,
         "acceptance_criteria": ["Hợp đồng ăn uống đã được ký"]
       }
     ],

@@ -1,7 +1,6 @@
 """Typed structured output for the Phase 2 planning model."""
 
 from datetime import date
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -37,13 +36,24 @@ class ProposedMilestone(PlanningSchema):
     due_date: date | None
 
 
+class ProposedProjectWeek(PlanningSchema):
+    ref: str
+    week_number: int
+    start_date: date
+    end_date: date
+    objective: str
+
+
 class ProposedTask(PlanningSchema):
     ref: str
+    project_week_ref: str
     milestone_ref: str | None
     title: str
     description: str | None
     due_date: date | None
-    assignee_membership_id: UUID | None
+    assignee_membership_id: None = None
+    required_skill_labels: list[str]
+    estimated_effort_hours: int
     acceptance_criteria: list[str]
 
 
@@ -61,6 +71,7 @@ class PlanningModelOutput(PlanningSchema):
     project: ProposedProject
     goal: ProposedGoal
     milestones: list[ProposedMilestone]
+    project_weeks: list[ProposedProjectWeek]
     tasks: list[ProposedTask]
     dependencies: list[ProposedDependency]
     assumptions: list[ProposedAssumption]

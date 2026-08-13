@@ -37,14 +37,26 @@ VALID_PLAN: dict[str, object] = {
             "due_date": "2026-09-10",
         }
     ],
+    "project_weeks": [
+        {
+            "ref": "week.customs",
+            "week_number": 1,
+            "start_date": "2026-08-10",
+            "end_date": "2026-09-01",
+            "objective": "Chuẩn bị và duyệt chứng từ",
+        }
+    ],
     "tasks": [
         {
             "ref": "task.documents",
+            "project_week_ref": "week.customs",
             "milestone_ref": "milestone.customs",
             "title": "Chuẩn bị chứng từ",
             "description": None,
             "due_date": "2026-09-01",
             "assignee_membership_id": None,
+            "required_skill_labels": ["chứng từ xuất nhập khẩu"],
+            "estimated_effort_hours": 24,
             "acceptance_criteria": ["Bộ chứng từ được quản lý phê duyệt"],
         }
     ],
@@ -131,21 +143,19 @@ async def test_mock_gateway_rejects_invalid_structured_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_planning_output_accepts_uuid_or_null_assignee_contract() -> None:
+async def test_planning_output_rejects_assignee_and_accepts_null_contract() -> None:
     plan_with_assignee = deepcopy(VALID_PLAN)
     tasks = cast(list[object], plan_with_assignee["tasks"])
     first_task = cast(dict[str, object], tasks[0])
     first_task["assignee_membership_id"] = "be338caf-6d7c-48c7-85c8-cbb7d4e2c841"
     gateway = MockModelGateway(fixtures={"planning.with-assignee": plan_with_assignee})
 
-    with_assignee = await gateway.generate_structured(request("planning.with-assignee"))
+    with pytest.raises(ModelInvalidOutputError):
+        await gateway.generate_structured(request("planning.with-assignee"))
     without_assignee = await MockModelGateway(
         fixtures={"planning.without-assignee": VALID_PLAN}
     ).generate_structured(request("planning.without-assignee"))
 
-    assert str(with_assignee.parsed.tasks[0].assignee_membership_id) == (
-        "be338caf-6d7c-48c7-85c8-cbb7d4e2c841"
-    )
     assert without_assignee.parsed.tasks[0].assignee_membership_id is None
 
 

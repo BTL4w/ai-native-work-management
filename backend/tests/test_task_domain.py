@@ -22,6 +22,7 @@ def _task(status: TaskStatus = TaskStatus.TO_DO) -> Task:
         id=uuid4(),
         organization_id=uuid4(),
         project_id=uuid4(),
+        project_week_id=uuid4(),
         milestone_id=None,
         title="Collect documents",
         description="Checklist",
@@ -39,16 +40,22 @@ def test_task_draft_normalizes_text_and_always_starts_to_do() -> None:
     milestone_id = uuid4()
     draft = TaskDraft.create(
         project_id=uuid4(),
+        project_week_id=uuid4(),
         milestone_id=milestone_id,
         title="  Collect documents  ",
         description="  Checklist  ",
-        assignee_membership_id=uuid4(),
+        assignee_membership_id=None,
+        required_skill_labels=(" Analysis ", "Stakeholder Communication"),
+        estimated_effort_hours=12,
         due_date=date(2026, 8, 12),
     )
 
     assert draft.title == "Collect documents"
     assert draft.description == "Checklist"
     assert draft.milestone_id == milestone_id
+    assert draft.assignee_membership_id is None
+    assert draft.required_skill_labels == ("analysis", "stakeholder communication")
+    assert draft.estimated_effort_hours == 12
     assert draft.initial_status is TaskStatus.TO_DO
 
 
@@ -57,13 +64,31 @@ def test_task_draft_rejects_invalid_title(title: str) -> None:
     with pytest.raises(InvalidTaskFieldError) as error:
         TaskDraft.create(
             project_id=uuid4(),
+            project_week_id=uuid4(),
             milestone_id=None,
             title=title,
             description=None,
             assignee_membership_id=uuid4(),
+            required_skill_labels=(),
+            estimated_effort_hours=1,
             due_date=None,
         )
     assert error.value.field == "title"
+
+
+def test_new_task_requires_week_and_can_be_unassigned() -> None:
+    with pytest.raises(InvalidTaskFieldError, match="project_week_id"):
+        TaskDraft.create(
+            project_id=uuid4(),
+            project_week_id=None,
+            milestone_id=None,
+            title="Plan launch",
+            description=None,
+            assignee_membership_id=None,
+            required_skill_labels=("planning",),
+            estimated_effort_hours=8,
+            due_date=None,
+        )
 
 
 def test_task_patch_preserves_omitted_and_explicit_null_fields() -> None:

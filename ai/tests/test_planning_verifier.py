@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from typing import cast
-from uuid import UUID
 
 import pytest
 
@@ -15,8 +14,6 @@ from work_management_ai.workflows.planning.verifier import (
     PlanningVerificationContext,
     verify_plan,
 )
-
-ASSIGNEE_ID = UUID("00000000-0000-0000-0000-000000000111")
 
 
 def valid_plan_data() -> dict[str, object]:
@@ -41,14 +38,33 @@ def valid_plan_data() -> dict[str, object]:
                 "due_date": "2026-09-01",
             }
         ],
+        "project_weeks": [
+            {
+                "ref": "w1",
+                "week_number": 1,
+                "start_date": "2026-08-10",
+                "end_date": "2026-08-16",
+                "objective": "Prepare venue sourcing",
+            },
+            {
+                "ref": "w2",
+                "week_number": 2,
+                "start_date": "2026-08-17",
+                "end_date": "2026-08-25",
+                "objective": "Confirm venue",
+            },
+        ],
         "tasks": [
             {
                 "ref": "t1",
+                "project_week_ref": "w2",
                 "milestone_ref": "m1",
                 "title": "Confirm venue",
                 "description": None,
                 "due_date": "2026-08-25",
                 "assignee_membership_id": None,
+                "required_skill_labels": ["vendor negotiation"],
+                "estimated_effort_hours": 16,
                 "acceptance_criteria": ["Signed venue agreement is available"],
             }
         ],
@@ -58,39 +74,29 @@ def valid_plan_data() -> dict[str, object]:
 
 
 def verification_context() -> PlanningVerificationContext:
-    return PlanningVerificationContext(active_membership_ids=frozenset({ASSIGNEE_ID}))
+    return PlanningVerificationContext()
 
 
 def assigned_plan_data() -> dict[str, object]:
-    data = valid_plan_data()
-    tasks = cast(list[dict[str, object]], data["tasks"])
-    tasks[0]["assignee_membership_id"] = str(ASSIGNEE_ID)
-    return data
+    return valid_plan_data()
 
 
-def test_verifier_requires_manager_selected_assignee() -> None:
+def test_verifier_accepts_unassigned_weekly_task() -> None:
     plan = PlanningModelOutput.model_validate(valid_plan_data())
 
     result = verify_plan(plan, verification_context())
 
-    assert [(item.path, item.code) for item in result.errors] == [
-        ("tasks[t1].assignee_membership_id", "ASSIGNEE_REQUIRED")
-    ]
-    assert result.can_approve is False
+    assert result.errors == ()
+    assert result.can_approve is True
 
 
-def test_verifier_rejects_inactive_or_foreign_selected_assignee() -> None:
-    plan = PlanningModelOutput.model_validate(assigned_plan_data())
+def test_schema_rejects_ai_assignee() -> None:
+    data = valid_plan_data()
+    tasks = cast(list[dict[str, object]], data["tasks"])
+    tasks[0]["assignee_membership_id"] = "00000000-0000-0000-0000-000000000111"
 
-    result = verify_plan(
-        plan,
-        PlanningVerificationContext(active_membership_ids=frozenset()),
-    )
-
-    assert [(item.path, item.code) for item in result.errors] == [
-        ("tasks[t1].assignee_membership_id", "ASSIGNEE_NOT_PERMITTED")
-    ]
-    assert result.can_approve is False
+    with pytest.raises(ValueError):
+        PlanningModelOutput.model_validate(data)
 
 
 def test_verifier_accepts_exactly_one_goal_and_resolves_temporary_refs() -> None:
@@ -155,6 +161,7 @@ def test_verifier_rejects_task_after_milestone_and_milestone_after_project() -> 
     assert [(item.path, item.code) for item in result.errors] == [
         ("milestones[m1].due_date", "MILESTONE_AFTER_PROJECT"),
         ("tasks[t1].due_date", "TASK_AFTER_MILESTONE"),
+        ("tasks[t1].due_date", "TASK_OUTSIDE_PROJECT_WEEK"),
     ]
 
 
@@ -171,6 +178,8 @@ def test_verifier_rejects_project_date_order_and_goal_after_project() -> None:
     assert [(item.path, item.code) for item in result.errors] == [
         ("goal.target_date", "GOAL_AFTER_PROJECT"),
         ("project.start_date", "PROJECT_DATE_ORDER"),
+        ("project_weeks[w1].start_date", "PROJECT_WEEK_OUTSIDE_PROJECT"),
+        ("project_weeks[w2].start_date", "PROJECT_WEEK_OUTSIDE_PROJECT"),
     ]
 
 

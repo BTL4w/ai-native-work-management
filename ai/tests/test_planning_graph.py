@@ -56,7 +56,6 @@ class FakeContextPort:
         self.requests.append(request)
         return PermittedPlanningContext(
             reference_ids=("context:project:7",),
-            active_membership_ids=frozenset(),
             required_questions=self.required_questions,
             structured_facts={"project_version": 7},
         )
@@ -199,11 +198,10 @@ async def test_model_cannot_select_assignee_for_the_manager() -> None:
     tasks[0]["assignee_membership_id"] = str(ACTOR_ID)
     graph, _, persistence = graph_with({"planning.en.generate": fixture})
 
-    await graph.run(new_state())
+    result = await graph.run(new_state())
 
-    draft = next(iter(persistence.proposals.values()))
-    assert draft.content.tasks[0].assignee_membership_id is None
-    assert [item.code for item in draft.validation.errors] == ["ASSIGNEE_REQUIRED"]
+    assert result.state["stage"] == "MANUAL_FALLBACK"
+    assert persistence.proposals == {}
 
 
 @pytest.mark.asyncio
@@ -343,8 +341,6 @@ async def test_trace_failure_does_not_fail_business_workflow() -> None:
 @pytest.mark.asyncio
 async def test_generate_revision_has_no_persistence_side_effect() -> None:
     base_data = load_fixture("en")
-    base_tasks = cast(list[dict[str, object]], base_data["tasks"])
-    base_tasks[0]["assignee_membership_id"] = str(ACTOR_ID)
     base_content = PlanningModelOutput.model_validate(base_data)
     revision_fixture = cast(
         dict[str, object],
@@ -353,7 +349,6 @@ async def test_generate_revision_has_no_persistence_side_effect() -> None:
     graph, _, persistence = graph_with({"planning.en.proposal_revision": revision_fixture})
     context = PermittedPlanningContext(
         reference_ids=("proposal:version:1",),
-        active_membership_ids=frozenset({ACTOR_ID}),
         required_questions=(),
         structured_facts={"proposal_version": 1},
     )
@@ -375,7 +370,7 @@ async def test_generate_revision_has_no_persistence_side_effect() -> None:
     assert persistence.proposals == {}
     assert result.content.project.title == base_content.project.title
     assert result.content.tasks[0].ref == "t1"
-    assert result.content.tasks[0].assignee_membership_id == ACTOR_ID
+    assert result.content.tasks[0].assignee_membership_id is None
     assert result.content.tasks[1].assignee_membership_id is None
 
 
@@ -392,7 +387,6 @@ async def test_generate_revision_rejects_deterministic_invariant_failure() -> No
     graph, _, persistence = graph_with({"planning.en.proposal_revision": revision_fixture})
     context = PermittedPlanningContext(
         reference_ids=("proposal:version:1",),
-        active_membership_ids=frozenset(),
         required_questions=(),
         structured_facts={"proposal_version": 1},
     )

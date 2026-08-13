@@ -33,7 +33,7 @@ test("invalid credentials can be corrected without losing the login flow", async
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
 });
 
-test("Manager assigns a Task and Employee completes it", async ({ page }) => {
+test("Manager plans a week, explicitly assigns a Task, and Employee completes it", async ({ page }) => {
   const suffix = `${Date.now()}`;
   const projectName = `E2E Project ${suffix}`;
   const taskTitle = `E2E Task ${suffix}`;
@@ -41,12 +41,22 @@ test("Manager assigns a Task and Employee completes it", async ({ page }) => {
   await signIn(page, "manager@example.test");
   await page.getByRole("button", { name: "Tạo project" }).click();
   await page.getByLabel("Tên project").fill(projectName);
-  await page.getByLabel("Mô tả project").fill("Phase 1 browser acceptance flow");
+  await page.getByLabel("Mô tả project").fill("Weekly planning browser acceptance flow");
   await page.getByRole("button", { name: "Lưu project" }).click();
   await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
 
+  await page.getByRole("tab", { name: "Kế hoạch" }).click();
+  await page.getByRole("button", { name: "Thêm tuần" }).click();
+  await page.getByLabel("Ngày bắt đầu").fill("2026-08-10");
+  await page.getByLabel("Ngày kết thúc").fill("2026-08-16");
+  await page.getByLabel("Mục tiêu tuần").fill("Complete the E2E task");
+  await page.getByRole("button", { name: "Lưu tuần" }).click();
+  await expect(page.getByText("Complete the E2E task")).toBeVisible();
+  await page.getByRole("tab", { name: "Tasks" }).click();
+
   await page.getByRole("button", { name: "Tạo task" }).click();
   await page.getByLabel("Tiêu đề task").fill(taskTitle);
+  await page.getByLabel("Tuần dự án").selectOption({ label: "Tuần 1" });
   await page.getByLabel("Người thực hiện").selectOption({ label: "Demo Employee" });
   await page.getByRole("button", { name: "Lưu task" }).click();
   await expect(page.getByRole("heading", { name: taskTitle })).toBeVisible();

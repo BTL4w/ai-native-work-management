@@ -9,6 +9,7 @@ const initial = {
   project: { title: "Conference", description: null, start_date: null, due_date: null },
   goal: { title: "Engage customers", description: null, expected_outcomes: [], target_date: null },
   milestones: [],
+  project_weeks: [{ ref: "w1", week_number: 1, start_date: "2026-08-17", end_date: "2026-08-23", objective: "Prepare" }],
   tasks: [],
   dependencies: [],
   assumptions: [],
@@ -19,7 +20,7 @@ describe("ProposalEditor", () => {
     const onSave = vi.fn();
     render(
       <AppLocaleProvider initialLocale="vi">
-        <ProposalEditor initial={initial} members={[]} saving={false} onCancel={vi.fn()} onSave={onSave} />
+        <ProposalEditor initial={initial} saving={false} onCancel={vi.fn()} onSave={onSave} />
       </AppLocaleProvider>,
     );
 
@@ -50,11 +51,10 @@ describe("ProposalEditor", () => {
           initial={{
             ...initial,
             tasks: [
-              { ref: "t1", milestone_ref: null, title: "First", description: null, due_date: null, assignee_membership_id: null, acceptance_criteria: [] },
-              { ref: "t2", milestone_ref: null, title: "Second", description: null, due_date: null, assignee_membership_id: null, acceptance_criteria: [] },
+              { ref: "t1", project_week_ref: "w1", milestone_ref: null, title: "First", description: null, due_date: null, assignee_membership_id: null, required_skill_labels: [], estimated_effort_hours: 1, acceptance_criteria: [] },
+              { ref: "t2", project_week_ref: "w1", milestone_ref: null, title: "Second", description: null, due_date: null, assignee_membership_id: null, required_skill_labels: [], estimated_effort_hours: 1, acceptance_criteria: [] },
             ],
           }}
-          members={[]}
           saving={false}
           onCancel={vi.fn()}
           onSave={onSave}

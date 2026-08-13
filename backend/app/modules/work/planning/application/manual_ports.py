@@ -23,10 +23,19 @@ from app.modules.work.planning.domain.milestones import (
     MilestoneDraft,
     MilestonePatch,
 )
+from app.modules.work.planning.domain.project_weeks import (
+    ProjectWeek,
+    ProjectWeekDraft,
+    ProjectWeekPatch,
+)
 
-type PlanningResource = Goal | Milestone | TaskDependency | AcceptanceCriterion
-type PlanningDraft = GoalDraft | MilestoneDraft | TaskDependencyDraft | AcceptanceCriterionDraft
-type PlanningPatch = GoalPatch | MilestonePatch | TaskDependencyPatch | AcceptanceCriterionPatch
+type PlanningResource = Goal | Milestone | ProjectWeek | TaskDependency | AcceptanceCriterion
+type PlanningDraft = (
+    GoalDraft | MilestoneDraft | ProjectWeekDraft | TaskDependencyDraft | AcceptanceCriterionDraft
+)
+type PlanningPatch = (
+    GoalPatch | MilestonePatch | ProjectWeekPatch | TaskDependencyPatch | AcceptanceCriterionPatch
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +60,44 @@ class PlanningDeleteResult:
 
 
 class ManualPlanningRepository(Protocol):
+    async def list_project_weeks(
+        self, *, actor: AuthenticatedActor, project_id: UUID, page: int, page_size: int
+    ) -> PlanningPage: ...
+    async def get_project_week(
+        self, *, actor: AuthenticatedActor, project_id: UUID, project_week_id: UUID
+    ) -> ProjectWeek | None: ...
+    async def create_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        draft: ProjectWeekDraft,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PlanningMutationResult: ...
+    async def update_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        project_week_id: UUID,
+        patch: ProjectWeekPatch,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PlanningMutationResult: ...
+    async def delete_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        project_week_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PlanningDeleteResult: ...
     async def list_goals(
         self, *, actor: AuthenticatedActor, project_id: UUID | None, page: int, page_size: int
     ) -> PlanningPage: ...

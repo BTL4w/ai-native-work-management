@@ -27,6 +27,9 @@ from app.modules.work.planning.api.schemas import (
     MilestoneResponse,
     MilestoneUpdateRequest,
     PlanningPageResponse,
+    ProjectWeekCreateRequest,
+    ProjectWeekResponse,
+    ProjectWeekUpdateRequest,
 )
 from app.modules.work.planning.application.manual_service import (
     PlanningError,
@@ -40,6 +43,7 @@ from app.modules.work.planning.domain.acceptance_criteria import AcceptanceCrite
 from app.modules.work.planning.domain.dependencies import DependencyError
 from app.modules.work.planning.domain.goals import GoalError
 from app.modules.work.planning.domain.milestones import MilestoneError
+from app.modules.work.planning.domain.project_weeks import ProjectWeekError
 
 router = APIRouter(tags=["planning"])
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)]
@@ -98,6 +102,7 @@ def _raise(error: Exception) -> NoReturn:
             PlanningError,
             GoalError,
             MilestoneError,
+            ProjectWeekError,
             DependencyError,
             AcceptanceCriterionError,
         ),
@@ -114,6 +119,148 @@ def _headers(response: Response, version: int, replayed: bool) -> None:
     response.headers["ETag"] = f'"{version}"'
     if replayed:
         response.headers["Idempotency-Replayed"] = "true"
+
+
+@router.get("/projects/{project_id}/weeks", response_model=PlanningPageResponse, responses=_ERRORS)
+async def list_project_weeks(
+    project_id: UUID,
+    actor: ActorDependency,
+    service: ManualPlanningServiceDependency,
+    page: Page = 1,
+    page_size: PageSize = 20,
+) -> PlanningPageResponse:
+    return PlanningPageResponse.project_weeks(
+        await service.list_project_weeks(
+            actor=actor, project_id=project_id, page=page, page_size=page_size
+        )
+    )
+
+
+@router.post(
+    "/projects/{project_id}/weeks",
+    response_model=ProjectWeekResponse,
+    status_code=http_status.HTTP_201_CREATED,
+    responses=_ERRORS,
+)
+async def create_project_week(
+    project_id: UUID,
+    payload: ProjectWeekCreateRequest,
+    request: Request,
+    response: Response,
+    actor: ActorDependency,
+    service: ManualPlanningServiceDependency,
+    idempotency_key: IdempotencyKey,
+) -> ProjectWeekResponse:
+    try:
+        result = await service.create_project_week(
+            actor=actor,
+            project_id=project_id,
+            week_number=payload.week_number,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            objective=payload.objective,
+            status=payload.status,
+            request_id=str(request.state.request_id),
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, result.resource.version, result.replayed)
+    return ProjectWeekResponse.from_domain(result.resource)  # type: ignore[arg-type]
+
+
+@router.get(
+    "/projects/{project_id}/weeks/{project_week_id}",
+    response_model=ProjectWeekResponse,
+    responses=_ERRORS,
+)
+async def get_project_week(
+    project_id: UUID,
+    project_week_id: UUID,
+    response: Response,
+    actor: ActorDependency,
+    service: ManualPlanningServiceDependency,
+) -> ProjectWeekResponse:
+    try:
+        resource = await service.get_project_week(
+            actor=actor, project_id=project_id, project_week_id=project_week_id
+        )
+    except Exception as error:
+        _raise(error)
+    response.headers["ETag"] = f'"{resource.version}"'
+    return ProjectWeekResponse.from_domain(resource)
+
+
+@router.patch(
+    "/projects/{project_id}/weeks/{project_week_id}",
+    response_model=ProjectWeekResponse,
+    responses=_ERRORS,
+)
+async def update_project_week(
+    project_id: UUID,
+    project_week_id: UUID,
+    payload: ProjectWeekUpdateRequest,
+    request: Request,
+    response: Response,
+    actor: ActorDependency,
+    service: ManualPlanningServiceDependency,
+    idempotency_key: IdempotencyKey,
+    if_match: IfMatch = None,
+) -> ProjectWeekResponse:
+    supplied = payload.model_fields_set
+    try:
+        result = await service.update_project_week(
+            actor=actor,
+            project_id=project_id,
+            project_week_id=project_week_id,
+            week_number=payload.week_number,
+            week_number_supplied="week_number" in supplied,
+            start_date=payload.start_date,
+            start_date_supplied="start_date" in supplied,
+            end_date=payload.end_date,
+            end_date_supplied="end_date" in supplied,
+            objective=payload.objective,
+            objective_supplied="objective" in supplied,
+            status=payload.status,
+            status_supplied="status" in supplied,
+            expected_version=_version(if_match),
+            request_id=str(request.state.request_id),
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, result.resource.version, result.replayed)
+    return ProjectWeekResponse.from_domain(result.resource)  # type: ignore[arg-type]
+
+
+@router.delete(
+    "/projects/{project_id}/weeks/{project_week_id}",
+    response_model=DeleteResponse,
+    responses=_ERRORS,
+)
+async def delete_project_week(
+    project_id: UUID,
+    project_week_id: UUID,
+    request: Request,
+    response: Response,
+    actor: ActorDependency,
+    service: ManualPlanningServiceDependency,
+    idempotency_key: IdempotencyKey,
+    if_match: IfMatch = None,
+) -> DeleteResponse:
+    try:
+        result = await service.delete_project_week(
+            actor=actor,
+            project_id=project_id,
+            project_week_id=project_week_id,
+            expected_version=_version(if_match),
+            request_id=str(request.state.request_id),
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, result.version, result.replayed)
+    return DeleteResponse.from_domain(result)
 
 
 @router.get("/goals", response_model=PlanningPageResponse, responses=_ERRORS)

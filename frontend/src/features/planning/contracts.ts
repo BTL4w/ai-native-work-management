@@ -58,6 +58,32 @@ export const milestoneSchema = z.object({
   ...versionFields,
 });
 
+export const projectWeekStatusSchema = z.enum(["PLANNED", "ACTIVE", "COMPLETED"]);
+export const projectWeekCreateSchema = z.object({
+  week_number: z.number().int().positive(),
+  start_date: z.iso.date(),
+  end_date: z.iso.date(),
+  objective: z.string().trim().min(1).max(2000),
+  status: projectWeekStatusSchema.default("PLANNED"),
+});
+export const projectWeekUpdateSchema = z.object({
+  week_number: z.number().int().positive().nullable().optional(),
+  start_date: z.iso.date().nullable().optional(),
+  end_date: z.iso.date().nullable().optional(),
+  objective: z.string().trim().min(1).max(2000).nullable().optional(),
+  status: projectWeekStatusSchema.nullable().optional(),
+});
+export const projectWeekSchema = z.object({
+  id: z.uuid(),
+  project_id: z.uuid(),
+  week_number: z.number().int().positive(),
+  start_date: z.iso.date(),
+  end_date: z.iso.date(),
+  objective: z.string(),
+  status: projectWeekStatusSchema,
+  ...versionFields,
+});
+
 export const dependencyCreateSchema = z.object({
   predecessor_task_id: z.uuid(),
   successor_task_id: z.uuid(),
@@ -107,11 +133,13 @@ function pageSchema<T extends z.ZodType>(item: T) {
 
 export const goalPageSchema = pageSchema(goalSchema);
 export const milestonePageSchema = pageSchema(milestoneSchema);
+export const projectWeekPageSchema = pageSchema(projectWeekSchema);
 export const dependencyPageSchema = pageSchema(taskDependencySchema);
 export const acceptanceCriterionPageSchema = pageSchema(acceptanceCriterionSchema);
 export const planningPageSchema = pageSchema(z.union([
   goalSchema,
   milestoneSchema,
+  projectWeekSchema,
   taskDependencySchema,
   acceptanceCriterionSchema,
 ]));
@@ -119,6 +147,7 @@ export const planningPageSchema = pageSchema(z.union([
 export const projectPlanSchema = z.object({
   goal: goalSchema.nullable(),
   milestones: z.array(milestoneSchema),
+  project_weeks: z.array(projectWeekSchema),
   dependencies: z.array(taskDependencySchema),
   acceptance_criteria: z.array(acceptanceCriterionSchema),
 });
@@ -129,6 +158,9 @@ export type Goal = z.infer<typeof goalSchema>;
 export type MilestoneInput = z.input<typeof milestoneCreateSchema>;
 export type MilestonePatch = z.input<typeof milestoneUpdateSchema>;
 export type Milestone = z.infer<typeof milestoneSchema>;
+export type ProjectWeekInput = z.input<typeof projectWeekCreateSchema>;
+export type ProjectWeekPatch = z.input<typeof projectWeekUpdateSchema>;
+export type ProjectWeek = z.infer<typeof projectWeekSchema>;
 export type DependencyInput = z.input<typeof dependencyCreateSchema>;
 export type DependencyPatch = z.input<typeof dependencyUpdateSchema>;
 export type TaskDependency = z.infer<typeof taskDependencySchema>;

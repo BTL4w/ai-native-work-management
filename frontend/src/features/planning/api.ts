@@ -16,6 +16,8 @@ import {
   goalSchema,
   milestonePageSchema,
   milestoneSchema,
+  projectWeekPageSchema,
+  projectWeekSchema,
   taskDependencySchema,
   type AcceptanceCriterion,
   type AcceptanceCriterionInput,
@@ -29,6 +31,9 @@ import {
   type MilestoneInput,
   type MilestonePatch,
   type ProjectPlan,
+  type ProjectWeek,
+  type ProjectWeekInput,
+  type ProjectWeekPatch,
   type TaskDependency,
 } from "./contracts";
 
@@ -84,9 +89,10 @@ function remove(path: string, version: number, key: string): Promise<void> {
 }
 
 export async function getProjectPlanBundle(projectId: string): Promise<ProjectPlanBundle> {
-  const [goals, milestones, dependencies, tasks] = await Promise.all([
+  const [goals, milestones, projectWeeks, dependencies, tasks] = await Promise.all([
     allPages("goals", { project_id: projectId }, goalPageSchema),
     allPages("milestones", { project_id: projectId }, milestonePageSchema),
+    allPages(`projects/${projectId}/weeks`, {}, projectWeekPageSchema).catch(() => []),
     allPages("task-dependencies", { project_id: projectId }, dependencyPageSchema),
     allPages<Task>("tasks", { project_id: projectId }, taskPageSchema),
   ]);
@@ -97,11 +103,16 @@ export async function getProjectPlanBundle(projectId: string): Promise<ProjectPl
     plan: {
       goal: goals[0] ?? null,
       milestones,
+      project_weeks: projectWeeks,
       dependencies,
       acceptance_criteria: criteriaByTask.flat(),
     },
     tasks,
   };
+}
+
+export function listProjectWeeks(projectId: string): Promise<ProjectWeek[]> {
+  return allPages(`projects/${projectId}/weeks`, {}, projectWeekPageSchema);
 }
 
 export async function getProjectPlan(projectId: string): Promise<ProjectPlan> {
@@ -126,6 +137,16 @@ export function updateMilestone(id: string, input: MilestonePatch, version: numb
 }
 export function deleteMilestone(id: string, version: number, key: string): Promise<void> {
   return remove(`/api/v1/milestones/${id}`, version, key);
+}
+
+export function createProjectWeek(projectId: string, input: ProjectWeekInput, key: string): Promise<ApiResult<ProjectWeek>> {
+  return mutate(`/api/v1/projects/${projectId}/weeks`, "POST", input, projectWeekSchema, key);
+}
+export function updateProjectWeek(projectId: string, id: string, input: ProjectWeekPatch, version: number, key: string): Promise<ApiResult<ProjectWeek>> {
+  return mutate(`/api/v1/projects/${projectId}/weeks/${id}`, "PATCH", input, projectWeekSchema, key, version);
+}
+export function deleteProjectWeek(projectId: string, id: string, version: number, key: string): Promise<void> {
+  return remove(`/api/v1/projects/${projectId}/weeks/${id}`, version, key);
 }
 
 export function createDependency(input: DependencyInput, key: string): Promise<ApiResult<TaskDependency>> {

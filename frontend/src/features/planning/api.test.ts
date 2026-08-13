@@ -51,6 +51,7 @@ describe("planning API", () => {
       const path = String(input);
       if (path === `/api/v1/goals?project_id=${projectId}&page=1&page_size=100`) return response(page([goal]));
       if (path === `/api/v1/milestones?project_id=${projectId}&page=1&page_size=100`) return response(page([]));
+      if (path === `/api/v1/projects/${projectId}/weeks?page=1&page_size=100`) return response(page([]));
       if (path === `/api/v1/task-dependencies?project_id=${projectId}&page=1&page_size=100`) return response(page([]));
       if (path === `/api/v1/tasks?project_id=${projectId}&page=1&page_size=100`) return response(page([]));
       throw new Error(`Unexpected request: ${path}`);
@@ -60,6 +61,7 @@ describe("planning API", () => {
     await expect(getProjectPlan(projectId)).resolves.toEqual({
       goal,
       milestones: [],
+      project_weeks: [],
       dependencies: [],
       acceptance_criteria: [],
     });

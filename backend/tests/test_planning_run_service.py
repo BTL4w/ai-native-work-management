@@ -569,7 +569,7 @@ async def test_proposal_edit_rejects_stale_version_employee_and_invalid_assignee
             request_id="request-11",
             idempotency_key="proposal-edit-key-2",
         )
-    with pytest.raises(ValueError, match="ASSIGNEE_NOT_PERMITTED"):
+    with pytest.raises(ValueError, match="ASSIGNEE_NOT_ALLOWED_IN_PLAN"):
         await service.edit_proposal(
             actor=current_actor,
             proposal_id=proposal.id,

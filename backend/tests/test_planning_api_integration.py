@@ -250,13 +250,50 @@ async def test_manual_planning_crud_security_concurrency_and_audit() -> None:
             )
             assert foreign_milestone_reference.status_code == 422
 
+            project_week = await client.post(
+                f"/api/v1/projects/{project_id}/weeks",
+                json={
+                    "week_number": 1,
+                    "start_date": "2026-08-01",
+                    "end_date": "2026-08-31",
+                    "objective": "Complete customs setup",
+                },
+                headers={"Idempotency-Key": "planning-week-create-01"},
+            )
+            assert project_week.status_code == 201
+            project_week_id = project_week.json()["id"]
+            project_week_replay = await client.post(
+                f"/api/v1/projects/{project_id}/weeks",
+                json={
+                    "week_number": 1,
+                    "start_date": "2026-08-01",
+                    "end_date": "2026-08-31",
+                    "objective": "Complete customs setup",
+                },
+                headers={"Idempotency-Key": "planning-week-create-01"},
+            )
+            assert project_week_replay.headers["Idempotency-Replayed"] == "true"
+            overlapping_week = await client.post(
+                f"/api/v1/projects/{project_id}/weeks",
+                json={
+                    "week_number": 2,
+                    "start_date": "2026-08-20",
+                    "end_date": "2026-09-05",
+                    "objective": "Overlapping work",
+                },
+                headers={"Idempotency-Key": "planning-week-overlap"},
+            )
+            assert overlapping_week.status_code == 422
+
             late_task = await client.post(
                 "/api/v1/tasks",
                 json={
                     "project_id": project_id,
+                    "project_week_id": project_week_id,
                     "milestone_id": milestone_id,
                     "title": "Too late",
                     "assignee_membership_id": str(employee_member),
+                    "estimated_effort_hours": 1,
                     "due_date": "2026-09-01",
                 },
                 headers={"Idempotency-Key": "planning-task-too-late"},
@@ -269,9 +306,12 @@ async def test_manual_planning_crud_security_concurrency_and_audit() -> None:
                     "/api/v1/tasks",
                     json={
                         "project_id": project_id,
+                        "project_week_id": project_week_id,
                         "milestone_id": milestone_id,
                         "title": f"Customs task {index}",
                         "assignee_membership_id": str(employee_member),
+                        "required_skill_labels": ["customs"],
+                        "estimated_effort_hours": 8,
                         "due_date": "2026-08-20",
                     },
                     headers={"Idempotency-Key": f"planning-task-create-0{index}"},
@@ -466,6 +506,18 @@ async def test_manual_planning_crud_security_concurrency_and_audit() -> None:
                     },
                 )
                 assert unlinked.status_code == 200, unlinked.text
+            completed_week = await client.patch(
+                f"/api/v1/projects/{project_id}/weeks/{project_week_id}",
+                json={"status": "COMPLETED"},
+                headers={"Idempotency-Key": "planning-week-complete", "If-Match": '"1"'},
+            )
+            assert completed_week.status_code == 200
+            immutable_week = await client.patch(
+                f"/api/v1/projects/{project_id}/weeks/{project_week_id}",
+                json={"objective": "Rewrite history"},
+                headers={"Idempotency-Key": "planning-week-rewrite", "If-Match": '"2"'},
+            )
+            assert immutable_week.status_code == 422
             deletes = (
                 (f"/api/v1/acceptance-criteria/{criterion_id}", '"2"', "planning-delete-ac-01"),
                 (f"/api/v1/task-dependencies/{dependency_id}", '"2"', "planning-delete-dep-01"),
@@ -508,6 +560,7 @@ async def test_manual_planning_crud_security_concurrency_and_audit() -> None:
                 "acceptance_criteria",
                 "task_dependencies",
                 "tasks",
+                "project_weeks",
                 "goals",
                 "milestones",
                 "idempotency_records",

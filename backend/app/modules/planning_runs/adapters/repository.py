@@ -77,6 +77,7 @@ from app.modules.work.planning.adapters.database_models import (
     AcceptanceCriterionModel,
     GoalModel,
     MilestoneModel,
+    ProjectWeekModel,
     TaskDependencyModel,
 )
 from app.modules.work.planning.domain.acceptance_criteria import (
@@ -86,6 +87,11 @@ from app.modules.work.planning.domain.acceptance_criteria import (
 from app.modules.work.planning.domain.dependencies import DependencyError, TaskDependencyDraft
 from app.modules.work.planning.domain.goals import GoalDraft, GoalError
 from app.modules.work.planning.domain.milestones import MilestoneDraft, MilestoneError
+from app.modules.work.planning.domain.project_weeks import (
+    ProjectWeekDraft,
+    ProjectWeekError,
+    ProjectWeekStatus,
+)
 
 _IDEMPOTENCY_TTL = timedelta(hours=24)
 
@@ -370,19 +376,9 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             raise ProposalValidationError
 
         normalized = typed_runtime.validate_proposal_content(version_model.content)
-        active_membership_ids = frozenset(
-            (
-                await self._session.scalars(
-                    select(MembershipModel.id).where(
-                        MembershipModel.organization_id == actor.organization_id,
-                        MembershipModel.is_active.is_(True),
-                    )
-                )
-            ).all()
-        )
         current_validation = typed_runtime.validate_proposal_deterministically(
             normalized,
-            active_membership_ids=active_membership_ids,
+            active_membership_ids=frozenset(),
         )
         if not bool(current_validation.get("can_approve", False)):
             raise ProposalValidationError
@@ -409,6 +405,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                 GoalError,
                 MilestoneError,
                 ProjectError,
+                ProjectWeekError,
                 TaskError,
             ) as error:
                 raise ProposalValidationError from error
@@ -666,6 +663,9 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
         project_data = _mapping(content.get("project"), "project")
         goal_data = _mapping(content.get("goal"), "goal")
         milestone_data = _items(content.get("milestones"), "milestones")
+        if "project_weeks" not in content:
+            raise ProposalValidationError("PROPOSAL_SCHEMA_UPGRADE_REQUIRED")
+        project_week_data = _items(content.get("project_weeks"), "project_weeks")
         task_data = _items(content.get("tasks"), "tasks")
         dependency_data = _items(content.get("dependencies"), "dependencies")
         project_start = _optional_date(project_data.get("start_date"), "project.start_date")
@@ -761,6 +761,65 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             )
         await self._session.flush()
 
+        project_week_by_ref: dict[str, UUID] = {}
+        previous_end: date | None = None
+        expected_week_number = 1
+
+        def week_number_value(item: dict[str, object]) -> int:
+            value = item.get("week_number", 0)
+            if not isinstance(value, (int, str)):
+                raise ProposalValidationError
+            return int(value)
+
+        for raw in sorted(project_week_data, key=week_number_value):
+            ref = str(raw.get("ref", ""))
+            try:
+                week_number = week_number_value(raw)
+            except (TypeError, ValueError) as error:
+                raise ProposalValidationError from error
+            if not ref or ref in project_week_by_ref or week_number != expected_week_number:
+                raise ProposalValidationError
+            start_date = _optional_date(raw.get("start_date"), f"project_weeks[{ref}].start_date")
+            end_date = _optional_date(raw.get("end_date"), f"project_weeks[{ref}].end_date")
+            if start_date is None or end_date is None:
+                raise ProposalValidationError
+            if previous_end is not None and previous_end >= start_date:
+                raise ProposalValidationError
+            if project_start is not None and start_date < project_start:
+                raise ProposalValidationError
+            if project_due is not None and end_date > project_due:
+                raise ProposalValidationError
+            draft = ProjectWeekDraft.create(
+                project_id=project_id,
+                week_number=week_number,
+                start_date=start_date,
+                end_date=end_date,
+                objective=str(raw.get("objective", "")),
+                status=ProjectWeekStatus.PLANNED,
+            )
+            project_week_id = uuid4()
+            project_week_by_ref[ref] = project_week_id
+            self._session.add(
+                ProjectWeekModel(
+                    id=project_week_id,
+                    organization_id=actor.organization_id,
+                    project_id=project_id,
+                    week_number=draft.week_number,
+                    start_date=draft.start_date,
+                    end_date=draft.end_date,
+                    objective=draft.objective,
+                    status=draft.status,
+                    version=1,
+                    created_by_membership_id=actor.membership_id,
+                    updated_by_membership_id=actor.membership_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            previous_end = end_date
+            expected_week_number += 1
+        await self._session.flush()
+
         task_ids: list[UUID] = []
         task_by_ref: dict[str, UUID] = {}
         criterion_ids: list[UUID] = []
@@ -772,6 +831,9 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             milestone_ref = str(milestone_ref_value) if milestone_ref_value is not None else None
             if milestone_ref is not None and milestone_ref not in milestone_by_ref:
                 raise ProposalValidationError
+            project_week_ref = str(raw.get("project_week_ref", ""))
+            if project_week_ref not in project_week_by_ref:
+                raise ProposalValidationError
             due = _optional_date(raw.get("due_date"), f"tasks[{ref}].due_date")
             if (
                 milestone_ref is not None
@@ -780,18 +842,31 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                 and due > cast(date, milestone_due_by_ref[milestone_ref])
             ):
                 raise ProposalValidationError
+            if raw.get("assignee_membership_id") is not None:
+                raise ProposalValidationError
+            skill_values = raw.get("required_skill_labels")
+            if not isinstance(skill_values, list):
+                raise ProposalValidationError
             try:
-                assignee_id = UUID(str(raw["assignee_membership_id"]))
-            except (KeyError, ValueError) as error:
+                effort_value = raw["estimated_effort_hours"]
+                if not isinstance(effort_value, (int, str)):
+                    raise ProposalValidationError
+                effort = int(effort_value)
+            except (KeyError, TypeError, ValueError) as error:
                 raise ProposalValidationError from error
             draft = build_task_draft(
                 project_id=project_id,
+                project_week_id=project_week_by_ref[project_week_ref],
                 milestone_id=(
                     milestone_by_ref[milestone_ref] if milestone_ref is not None else None
                 ),
                 title=str(raw.get("title", "")),
                 description=cast(str | None, raw.get("description")),
-                assignee_membership_id=assignee_id,
+                assignee_membership_id=None,
+                required_skill_labels=tuple(
+                    str(value) for value in cast(list[object], skill_values)
+                ),
+                estimated_effort_hours=effort,
                 due_date=due,
             )
             task_id = uuid4()
@@ -802,10 +877,13 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                     id=task_id,
                     organization_id=actor.organization_id,
                     project_id=project_id,
+                    project_week_id=draft.project_week_id,
                     milestone_id=draft.milestone_id,
                     title=draft.title,
                     description=draft.description,
                     assignee_membership_id=draft.assignee_membership_id,
+                    required_skill_labels=list(draft.required_skill_labels),
+                    estimated_effort_hours=draft.estimated_effort_hours,
                     status=TaskStatus.TO_DO,
                     due_date=draft.due_date,
                     version=1,
@@ -1581,7 +1659,6 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             )
         except ProposalStaleError:
             return None
-        active = await self.list_active_membership_ids(organization_id=actor.organization_id)
         checkpoint = await self.get_latest_checkpoint(actor=actor, run_id=run.id)
         locale = "en"
         if checkpoint is not None and checkpoint.state.get("locale") in {"vi", "en"}:
@@ -1591,7 +1668,6 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             proposal=proposal,
             version=version,
             approval=approval,
-            active_membership_ids=active,
             locale=locale,
         )
 
@@ -1650,14 +1726,9 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
             )
         except ProposalStaleError:
             return None
-        assignees = {
-            UUID(str(task["assignee_membership_id"]))
+        if any(
+            task.get("assignee_membership_id") is not None
             for task in _items(typed_content.get("tasks"), "tasks")
-            if task.get("assignee_membership_id") is not None
-        }
-        if await self.find_invalid_active_membership_ids(
-            actor=actor,
-            membership_ids=assignees,
         ):
             return None
         new_version = ProposalVersion(

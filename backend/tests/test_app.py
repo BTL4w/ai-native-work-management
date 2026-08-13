@@ -40,6 +40,8 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/me",
         "/api/v1/projects",
         "/api/v1/projects/{project_id}",
+        "/api/v1/projects/{project_id}/weeks",
+        "/api/v1/projects/{project_id}/weeks/{project_week_id}",
         "/api/v1/members",
         "/api/v1/tasks",
         "/api/v1/tasks/{task_id}",

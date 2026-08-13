@@ -25,6 +25,7 @@ from app.modules.work.planning.adapters.database_models import (
     AcceptanceCriterionModel,
     GoalModel,
     MilestoneModel,
+    ProjectWeekModel,
     TaskDependencyModel,
 )
 from app.modules.work.planning.application.manual_ports import (
@@ -45,6 +46,8 @@ from app.modules.work.planning.application.manual_service import (
     PlanningNotFoundError,
     PlanningReferenceError,
     PlanningVersionMismatchError,
+    ProjectWeekDeleteBlockedError,
+    ProjectWeekOverlapError,
 )
 from app.modules.work.planning.domain.acceptance_criteria import (
     AcceptanceCriterion,
@@ -61,6 +64,12 @@ from app.modules.work.planning.domain.milestones import (
     Milestone,
     MilestoneDraft,
     MilestonePatch,
+)
+from app.modules.work.planning.domain.project_weeks import (
+    ProjectWeek,
+    ProjectWeekDraft,
+    ProjectWeekPatch,
+    ProjectWeekStatus,
 )
 
 _TTL = timedelta(hours=24)
@@ -90,6 +99,22 @@ def _milestone(model: MilestoneModel) -> Milestone:
         description=model.description,
         target_date=model.target_date,
         position=model.position,
+        version=model.version,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _project_week(model: ProjectWeekModel) -> ProjectWeek:
+    return ProjectWeek(
+        id=model.id,
+        organization_id=model.organization_id,
+        project_id=model.project_id,
+        week_number=model.week_number,
+        start_date=model.start_date,
+        end_date=model.end_date,
+        objective=model.objective,
+        status=ProjectWeekStatus(model.status),
         version=model.version,
         created_at=model.created_at,
         updated_at=model.updated_at,
@@ -149,6 +174,17 @@ def _json(resource: PlanningResource) -> dict[str, Any]:
             "target_date": resource.target_date.isoformat() if resource.target_date else None,
             "position": resource.position,
         }
+    if isinstance(resource, ProjectWeek):
+        return {
+            **common,
+            "kind": "project_week",
+            "project_id": str(resource.project_id),
+            "week_number": resource.week_number,
+            "start_date": resource.start_date.isoformat(),
+            "end_date": resource.end_date.isoformat(),
+            "objective": resource.objective,
+            "status": resource.status.value,
+        }
     if isinstance(resource, TaskDependency):
         return {
             **common,
@@ -198,6 +234,20 @@ def _resource(value: dict[str, Any]) -> PlanningResource:
             description=str(value["description"]) if value["description"] is not None else None,
             target_date=target,
             position=int(value["position"]),
+        )
+    if kind == "project_week":
+        return ProjectWeek(
+            id=resource_id,
+            organization_id=organization_id,
+            version=version,
+            created_at=created_at,
+            updated_at=updated_at,
+            project_id=UUID(str(value["project_id"])),
+            week_number=int(value["week_number"]),
+            start_date=date.fromisoformat(str(value["start_date"])),
+            end_date=date.fromisoformat(str(value["end_date"])),
+            objective=str(value["objective"]),
+            status=ProjectWeekStatus(str(value["status"])),
         )
     if kind == "dependency":
         return TaskDependency(
@@ -257,6 +307,38 @@ class SqlAlchemyManualPlanningRepository:
         )
         if found is None:
             raise PlanningReferenceError("project_id")
+
+    async def _lock_project(self, actor: AuthenticatedActor, project_id: UUID) -> None:
+        found = await self._session.scalar(
+            select(ProjectModel.id)
+            .where(
+                ProjectModel.organization_id == actor.organization_id,
+                ProjectModel.id == project_id,
+            )
+            .with_for_update()
+        )
+        if found is None:
+            raise PlanningReferenceError("project_id")
+
+    async def _ensure_week_range_available(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        project_id: UUID,
+        start_date: date,
+        end_date: date,
+        exclude_id: UUID | None = None,
+    ) -> None:
+        query = select(ProjectWeekModel.id).where(
+            ProjectWeekModel.organization_id == actor.organization_id,
+            ProjectWeekModel.project_id == project_id,
+            ProjectWeekModel.start_date <= end_date,
+            ProjectWeekModel.end_date >= start_date,
+        )
+        if exclude_id is not None:
+            query = query.where(ProjectWeekModel.id != exclude_id)
+        if await self._session.scalar(query.limit(1)) is not None:
+            raise ProjectWeekOverlapError
 
     async def _task(self, actor: AuthenticatedActor, task_id: UUID) -> TaskModel:
         model = await self._session.scalar(
@@ -352,6 +434,227 @@ class SqlAlchemyManualPlanningRepository:
             _json(resource),
         )
         return PlanningMutationResult(resource=resource, replayed=False)
+
+    async def list_project_weeks(
+        self, *, actor: AuthenticatedActor, project_id: UUID, page: int, page_size: int
+    ) -> PlanningPage:
+        await self._activate(actor)
+        predicates = [
+            ProjectWeekModel.organization_id == actor.organization_id,
+            ProjectWeekModel.project_id == project_id,
+            self._visible_project(actor, ProjectWeekModel.project_id),
+        ]
+        total = (
+            await self._session.scalar(
+                select(func.count()).select_from(ProjectWeekModel).where(*predicates)
+            )
+            or 0
+        )
+        models = await self._session.scalars(
+            select(ProjectWeekModel)
+            .where(*predicates)
+            .order_by(ProjectWeekModel.week_number, ProjectWeekModel.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return PlanningPage(tuple(_project_week(item) for item in models), page, page_size, total)
+
+    async def get_project_week(
+        self, *, actor: AuthenticatedActor, project_id: UUID, project_week_id: UUID
+    ) -> ProjectWeek | None:
+        await self._activate(actor)
+        model = await self._session.scalar(
+            select(ProjectWeekModel).where(
+                ProjectWeekModel.organization_id == actor.organization_id,
+                ProjectWeekModel.project_id == project_id,
+                ProjectWeekModel.id == project_week_id,
+                self._visible_project(actor, ProjectWeekModel.project_id),
+            )
+        )
+        return _project_week(model) if model else None
+
+    async def create_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        draft: ProjectWeekDraft,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PlanningMutationResult:
+        await self._activate(actor)
+        operation = "project_week.create"
+        replay = await self._replay(actor, operation, idempotency_key, request_fingerprint)
+        if replay is not None:
+            assert isinstance(replay, PlanningMutationResult)
+            return replay
+        await self._lock_project(actor, draft.project_id)
+        await self._ensure_week_range_available(
+            actor,
+            project_id=draft.project_id,
+            start_date=draft.start_date,
+            end_date=draft.end_date,
+        )
+        now = datetime.now(UTC)
+        record = self._record(actor, operation, idempotency_key, request_fingerprint, now)
+        model = ProjectWeekModel(
+            id=uuid4(),
+            organization_id=actor.organization_id,
+            project_id=draft.project_id,
+            week_number=draft.week_number,
+            start_date=draft.start_date,
+            end_date=draft.end_date,
+            objective=draft.objective,
+            status=draft.status,
+            version=1,
+            created_by_membership_id=actor.membership_id,
+            updated_by_membership_id=actor.membership_id,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        resource = _project_week(model)
+        self._audit(
+            actor,
+            action="project_week.created",
+            resource_type="project_week",
+            resource_id=resource.id,
+            request_id=request_id,
+            key=idempotency_key,
+            before={},
+            after={"week_number": resource.week_number, "status": resource.status.value},
+        )
+        return await self._finish(record, resource, 201)
+
+    async def update_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        project_week_id: UUID,
+        patch: ProjectWeekPatch,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PlanningMutationResult:
+        await self._activate(actor)
+        operation = f"project_week.update:{project_week_id}"
+        replay = await self._replay(actor, operation, idempotency_key, request_fingerprint)
+        if replay is not None:
+            assert isinstance(replay, PlanningMutationResult)
+            return replay
+        await self._lock_project(actor, project_id)
+        model = await self._session.scalar(
+            select(ProjectWeekModel)
+            .where(
+                ProjectWeekModel.organization_id == actor.organization_id,
+                ProjectWeekModel.project_id == project_id,
+                ProjectWeekModel.id == project_week_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PlanningNotFoundError
+        if model.version != expected_version:
+            raise PlanningVersionMismatchError(model.version)
+        current = _project_week(model)
+        updated = current.apply(patch, updated_at=datetime.now(UTC))
+        await self._ensure_week_range_available(
+            actor,
+            project_id=project_id,
+            start_date=updated.start_date,
+            end_date=updated.end_date,
+            exclude_id=project_week_id,
+        )
+        record = self._record(
+            actor, operation, idempotency_key, request_fingerprint, updated.updated_at
+        )
+        before = _json(current)
+        model.week_number = updated.week_number
+        model.start_date = updated.start_date
+        model.end_date = updated.end_date
+        model.objective = updated.objective
+        model.status = updated.status
+        model.version = updated.version
+        model.updated_at = updated.updated_at
+        model.updated_by_membership_id = actor.membership_id
+        await self._session.flush()
+        resource = _project_week(model)
+        self._audit(
+            actor,
+            action="project_week.updated",
+            resource_type="project_week",
+            resource_id=resource.id,
+            request_id=request_id,
+            key=idempotency_key,
+            before=before,
+            after=_json(resource),
+        )
+        return await self._finish(record, resource, 200)
+
+    async def delete_project_week(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        project_week_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PlanningDeleteResult:
+        await self._activate(actor)
+        operation = f"project_week.delete:{project_week_id}"
+        replay = await self._replay(actor, operation, idempotency_key, request_fingerprint)
+        if replay is not None:
+            assert isinstance(replay, PlanningDeleteResult)
+            return replay
+        await self._lock_project(actor, project_id)
+        model = await self._session.scalar(
+            select(ProjectWeekModel)
+            .where(
+                ProjectWeekModel.organization_id == actor.organization_id,
+                ProjectWeekModel.project_id == project_id,
+                ProjectWeekModel.id == project_week_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PlanningNotFoundError
+        if model.version != expected_version:
+            raise PlanningVersionMismatchError(model.version)
+        if model.status == ProjectWeekStatus.COMPLETED or await self._session.scalar(
+            select(TaskModel.id)
+            .where(
+                TaskModel.organization_id == actor.organization_id,
+                TaskModel.project_week_id == project_week_id,
+            )
+            .limit(1)
+        ):
+            raise ProjectWeekDeleteBlockedError
+        now = datetime.now(UTC)
+        record = self._record(actor, operation, idempotency_key, request_fingerprint, now)
+        deleted_version = model.version + 1
+        self._audit(
+            actor,
+            action="project_week.deleted",
+            resource_type="project_week",
+            resource_id=project_week_id,
+            request_id=request_id,
+            key=idempotency_key,
+            before=_json(_project_week(model)),
+            after={},
+        )
+        await self._session.delete(model)
+        await self._session.flush()
+        record.state, record.response_status, record.response_body = (
+            IdempotencyState.COMPLETED,
+            200,
+            {"kind": "deleted", "id": str(project_week_id), "version": deleted_version},
+        )
+        return PlanningDeleteResult(project_week_id, deleted_version, False)
 
     async def list_goals(
         self, *, actor: AuthenticatedActor, project_id: UUID | None, page: int, page_size: int

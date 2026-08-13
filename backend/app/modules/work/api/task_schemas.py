@@ -13,10 +13,13 @@ from app.modules.work.domain.tasks import Task, TaskStatus
 class TaskCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: UUID
+    project_week_id: UUID
     milestone_id: UUID | None = None
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=10_000)
-    assignee_membership_id: UUID
+    assignee_membership_id: UUID | None = None
+    required_skill_labels: list[str] = Field(default_factory=list, max_length=20)
+    estimated_effort_hours: int = Field(ge=1, le=10_000)
     due_date: date | None = None
 
     @field_validator("title")
@@ -34,6 +37,9 @@ class TaskUpdateRequest(BaseModel):
     assignee_membership_id: UUID | None = None
     due_date: date | None = None
     milestone_id: UUID | None = None
+    project_week_id: UUID | None = None
+    required_skill_labels: list[str] | None = Field(default=None, max_length=20)
+    estimated_effort_hours: int | None = Field(default=None, ge=1, le=10_000)
 
 
 class TaskStatusRequest(BaseModel):
@@ -49,10 +55,13 @@ class AssigneeResponse(BaseModel):
 class TaskResponse(BaseModel):
     id: UUID
     project_id: UUID
+    project_week_id: UUID | None
     milestone_id: UUID | None
     title: str
     description: str | None
-    assignee: AssigneeResponse
+    assignee: AssigneeResponse | None
+    required_skill_labels: list[str]
+    estimated_effort_hours: int | None
     status: TaskStatus
     due_date: date | None
     version: int
@@ -64,12 +73,20 @@ class TaskResponse(BaseModel):
         return cls(
             id=task.id,
             project_id=task.project_id,
+            project_week_id=task.project_week_id,
             milestone_id=task.milestone_id,
             title=task.title,
             description=task.description,
-            assignee=AssigneeResponse(
-                membership_id=task.assignee_membership_id, display_name=task.assignee_display_name
+            assignee=(
+                AssigneeResponse(
+                    membership_id=task.assignee_membership_id,
+                    display_name=task.assignee_display_name or "",
+                )
+                if task.assignee_membership_id is not None
+                else None
             ),
+            required_skill_labels=list(task.required_skill_labels),
+            estimated_effort_hours=task.estimated_effort_hours,
             status=task.status,
             due_date=task.due_date,
             version=task.version,

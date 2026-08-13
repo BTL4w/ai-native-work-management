@@ -6,7 +6,6 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import type { MeResponse } from "@/shared/api/contracts";
 import { ApiError, isDefinitiveMutationRejection } from "@/shared/api/client";
-import { listMembers } from "@/features/work/api";
 
 import { decideApproval, editProposal, getWorkflowRun, listPlanningRuns, postManagerMessage, startPlanningRun } from "./api";
 import { ApprovalCard } from "./cards/approval-card";
@@ -79,12 +78,6 @@ export function AiAssistant({
     queryFn: () => getWorkflowRun(selectedRunId as string).then((result) => result.data),
     enabled: selectedRunId !== null,
   });
-  const members = useQuery({
-    queryKey: [...scope, "members"],
-    queryFn: () => listMembers(1),
-    enabled: editing,
-  });
-
   useEffect(() => {
     if (!selectedRunId) return;
     const current = connectEvents({
@@ -156,13 +149,12 @@ export function AiAssistant({
   const run = snapshot.data;
   const proposal = run?.current_proposal;
   const visibleError = error ?? snapshot.error ?? runs.error;
-  const missingAssignee = proposal?.content.tasks.some((task) => !task.assignee_membership_id) ?? false;
   const canDecide = Boolean(
     proposal?.status === "READY_FOR_DECISION"
       && proposal.approval_id
       && run?.allowed_actions.includes("DECIDE_APPROVAL"),
   );
-  const canApprove = canDecide && Boolean(proposal?.validation_result.can_approve) && !missingAssignee;
+  const canApprove = canDecide && Boolean(proposal?.validation_result.can_approve);
 
   function openDecision(nextDecision: "APPROVE" | "REJECT") {
     if (!proposal?.approval_id || !canDecide) return;
@@ -196,12 +188,12 @@ export function AiAssistant({
             <UnderstandingCard brief={run.input_goal_text} content={proposal?.content} />
             {run.status === "NEEDS_INPUT" ? <form className="ai-card" onSubmit={answer}><h3>{t("needsInput")}</h3><label>{t("chat.answerLabel")}<textarea value={managerAnswer} onChange={(event) => setManagerAnswer(event.target.value)} /></label><button disabled={submitting || !managerAnswer.trim()} type="submit">{t("chat.continue")}</button></form> : null}
             {proposal ? <AssumptionsCard content={proposal.content} /> : null}
-            {proposal && editing ? <ProposalEditor initial={proposal.content} members={members.data?.items ?? []} saving={submitting} onCancel={() => setEditing(false)} onSave={(content) => void saveProposal(content)} /> : null}
+            {proposal && editing ? <ProposalEditor initial={proposal.content} saving={submitting} onCancel={() => setEditing(false)} onSave={(content) => void saveProposal(content)} /> : null}
             {proposal && !editing ? <ProposalCard content={proposal.content} version={proposal.version} provenance={proposal.creator_type} editable={run.allowed_actions.includes("EDIT_PROPOSAL")} onEdit={() => setEditing(true)} /> : null}
             {proposal?.previous_version ? <ProposalDiff current={proposal.content} previous={proposal.previous_version.content} summary={proposal.change_summary} /> : null}
             {proposal ? <ValidationCard validation={proposal.validation_result} /> : null}
             {proposal?.status === "STALE" ? <section className="ai-card error-message"><h3>{t("stale.title")}</h3><p>{t("stale.description")}</p><button type="button" onClick={() => void snapshot.refetch()}>{t("action.reload")}</button></section> : null}
-            {proposal ? <ApprovalCard version={proposal.version} canDecide={canDecide} canApprove={canApprove} blockedReason={missingAssignee ? t("validation.missingAssignee") : undefined} onApprove={() => openDecision("APPROVE")} onReject={() => openDecision("REJECT")} /> : null}
+            {proposal ? <ApprovalCard version={proposal.version} canDecide={canDecide} canApprove={canApprove} onApprove={() => openDecision("APPROVE")} onReject={() => openDecision("REJECT")} /> : null}
             {run.status === "FAILED" ? <section className="ai-card"><h3>{t("failed.title")}</h3><p>{t("failed.description")}</p><div className="ai-actions"><button disabled={submitting} type="button" onClick={() => void beginPlanning(run.input_goal_text.trim())}>{t("action.retry")}</button><button type="button" onClick={onContinueManually}>{t("action.continueManually")}</button></div></section> : null}
             {decisionResult?.created.project_id ? <p role="status">{t("createdProject")}</p> : null}
           </div>

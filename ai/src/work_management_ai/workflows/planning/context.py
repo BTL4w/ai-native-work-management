@@ -20,7 +20,6 @@ class PermittedPlanningContext:
     """Permission-filtered facts and provenance returned by the backend boundary."""
 
     reference_ids: tuple[str, ...]
-    active_membership_ids: frozenset[UUID]
     required_questions: tuple[str, ...]
     structured_facts: dict[str, object]
 

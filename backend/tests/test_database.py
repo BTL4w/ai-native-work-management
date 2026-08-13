@@ -54,5 +54,5 @@ def test_alembic_environment_has_one_planning_head() -> None:
     config = Config(backend_root / "alembic.ini")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["0009"]
+    assert scripts.get_heads() == ["0010"]
     assert scripts.get_bases() == ["0001"]

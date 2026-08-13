@@ -38,6 +38,9 @@ import {
   milestoneSchema,
   milestoneUpdateSchema,
   planningPageSchema,
+  projectWeekCreateSchema,
+  projectWeekSchema,
+  projectWeekUpdateSchema,
   taskDependencySchema,
 } from "@/features/planning/contracts";
 
@@ -62,6 +65,9 @@ const runtimeSchemas: Record<string, ZodType> = {
   MilestoneCreateRequest: milestoneCreateSchema,
   MilestoneUpdateRequest: milestoneUpdateSchema,
   MilestoneResponse: milestoneSchema,
+  ProjectWeekCreateRequest: projectWeekCreateSchema,
+  ProjectWeekUpdateRequest: projectWeekUpdateSchema,
+  ProjectWeekResponse: projectWeekSchema,
   DependencyCreateRequest: dependencyCreateSchema,
   DependencyUpdateRequest: dependencyUpdateSchema,
   DependencyResponse: taskDependencySchema,
@@ -139,7 +145,7 @@ const uuid = "11111111-1111-4111-8111-111111111111";
 const timestamp = "2026-08-01T10:00:00Z";
 const project = { id: uuid, name: "Project", description: null, version: 1, created_at: timestamp, updated_at: timestamp };
 const member = { membership_id: uuid, display_name: "Employee", role: "EMPLOYEE", is_active: true };
-const task = { id: uuid, project_id: uuid, milestone_id: null, title: "Task", description: null, assignee: { membership_id: uuid, display_name: "Employee" }, status: "TO_DO", due_date: "2026-08-12", version: 1, created_at: timestamp, updated_at: timestamp };
+const task = { id: uuid, project_id: uuid, project_week_id: uuid, milestone_id: null, title: "Task", description: null, assignee: { membership_id: uuid, display_name: "Employee" }, required_skill_labels: [], estimated_effort_hours: 8, status: "TO_DO", due_date: "2026-08-12", version: 1, created_at: timestamp, updated_at: timestamp };
 const page = (item: unknown) => ({ items: [item], page: 1, page_size: 20, total: 1 });
 
 describe("deep work OpenAPI compatibility manifest", () => {
@@ -184,8 +190,8 @@ describe("deep work OpenAPI compatibility manifest", () => {
     expect(projectCreateSchema.safeParse({ name: "" }).success).toBe(false);
     expect(projectCreateSchema.safeParse({ name: "x".repeat(161) }).success).toBe(false);
     expect(projectUpdateSchema.safeParse({ description: null }).success).toBe(true);
-    expect(taskCreateSchema.safeParse({ project_id: uuid, title: "T", assignee_membership_id: uuid, due_date: null }).success).toBe(true);
-    expect(taskCreateSchema.safeParse({ project_id: uuid, milestone_id: uuid, title: "T", assignee_membership_id: uuid }).success).toBe(true);
+    expect(taskCreateSchema.safeParse({ project_id: uuid, project_week_id: uuid, title: "T", assignee_membership_id: null, estimated_effort_hours: 8, due_date: null }).success).toBe(true);
+    expect(taskCreateSchema.safeParse({ project_id: uuid, project_week_id: uuid, milestone_id: uuid, title: "T", estimated_effort_hours: 8 }).success).toBe(true);
     expect(taskCreateSchema.safeParse({ project_id: uuid, title: "", assignee_membership_id: "bad" }).success).toBe(false);
     expect(taskCreateSchema.safeParse({ project_id: uuid, milestone_id: "bad", title: "T", assignee_membership_id: uuid }).success).toBe(false);
     expect(taskUpdateSchema.safeParse({ due_date: "2026-08-12" }).success).toBe(true);

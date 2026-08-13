@@ -16,13 +16,28 @@ const project = {
   updated_at: "2026-08-01T10:00:00Z",
 };
 const employeeId = "44444444-4444-4444-8444-444444444444";
+const projectWeek = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  project_id: project.id,
+  week_number: 1,
+  start_date: "2026-08-10",
+  end_date: "2026-08-16",
+  objective: "Collect onboarding documents",
+  status: "PLANNED",
+  version: 1,
+  created_at: "2026-08-01T10:00:00Z",
+  updated_at: "2026-08-01T10:00:00Z",
+};
 const task = {
   id: "22222222-2222-4222-8222-222222222222",
   project_id: project.id,
+  project_week_id: projectWeek.id,
   milestone_id: null,
   title: "Collect documents",
   description: "Collect required documents",
   assignee: { membership_id: employeeId, display_name: "Demo Employee" },
+  required_skill_labels: [],
+  estimated_effort_hours: 8,
   status: "TO_DO",
   due_date: "2026-08-12",
   version: 1,
@@ -83,6 +98,7 @@ describe("WorkWorkspace", () => {
         if (path.startsWith("/api/v1/members")) {
           return response(page([{ membership_id: employeeId, display_name: "Demo Employee", role: "EMPLOYEE", is_active: true }]));
         }
+        if (path.startsWith(`/api/v1/projects/${project.id}/weeks?`)) return response(page([projectWeek]));
         if (path === "/api/v1/tasks" && init?.method === "POST") {
           tasks = [task];
           return response(task, 201, { ETag: '"1"' });
@@ -99,6 +115,7 @@ describe("WorkWorkspace", () => {
     expect(await screen.findByRole("heading", { name: project.name })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Tạo task" }));
     fireEvent.change(await screen.findByLabelText("Tiêu đề task"), { target: { value: task.title } });
+    fireEvent.change(screen.getByLabelText("Tuần dự án"), { target: { value: projectWeek.id } });
     fireEvent.change(screen.getByLabelText("Người thực hiện"), { target: { value: employeeId } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu task" }));
 
@@ -281,6 +298,7 @@ describe("WorkWorkspace", () => {
           : secondMember;
         return response({ items: [member], page: requestedPage, page_size: 100, total: 101 });
       }
+      if (path.startsWith(`/api/v1/projects/${project.id}/weeks?`)) return response(page([projectWeek]));
       throw new Error(`Unexpected request: ${path}`);
     }));
 

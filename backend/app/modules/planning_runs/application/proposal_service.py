@@ -110,7 +110,6 @@ class ProposalService:
                 )
                 if previous is None:
                     raise PlanningRunNotFoundError
-                assignees: set[UUID] = set()
                 raw_tasks = normalized.get("tasks", [])
                 if not isinstance(raw_tasks, list):
                     raise ValueError("proposal tasks are invalid")
@@ -120,18 +119,10 @@ class ProposalService:
                     task_mapping = cast(dict[object, object], raw_task)
                     value = task_mapping.get("assignee_membership_id")
                     if value is not None:
-                        try:
-                            assignees.add(value if isinstance(value, UUID) else UUID(str(value)))
-                        except (TypeError, ValueError) as exc:
-                            raise ValueError("ASSIGNEE_INVALID") from exc
-                invalid = await repository.find_invalid_active_membership_ids(
-                    actor=actor, membership_ids=assignees
-                )
-                if invalid:
-                    raise ValueError("ASSIGNEE_NOT_PERMITTED")
+                        raise ValueError("ASSIGNEE_NOT_ALLOWED_IN_PLAN")
                 validation_result = self._runtime.validate_proposal_deterministically(
                     normalized,
-                    active_membership_ids=frozenset(assignees),
+                    active_membership_ids=frozenset(),
                 )
                 superseded = None
                 if proposal.approval_id is not None:

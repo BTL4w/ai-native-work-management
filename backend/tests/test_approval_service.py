@@ -339,17 +339,21 @@ def test_shared_project_command_enforces_manual_project_normalization() -> None:
 
 
 def test_shared_task_command_enforces_manual_task_normalization() -> None:
-    project_id, membership_id = uuid4(), uuid4()
+    project_id, project_week_id, membership_id = uuid4(), uuid4(), uuid4()
     draft = build_task_draft(
         project_id=project_id,
+        project_week_id=project_week_id,
         milestone_id=None,
         title="  Book venue  ",
         description="  Compare options  ",
         assignee_membership_id=membership_id,
+        required_skill_labels=(" Planning ",),
+        estimated_effort_hours=8,
         due_date=None,
     )
 
     assert draft.project_id == project_id
+    assert draft.project_week_id == project_week_id
     assert draft.title == "Book venue"
     assert draft.description == "Compare options"
     assert draft.assignee_membership_id == membership_id

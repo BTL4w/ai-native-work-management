@@ -12,21 +12,25 @@ import {
   createDependency,
   createGoal,
   createMilestone,
+  createProjectWeek,
   deleteAcceptanceCriterion,
   deleteDependency,
   deleteGoal,
   deleteMilestone,
+  deleteProjectWeek,
   getProjectPlanBundle,
   updateAcceptanceCriterion,
   updateDependency,
   updateGoal,
   updateMilestone,
+  updateProjectWeek,
 } from "./api";
 import type {
   AcceptanceCriterion,
   Goal,
   Milestone,
   ProjectPlan,
+  ProjectWeek,
   TaskDependency,
 } from "./contracts";
 import type { ProjectPlanBundle } from "./api";
@@ -34,9 +38,10 @@ import type { ProjectPlanBundle } from "./api";
 type Editor =
   | { kind: "goal"; item: Goal | null }
   | { kind: "milestone"; item: Milestone | null }
+  | { kind: "week"; item: ProjectWeek | null }
   | { kind: "dependency"; item: TaskDependency | null }
   | { kind: "criterion"; item: AcceptanceCriterion | null }
-  | { kind: "delete"; resource: "goal" | "milestone" | "dependency" | "criterion"; item: Goal | Milestone | TaskDependency | AcceptanceCriterion };
+  | { kind: "delete"; resource: "goal" | "milestone" | "week" | "dependency" | "criterion"; item: Goal | Milestone | ProjectWeek | TaskDependency | AcceptanceCriterion };
 
 type MutationAttempt = { fingerprint: string; key: string };
 
@@ -126,6 +131,9 @@ export function ProjectPlanPanel({
           <PlanSection title={t("milestone.title")} action={canManage ? { label: t("milestone.add"), onClick: () => setEditor({ kind: "milestone", item: null }) } : undefined}>
             {plan.data.milestones.length ? plan.data.milestones.toSorted((a, b) => a.position - b.position).map((item) => <ResourceCard key={item.id} title={item.name} description={item.description} onEdit={canManage ? () => setEditor({ kind: "milestone", item }) : undefined} onDelete={canManage ? () => setEditor({ kind: "delete", resource: "milestone", item }) : undefined} details={<><p className="mt-3 text-sm text-slate-600">{t("common.positionValue", { position: item.position })}</p><p className="mt-1 text-sm text-slate-600">{t("common.targetDate")}: {item.target_date ? formatPlanDate(item.target_date, locale) : t("common.noTargetDate")}</p></>} />) : <Empty text={t("milestone.empty")} />}
           </PlanSection>
+          <PlanSection title={t("week.title")} action={canManage ? { label: t("week.add"), onClick: () => setEditor({ kind: "week", item: null }) } : undefined}>
+            {plan.data.project_weeks.length ? plan.data.project_weeks.toSorted((a, b) => a.week_number - b.week_number).map((item) => <ResourceCard key={item.id} title={t("week.number", { number: item.week_number })} description={item.objective} onEdit={canManage && item.status !== "COMPLETED" ? () => setEditor({ kind: "week", item }) : undefined} onDelete={canManage && item.status !== "COMPLETED" ? () => setEditor({ kind: "delete", resource: "week", item }) : undefined} details={<><p className="mt-3 text-sm text-slate-600">{formatPlanDate(item.start_date, locale)} – {formatPlanDate(item.end_date, locale)}</p><p className="mt-1 text-sm text-slate-600">{t("week.status")}: {t(`week.statuses.${item.status}`)}</p></>} />) : <Empty text={t("week.empty")} />}
+          </PlanSection>
           <PlanSection title={t("dependency.title")} action={canManage ? { label: t("dependency.add"), onClick: () => setEditor({ kind: "dependency", item: null }) } : undefined}>
             {plan.data.dependencies.length ? plan.data.dependencies.map((item) => <ResourceCard key={item.id} title={`${taskName(taskOptions, item.predecessor_task_id)} → ${taskName(taskOptions, item.successor_task_id)}`} onEdit={canManage ? () => setEditor({ kind: "dependency", item }) : undefined} onDelete={canManage ? () => setEditor({ kind: "delete", resource: "dependency", item }) : undefined} />) : <Empty text={t("dependency.empty")} />}
           </PlanSection>
@@ -137,9 +145,10 @@ export function ProjectPlanPanel({
 
       {editor?.kind === "goal" ? <GoalDialog item={editor.item} projectId={projectId} onClose={() => setEditor(null)} onReload={reload} onSaved={(goal) => { updatePlan((current) => ({ ...current, goal })); setEditor(null); }} /> : null}
       {editor?.kind === "milestone" ? <MilestoneDialog item={editor.item} projectId={projectId} nextPosition={plan.data.milestones.length + 1} onClose={() => setEditor(null)} onReload={reload} onSaved={(saved) => { updatePlan((current) => ({ ...current, milestones: editor.item ? current.milestones.map((item) => item.id === saved.id ? saved : item) : [...current.milestones, saved] })); setEditor(null); }} /> : null}
+      {editor?.kind === "week" ? <ProjectWeekDialog item={editor.item} projectId={projectId} nextWeekNumber={plan.data.project_weeks.length + 1} onClose={() => setEditor(null)} onReload={reload} onSaved={(saved) => { updatePlan((current) => ({ ...current, project_weeks: editor.item ? current.project_weeks.map((item) => item.id === saved.id ? saved : item) : [...current.project_weeks, saved] })); setEditor(null); }} /> : null}
       {editor?.kind === "dependency" ? <DependencyDialog item={editor.item} tasks={taskOptions} onClose={() => setEditor(null)} onReload={reload} onSaved={(saved) => { updatePlan((current) => ({ ...current, dependencies: editor.item ? current.dependencies.map((item) => item.id === saved.id ? saved : item) : [...current.dependencies, saved] })); setEditor(null); }} /> : null}
       {editor?.kind === "criterion" && taskId ? <CriterionDialog item={editor.item} taskId={taskId} nextPosition={criteria.length + 1} onClose={() => setEditor(null)} onReload={reload} onSaved={(saved) => { updatePlan((current) => ({ ...current, acceptance_criteria: editor.item ? current.acceptance_criteria.map((item) => item.id === saved.id ? saved : item) : [...current.acceptance_criteria, saved] })); setEditor(null); }} /> : null}
-      {editor?.kind === "delete" ? <DeleteDialog editor={editor} onClose={() => setEditor(null)} onReload={reload} onDeleted={() => { const deleted = editor.item.id; updatePlan((current) => ({ ...current, goal: editor.resource === "goal" ? null : current.goal, milestones: current.milestones.filter((item) => item.id !== deleted), dependencies: current.dependencies.filter((item) => item.id !== deleted), acceptance_criteria: current.acceptance_criteria.filter((item) => item.id !== deleted) })); setEditor(null); }} /> : null}
+      {editor?.kind === "delete" ? <DeleteDialog projectId={projectId} editor={editor} onClose={() => setEditor(null)} onReload={reload} onDeleted={() => { const deleted = editor.item.id; updatePlan((current) => ({ ...current, goal: editor.resource === "goal" ? null : current.goal, milestones: current.milestones.filter((item) => item.id !== deleted), project_weeks: current.project_weeks.filter((item) => item.id !== deleted), dependencies: current.dependencies.filter((item) => item.id !== deleted), acceptance_criteria: current.acceptance_criteria.filter((item) => item.id !== deleted) })); setEditor(null); }} /> : null}
     </section>
   );
 }
@@ -190,6 +199,13 @@ function MilestoneDialog({ item, projectId, nextPosition, onClose, onReload, onS
   return <Dialog title={item ? t("milestone.edit") : t("milestone.add")} onClose={onClose}><form onSubmit={submit}><Field label={t("milestone.fields.name")}><input className="form-input" value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("milestone.fields.description")}><textarea className="form-input" value={description} onChange={(event) => setDescription(event.target.value)} /></Field><Field label={t("common.targetDate")}><input className="form-input" type="date" value={targetDate} onChange={(event) => setTargetDate(event.target.value)} /></Field><Field label={t("common.position")}><input className="form-input" min={1} type="number" value={position} onChange={(event) => setPosition(Number(event.target.value))} /></Field>{issue ? <Issue error={issue} onReload={onReload} /> : null}<Actions submitting={submitting} onCancel={onClose} save={t("milestone.save")} /></form></Dialog>;
 }
 
+function ProjectWeekDialog({ item, projectId, nextWeekNumber, onClose, onReload, onSaved }: { item: ProjectWeek | null; projectId: string; nextWeekNumber: number; onClose: () => void; onReload: () => Promise<void>; onSaved: (item: ProjectWeek) => void }) {
+  const t = useTranslations("planning"); const attempt = useMutationAttempt();
+  const [weekNumber, setWeekNumber] = useState(item?.week_number ?? nextWeekNumber); const [startDate, setStartDate] = useState(item?.start_date ?? ""); const [endDate, setEndDate] = useState(item?.end_date ?? ""); const [objective, setObjective] = useState(item?.objective ?? ""); const [status, setStatus] = useState<ProjectWeek["status"]>(item?.status ?? "PLANNED"); const [issue, setIssue] = useState<unknown>(null); const [submitting, setSubmitting] = useState(false);
+  async function submit(event: FormEvent) { event.preventDefault(); if (!objective.trim() || !startDate || !endDate) { setIssue("required"); return; } const input = { week_number: weekNumber, start_date: startDate, end_date: endDate, objective: objective.trim(), status }; setSubmitting(true); setIssue(null); try { onSaved((item ? await updateProjectWeek(projectId, item.id, input, item.version, attempt.keyFor(input)) : await createProjectWeek(projectId, input, attempt.keyFor(input))).data); } catch (error) { setIssue(error); if (isDefinitiveMutationRejection(error)) attempt.reset(); } finally { setSubmitting(false); } }
+  return <Dialog title={item ? t("week.edit") : t("week.add")} onClose={onClose}><form onSubmit={submit}><Field label={t("week.fields.number")}><input className="form-input" min={1} type="number" value={weekNumber} onChange={(event) => setWeekNumber(Number(event.target.value))} /></Field><Field label={t("week.fields.startDate")}><input className="form-input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field><Field label={t("week.fields.endDate")}><input className="form-input" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field><Field label={t("week.fields.objective")}><textarea className="form-input" value={objective} onChange={(event) => setObjective(event.target.value)} /></Field><Field label={t("week.status")}><select className="form-input" value={status} onChange={(event) => setStatus(event.target.value as ProjectWeek["status"])}>{(["PLANNED", "ACTIVE", "COMPLETED"] as const).map((value) => <option key={value} value={value}>{t(`week.statuses.${value}`)}</option>)}</select></Field>{issue ? <Issue error={issue} onReload={onReload} /> : null}<Actions submitting={submitting} onCancel={onClose} save={t("week.save")} /></form></Dialog>;
+}
+
 function DependencyDialog({ item, tasks, onClose, onReload, onSaved }: { item: TaskDependency | null; tasks: Task[]; onClose: () => void; onReload: () => Promise<void>; onSaved: (item: TaskDependency) => void }) {
   const t = useTranslations("planning"); const attempt = useMutationAttempt(); const [predecessor, setPredecessor] = useState(item?.predecessor_task_id ?? ""); const [successor, setSuccessor] = useState(item?.successor_task_id ?? ""); const [issue, setIssue] = useState<unknown>(null); const [submitting, setSubmitting] = useState(false);
   async function submit(event: FormEvent) { event.preventDefault(); if (!predecessor || !successor) { setIssue("required"); return; } const input = { predecessor_task_id: predecessor, successor_task_id: successor }; setSubmitting(true); setIssue(null); try { onSaved((item ? await updateDependency(item.id, input, item.version, attempt.keyFor(input)) : await createDependency(input, attempt.keyFor(input))).data); } catch (error) { setIssue(error); if (isDefinitiveMutationRejection(error)) attempt.reset(); } finally { setSubmitting(false); } }
@@ -202,9 +218,9 @@ function CriterionDialog({ item, taskId, nextPosition, onClose, onReload, onSave
   return <Dialog title={item ? t("criteria.edit") : t("criteria.add")} onClose={onClose}><form onSubmit={submit}><Field label={t("criteria.fields.text")}><textarea className="form-input" value={text} onChange={(event) => setText(event.target.value)} /></Field><Field label={t("common.position")}><input className="form-input" min={1} type="number" value={position} onChange={(event) => setPosition(Number(event.target.value))} /></Field>{issue ? <Issue error={issue} onReload={onReload} /> : null}<Actions submitting={submitting} onCancel={onClose} save={t("criteria.save")} /></form></Dialog>;
 }
 
-function DeleteDialog({ editor, onClose, onReload, onDeleted }: { editor: Extract<Editor, { kind: "delete" }>; onClose: () => void; onReload: () => Promise<void>; onDeleted: () => void }) {
+function DeleteDialog({ projectId, editor, onClose, onReload, onDeleted }: { projectId: string; editor: Extract<Editor, { kind: "delete" }>; onClose: () => void; onReload: () => Promise<void>; onDeleted: () => void }) {
   const t = useTranslations("planning"); const attempt = useMutationAttempt(); const [issue, setIssue] = useState<unknown>(null); const [submitting, setSubmitting] = useState(false);
-  async function remove() { const key = attempt.keyFor({ resource: editor.resource, id: editor.item.id, version: editor.item.version }); setSubmitting(true); setIssue(null); try { if (editor.resource === "goal") await deleteGoal(editor.item.id, editor.item.version, key); if (editor.resource === "milestone") await deleteMilestone(editor.item.id, editor.item.version, key); if (editor.resource === "dependency") await deleteDependency(editor.item.id, editor.item.version, key); if (editor.resource === "criterion") await deleteAcceptanceCriterion(editor.item.id, editor.item.version, key); onDeleted(); } catch (error) { setIssue(error); if (isDefinitiveMutationRejection(error)) attempt.reset(); } finally { setSubmitting(false); } }
+  async function remove() { const key = attempt.keyFor({ resource: editor.resource, id: editor.item.id, version: editor.item.version }); setSubmitting(true); setIssue(null); try { if (editor.resource === "goal") await deleteGoal(editor.item.id, editor.item.version, key); if (editor.resource === "milestone") await deleteMilestone(editor.item.id, editor.item.version, key); if (editor.resource === "week") await deleteProjectWeek(projectId, editor.item.id, editor.item.version, key); if (editor.resource === "dependency") await deleteDependency(editor.item.id, editor.item.version, key); if (editor.resource === "criterion") await deleteAcceptanceCriterion(editor.item.id, editor.item.version, key); onDeleted(); } catch (error) { setIssue(error); if (isDefinitiveMutationRejection(error)) attempt.reset(); } finally { setSubmitting(false); } }
   return <Dialog title={t("delete.title")} onClose={onClose}><p>{t("delete.description")}</p>{issue ? <Issue error={issue} onReload={onReload} /> : null}<div className="mt-6 flex justify-end gap-3"><button className="secondary-button" type="button" onClick={onClose}>{t("action.cancel")}</button><button className="primary-button" disabled={submitting} type="button" onClick={() => void remove()}>{t("delete.confirm")}</button></div></Dialog>;
 }
 

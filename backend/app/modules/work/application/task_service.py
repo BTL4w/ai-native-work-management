@@ -157,9 +157,12 @@ class TaskService:
         *,
         actor: AuthenticatedActor,
         project_id: UUID,
+        project_week_id: UUID,
         title: str,
         description: str | None,
-        assignee_membership_id: UUID,
+        assignee_membership_id: UUID | None,
+        required_skill_labels: tuple[str, ...],
+        estimated_effort_hours: int,
         due_date: date | None,
         request_id: str,
         idempotency_key: str,
@@ -174,19 +177,25 @@ class TaskService:
         try:
             draft = build_task_draft(
                 project_id=project_id,
+                project_week_id=project_week_id,
                 milestone_id=milestone_id,
                 title=title,
                 description=description,
                 assignee_membership_id=assignee_membership_id,
+                required_skill_labels=required_skill_labels,
+                estimated_effort_hours=estimated_effort_hours,
                 due_date=due_date,
             )
             fingerprint = _fingerprint(
                 "task.create",
                 {
                     "project_id": project_id,
+                    "project_week_id": project_week_id,
                     "title": draft.title,
                     "description": draft.description,
                     "assignee_membership_id": assignee_membership_id,
+                    "required_skill_labels": draft.required_skill_labels,
+                    "estimated_effort_hours": draft.estimated_effort_hours,
                     "due_date": due_date,
                     "milestone_id": milestone_id,
                 },
@@ -228,6 +237,12 @@ class TaskService:
         idempotency_key: str,
         milestone_id: UUID | None = None,
         milestone_supplied: bool = False,
+        project_week_id: UUID | None = None,
+        project_week_supplied: bool = False,
+        required_skill_labels: tuple[str, ...] = (),
+        required_skill_labels_supplied: bool = False,
+        estimated_effort_hours: int | None = None,
+        estimated_effort_hours_supplied: bool = False,
     ) -> TaskMutationResult:
         await self._require_writer(
             actor=actor,
@@ -248,6 +263,12 @@ class TaskService:
                 due_date_supplied=due_date_supplied,
                 milestone_id=milestone_id,
                 milestone_supplied=milestone_supplied,
+                project_week_id=project_week_id,
+                project_week_supplied=project_week_supplied,
+                required_skill_labels=required_skill_labels,
+                required_skill_labels_supplied=required_skill_labels_supplied,
+                estimated_effort_hours=estimated_effort_hours,
+                estimated_effort_hours_supplied=estimated_effort_hours_supplied,
             )
             patch.validate_not_empty()
             fingerprint = _fingerprint(
@@ -264,6 +285,19 @@ class TaskService:
                     "due_date": patch.due_date if patch.due_date_supplied else "__omitted__",
                     "milestone_id": (
                         patch.milestone_id if patch.milestone_supplied else "__omitted__"
+                    ),
+                    "project_week_id": (
+                        patch.project_week_id if patch.project_week_supplied else "__omitted__"
+                    ),
+                    "required_skill_labels": (
+                        patch.required_skill_labels
+                        if patch.required_skill_labels_supplied
+                        else "__omitted__"
+                    ),
+                    "estimated_effort_hours": (
+                        patch.estimated_effort_hours
+                        if patch.estimated_effort_hours_supplied
+                        else "__omitted__"
                     ),
                     "expected_version": expected_version,
                 },

@@ -362,7 +362,6 @@ class ProposalAIRevisionPreflight:
     proposal: Proposal
     version: ProposalVersion
     approval: Approval
-    active_membership_ids: frozenset[UUID]
     locale: str
 
 

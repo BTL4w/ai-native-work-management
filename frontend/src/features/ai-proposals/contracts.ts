@@ -36,13 +36,23 @@ const milestoneDraftSchema = z.object({
   description: z.string().max(5000).nullable(),
   due_date: nullableDate,
 });
+const projectWeekDraftSchema = z.object({
+  ref: z.string().trim().min(1).max(100),
+  week_number: z.number().int().positive(),
+  start_date: z.iso.date(),
+  end_date: z.iso.date(),
+  objective: z.string().trim().min(1).max(2000),
+});
 const taskDraftSchema = z.object({
   ref: z.string().trim().min(1).max(100),
+  project_week_ref: z.string().trim().max(100).default(""),
   milestone_ref: z.string().trim().min(1).max(100).nullable(),
   title: z.string().trim().min(1).max(200),
   description: z.string().max(5000).nullable(),
   due_date: nullableDate,
   assignee_membership_id: z.uuid().nullable(),
+  required_skill_labels: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+  estimated_effort_hours: z.number().int().positive().max(10000).default(1),
   acceptance_criteria: z.array(z.string().trim().min(1).max(1000)),
 });
 const dependencyDraftSchema = z.object({
@@ -58,6 +68,7 @@ export const proposalContentSchema = z.object({
   project: projectDraftSchema,
   goal: goalDraftSchema,
   milestones: z.array(milestoneDraftSchema),
+  project_weeks: z.array(projectWeekDraftSchema).default([]),
   tasks: z.array(taskDraftSchema),
   dependencies: z.array(dependencyDraftSchema),
   assumptions: z.array(assumptionSchema),

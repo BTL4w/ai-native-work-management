@@ -19,10 +19,13 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 const task: Task = {
   id: taskId,
   project_id: projectId,
+  project_week_id: null,
   milestone_id: null,
   title: "Collect documents",
   description: null,
   assignee: { membership_id: membershipId, display_name: "Employee" },
+  required_skill_labels: [],
+  estimated_effort_hours: null,
   status: "TO_DO",
   due_date: null,
   version: 1,
@@ -61,6 +64,18 @@ const milestone = {
   created_at: timestamp,
   updated_at: timestamp,
 };
+const projectWeek = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  project_id: projectId,
+  week_number: 1,
+  start_date: "2026-08-10",
+  end_date: "2026-08-16",
+  objective: "Prepare the pilot",
+  status: "PLANNED",
+  version: 1,
+  created_at: timestamp,
+  updated_at: timestamp,
+};
 
 function error(code: string) {
   return {
@@ -74,11 +89,12 @@ function error(code: string) {
   };
 }
 
-function planFetch({ criteria = [], mutation, goal = null, milestones = [] }: {
+function planFetch({ criteria = [], mutation, goal = null, milestones = [], weeks = [] }: {
   criteria?: unknown[];
   mutation?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   goal?: unknown | null;
   milestones?: unknown[];
+  weeks?: unknown[];
 } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
@@ -86,6 +102,7 @@ function planFetch({ criteria = [], mutation, goal = null, milestones = [] }: {
     if (mutated) return mutated;
     if (path.startsWith("/api/v1/goals?")) return response(page(goal ? [goal] : []));
     if (path.startsWith("/api/v1/milestones?")) return response(page(milestones));
+    if (path.startsWith(`/api/v1/projects/${projectId}/weeks?`)) return response(page(weeks));
     if (path.startsWith("/api/v1/task-dependencies?")) return response(page([]));
     if (path.startsWith("/api/v1/tasks?")) return response(page([task, secondTask]));
     if (path === `/api/v1/acceptance-criteria?task_id=${taskId}&page=1&page_size=100`) return response(page(criteria));
@@ -164,6 +181,36 @@ describe("ProjectPlanPanel", () => {
     fireEvent.change(screen.getByLabelText("Tên milestone"), { target: { value: milestone.name } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu milestone" }));
     expect(await screen.findByText(milestone.name)).toBeVisible();
+  });
+
+  it("creates, edits and deletes a Project Week through the manual plan", async () => {
+    vi.stubGlobal("fetch", planFetch({
+      mutation: (path, init) => {
+        if (path === `/api/v1/projects/${projectId}/weeks` && init?.method === "POST") return response(projectWeek, 201);
+        if (path === `/api/v1/projects/${projectId}/weeks/${projectWeek.id}` && init?.method === "PATCH") return response({ ...projectWeek, objective: "Run the pilot", version: 2 });
+        if (path === `/api/v1/projects/${projectId}/weeks/${projectWeek.id}` && init?.method === "DELETE") return new Response(null, { status: 204 });
+        return undefined;
+      },
+    }));
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Thêm tuần" }));
+    fireEvent.change(screen.getByLabelText("Ngày bắt đầu"), { target: { value: projectWeek.start_date } });
+    fireEvent.change(screen.getByLabelText("Ngày kết thúc"), { target: { value: projectWeek.end_date } });
+    fireEvent.change(screen.getByLabelText("Mục tiêu tuần"), { target: { value: projectWeek.objective } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu tuần" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText(projectWeek.objective, { selector: "p" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sửa" }));
+    fireEvent.change(screen.getByLabelText("Mục tiêu tuần"), { target: { value: "Run the pilot" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu tuần" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("Run the pilot", { selector: "p" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xác nhận xóa" }));
+    expect(await screen.findByText("Chưa có tuần dự án.")).toBeVisible();
   });
 
   it("reuses a Goal idempotency key after an uncertain network failure", async () => {
