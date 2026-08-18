@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 from work_management_ai.agents.orchestrator.contracts import (
     ActorContextResolverPort,
     ExecutionPlan,
+    ExecutionStep,
     OrchestratorInput,
     OrchestratorOutput,
     OrchestratorStatus,
@@ -35,6 +36,7 @@ from work_management_ai.runtime.contracts import (
     AgentId,
     AgentRunStatus,
     CapabilityUnavailableResponseBlock,
+    JsonValue,
     QuestionResponseBlock,
     SafeErrorResponseBlock,
 )
@@ -123,6 +125,10 @@ class OrchestratorHarness:
                 mode=mode,
                 requested_handoff=requested,
                 prior_plan=state["prior_plan"],
+                specialist_catalog=self._registry.planning_catalog(
+                    active_phase=2,
+                    role=(state["current_actor"].role if state["current_actor"] else "EMPLOYEE"),
+                ),
             ),
             output_schema=ExecutionPlan,
             timeout_seconds=60,
@@ -213,7 +219,7 @@ class OrchestratorHarness:
                 target_agent_version=step.target_agent_version,
                 capability=step.capability,
                 objective=step.objective,
-                typed_input=step.typed_input,
+                typed_input=self._trusted_specialist_input(step, state["value"]),
                 context_references=(),
                 actor=state["value"].actor,
                 budget=AgentBudget(
@@ -253,6 +259,43 @@ class OrchestratorHarness:
             "last_batch_results": tuple(results),
             "handoffs_used": state["handoffs_used"] + len(handoffs),
             "route": "execute",
+        }
+
+    @staticmethod
+    def _trusted_specialist_input(
+        step: ExecutionStep, value: OrchestratorInput
+    ) -> dict[str, JsonValue]:
+        """Reconstruct Planning contracts from trusted turn/card context."""
+        if step.target_agent_id is not AgentId.PLANNING:
+            return step.typed_input
+        base: dict[str, JsonValue] = {"locale": value.locale, "brief": value.message}
+        if step.capability == "planning.create":
+            return {"operation": "CREATE", **base}
+        active = value.active_context.active_planning
+        if active is None:
+            return {"operation": "EXPLAIN", **base}
+        references: dict[str, JsonValue] = {
+            "workflow_run_id": str(active.workflow_run_id),
+            **base,
+        }
+        if step.capability == "planning.resume":
+            return {
+                "operation": "RESUME_INPUT",
+                **references,
+                "manager_instruction": value.message,
+            }
+        if step.capability == "planning.revise":
+            return {
+                "operation": "REVISE",
+                **references,
+                "proposal_id": str(active.proposal_id) if active.proposal_id else None,
+                "expected_proposal_version": active.proposal_version,
+                "manager_instruction": value.message,
+            }
+        return {
+            "operation": "EXPLAIN",
+            **references,
+            "proposal_id": str(active.proposal_id) if active.proposal_id else None,
         }
 
     async def observe_and_update_plan(self, state: OrchestratorState) -> dict[str, object]:
@@ -317,8 +360,13 @@ class OrchestratorHarness:
             response = await self._model_gateway.generate_structured(request)
         except ModelGatewayError:
             return {"route": "manual_fallback", "stop_reason": "MODEL_SYNTHESIS_INVALID"}
+        blocks = tuple(
+            block
+            for block in response.parsed.blocks
+            if not isinstance(block, QuestionResponseBlock)
+        )
         return {
-            "blocks": response.parsed.blocks,
+            "blocks": blocks,
             "model_refs": (*state["model_refs"], response.model_ref),
             "route": "execute",
         }

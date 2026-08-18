@@ -20,6 +20,7 @@ from work_management_ai.agents.orchestrator.evaluators.plan import (
     validate_execution_plan,
 )
 from work_management_ai.agents.orchestrator.harness import OrchestratorHarness
+from work_management_ai.agents.orchestrator.prompts import build_plan_messages
 from work_management_ai.model_gateway.mock import MockModelGateway
 from work_management_ai.runtime.agent_registry import AgentRegistry
 from work_management_ai.runtime.contracts import (
@@ -29,6 +30,7 @@ from work_management_ai.runtime.contracts import (
     AgentResult,
     AgentRunStatus,
     CapabilityUnavailableResponseBlock,
+    QuestionResponseBlock,
     RequestedHandoff,
     ResolvedActorContext,
     SafeErrorResponseBlock,
@@ -114,6 +116,16 @@ def _requested_result(agent_id: AgentId, capability: str) -> AgentResult:
             typed_input={"source": "specialist_result"},
         ),
         stop_reason="requested_handoff",
+    )
+
+
+def _awaiting_input_result(agent_id: AgentId) -> AgentResult:
+    return AgentResult(
+        agent_id=agent_id,
+        agent_version="1.0.0",
+        status=AgentRunStatus.AWAITING_INPUT,
+        typed_output={"question": "Vui lòng xác nhận phạm vi chạy thử."},
+        stop_reason="awaiting_input",
     )
 
 
@@ -246,6 +258,38 @@ def test_orchestrator_manifest_has_zero_business_tools() -> None:
     assert manifest.runtime.max_replans == 2
 
 
+def test_plan_prompt_exposes_only_registry_backed_specialist_capabilities(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    actor = _resolved_actor()
+    registry = _registry(tmp_path, monkeypatch)
+
+    messages = build_plan_messages(
+        _input(actor, locale="vi", message="Lập kế hoạch project"),
+        mode="plan",
+        requested_handoff=None,
+        prior_plan=None,
+        specialist_catalog=registry.planning_catalog(active_phase=2, role=actor.role),
+    )
+    payload = json.loads(messages[1].content)
+
+    assert payload["specialist_catalog"] == [
+        {
+            "agent_id": "planning",
+            "agent_version": "1.0.0",
+            "capabilities": ["planning.create"],
+            "risk_ceiling": "PROPOSAL_ONLY",
+        },
+        {
+            "agent_id": "work_intelligence",
+            "agent_version": "1.0.0",
+            "capabilities": ["work.read_project"],
+            "risk_ceiling": "READ_ONLY",
+        },
+    ]
+    assert "project_plan_proposal" not in messages[1].content
+
+
 @pytest.mark.asyncio
 async def test_single_work_intent_delegates_once(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     golden = _fixture("orchestrator_vi.json")
@@ -269,6 +313,104 @@ async def test_single_work_intent_delegates_once(tmp_path: Path, monkeypatch: Mo
     assert [handoff.target_agent_id for handoff in runner.handoffs] == [AgentId.WORK_INTELLIGENCE]
     assert [block.kind for block in output.blocks] == ["text"]
     assert output.model_refs == ("mock:orchestrator-v1", "mock:orchestrator-v1")
+
+
+@pytest.mark.asyncio
+async def test_completed_specialist_cannot_synthesize_false_manager_input_interrupt(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner()
+    workflow_run_id = uuid4()
+    harness = _harness(
+        actor=actor,
+        registry=_registry(tmp_path, monkeypatch),
+        runner=runner,
+        fixtures={
+            "orchestrator.vi.plan": {
+                "schema_version": "1.0",
+                "objectives": ["Create a weekly proposal"],
+                "steps": [
+                    {
+                        "step_id": "plan_project",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.create",
+                        "objective": "Create the proposal",
+                        "typed_input": {},
+                        "depends_on": [],
+                        "mode": "PROPOSAL",
+                    }
+                ],
+                "unavailable_capabilities": [],
+                "response_language": "vi",
+            },
+            "orchestrator.vi.synthesize": {
+                "blocks": [
+                    {
+                        "kind": "planning_run",
+                        "workflow_run_id": str(workflow_run_id),
+                        "status": "QUEUED",
+                    },
+                    {
+                        "kind": "question",
+                        "question": "Cần thêm thông tin trước khi lập proposal.",
+                        "response_context": {"source": "model"},
+                    },
+                ]
+            },
+        },
+    )
+
+    output = await harness.run_turn(_input(actor, locale="vi", message="Lập kế hoạch theo tuần"))
+
+    assert output.status is OrchestratorStatus.COMPLETED
+    assert [block.kind for block in output.blocks] == ["planning_run"]
+
+
+@pytest.mark.asyncio
+async def test_specialist_awaiting_input_uses_deterministic_question_route(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner(
+        {"planning.create": [_awaiting_input_result(AgentId.PLANNING)]}
+    )
+    harness = _harness(
+        actor=actor,
+        registry=_registry(tmp_path, monkeypatch),
+        runner=runner,
+        fixtures={
+            "orchestrator.vi.plan": {
+                "schema_version": "1.0",
+                "objectives": ["Create a weekly proposal"],
+                "steps": [
+                    {
+                        "step_id": "plan_project",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.create",
+                        "objective": "Create the proposal",
+                        "typed_input": {},
+                        "depends_on": [],
+                        "mode": "PROPOSAL",
+                    }
+                ],
+                "unavailable_capabilities": [],
+                "response_language": "vi",
+            }
+        },
+    )
+
+    output = await harness.run_turn(_input(actor, locale="vi", message="Lập kế hoạch theo tuần"))
+
+    assert output.status is OrchestratorStatus.AWAITING_INPUT
+    assert output.stop_reason == "AWAITING_INPUT"
+    assert [block.kind for block in output.blocks] == ["question"]
+    question = output.blocks[0]
+    assert isinstance(question, QuestionResponseBlock)
+    assert question.question == "Vui lòng xác nhận phạm vi chạy thử."
+    assert output.model_refs == ("mock:orchestrator-v1",)
 
 
 @pytest.mark.asyncio
@@ -298,6 +440,12 @@ async def test_manager_multi_intent_runs_work_then_planning(
         AgentId.PLANNING,
     ]
     assert output.completed_step_ids == ("read_project", "plan_project")
+    planning_handoff = runner.handoffs[1]
+    assert planning_handoff.typed_input == {
+        "operation": "CREATE",
+        "locale": "en",
+        "brief": cast(str, golden["message"]),
+    }
 
 
 def test_independent_read_steps_form_one_parallel_batch() -> None:

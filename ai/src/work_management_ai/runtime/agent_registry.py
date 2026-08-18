@@ -121,3 +121,24 @@ class AgentRegistry:
         if registered.manifest.agent.activation_phase > active_phase:
             raise AgentRegistryError("AGENT_PHASE_INACTIVE")
         return registered
+
+    def planning_catalog(self, *, active_phase: int, role: str) -> tuple[dict[str, object], ...]:
+        """Return model context only; registry resolution remains authoritative."""
+        catalog: list[dict[str, object]] = []
+        for registered in self._entries.values():
+            manifest = registered.manifest
+            if (
+                manifest.agent.id is AgentId.ORCHESTRATOR
+                or manifest.agent.activation_phase > active_phase
+                or role not in manifest.permissions.roles
+            ):
+                continue
+            catalog.append(
+                {
+                    "agent_id": manifest.agent.id.value,
+                    "agent_version": manifest.agent.version,
+                    "capabilities": list(manifest.capabilities),
+                    "risk_ceiling": manifest.permissions.risk_ceiling.value,
+                }
+            )
+        return tuple(sorted(catalog, key=lambda item: str(item["agent_id"])))

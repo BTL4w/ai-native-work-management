@@ -140,6 +140,7 @@
     "proposalVersion": "Proposal v{version}",
     "milestones": "Milestones",
     "tasks": "Tasks",
+    "taskAssignment": { "assigned": "Assigned", "unassigned": "Unassigned" },
     "dependencies": "Dependencies",
     "changes": "Changes from the previous version",
     "validation": { "ready": "Deterministic validation allows a decision.", "blocked": "The proposal still has blocking errors.", "missingAssignee": "Select an assignee for every task before approval." },
@@ -153,6 +154,24 @@
     "failed": { "title": "AI workflow unavailable", "description": "You can still continue through the manual flow." },
     "createdProject": "Project created",
     "error": { "safe": "The request could not be completed right now.", "reference": "Reference: {requestId}" }
+  },
+  "assistant": {
+    "eyebrow": "Conversation workspace",
+    "title": "AI Assistant",
+    "loading": "Loading conversation…",
+    "conversations": { "label": "Conversation list", "new": "New conversation", "toggle": "Show or hide conversation list", "empty": "No conversations yet.", "untitled": "New conversation" },
+    "composer": { "label": "Message the AI Assistant", "placeholder": "Ask about work or request a project plan…", "send": "Send" },
+    "empty": { "title": "How can I help?", "description": "Ask about current work or describe a project you want to plan." },
+    "role": { "you": "You", "assistant": "Assistant" },
+    "status": { "PENDING": "Pending", "RUNNING": "Running", "COMPLETED": "Completed", "FAILED": "Failed" },
+    "activity": { "default": "The Assistant is performing a safe step", "details": "View activity details", "agent": "Agent", "step": "Step", "safeStep": "Processing authorized work data", "status": "Status" },
+    "evidence": { "title": "Work evidence" },
+    "question": { "title": "More information needed" },
+    "planning": { "status": "Planning workflow: {status}" },
+    "proposal": { "loading": "Loading proposal…", "stale": "This card is read-only. The current version is v{version}.", "validationFailed": "The proposal did not pass deterministic validation.", "edit": "Edit manually", "askAi": "Ask AI to revise", "reject": "Reject", "approve": "Approve", "revisionLabel": "AI revision instruction", "sendRevision": "Send revision", "cancel": "Cancel", "unavailable": "The current proposal cannot be loaded. You can continue in manual Planning." },
+    "decision": { "title": "Decision result", "APPROVE": "Approved", "REJECT": "Rejected", "UNKNOWN": "Unknown" },
+    "unavailable": { "title": "Capability unavailable", "dailyUpdate": "Daily Update is not available in the current phase.", "default": "This capability is not available in the current phase." },
+    "error": { "title": "Unable to complete request", "safe": "The request could not be completed. Internal details are not displayed.", "manual": "Continue manually", "reference": "Reference: {requestId}" }
   },
   "planning": {
     "title": "Project plan",

@@ -68,6 +68,7 @@ class AssistantProjectionService:
                         "workflow_run_id": str(event.workflow_run_id),
                         "proposal_id": str(payload.get("proposal_id", "")),
                         "proposal_version": int(payload.get("version", 0)),
+                        "approval_id": payload.get("approval_id"),
                         "state": "READY_FOR_DECISION",
                         "can_approve": bool(payload.get("can_approve", False)),
                         "read_only": False,

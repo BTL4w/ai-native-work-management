@@ -185,7 +185,7 @@ export function WorkWorkspace({
 
         <nav aria-label={t("navigationLabel")} className="sidebar-navigation">
           <p className="sidebar-section-label sidebar-copy">{t("sidebar.workspace")}</p>
-          {canManage ? <SidebarItem active={view === "aiAssistant"} icon="chat" label={t("nav.chat")} onClick={openAiAssistant} /> : null}
+          <SidebarItem active={view === "aiAssistant"} icon="chat" label={t("nav.chat")} onClick={openAiAssistant} />
           <SidebarItem active={view === "projects"} icon="grid" label={t("nav.projects")} onClick={openProjects} />
           <SidebarItem active={view === "myTasks"} icon="check" label={t("nav.myTasks")} onClick={openMyTasks} />
           {canManage ? <SidebarItem icon="plus" label={t("nav.assignTask")} onClick={openAssignmentFlow} /> : null}

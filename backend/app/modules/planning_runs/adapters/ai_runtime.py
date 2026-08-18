@@ -347,6 +347,30 @@ class _PlanningPersistenceAdapter:
                 validation_result=validation,
                 request_id=f"workflow-run:{draft.run_id}",
             )
+            await transaction.repository.append_event(
+                event=WorkflowEvent(
+                    id=uuid4(),
+                    organization_id=draft.organization_id,
+                    workflow_run_id=draft.run_id,
+                    sequence=0,
+                    event_type=(
+                        "proposal.ready"
+                        if ready_proposal.status is ProposalStatus.READY_FOR_DECISION
+                        else "proposal.validation_failed"
+                    ),
+                    public_payload={
+                        "proposal_id": str(ready_proposal.id),
+                        "version": ready_proposal.current_version_number,
+                        "approval_id": (
+                            str(ready_proposal.approval_id)
+                            if ready_proposal.approval_id is not None
+                            else None
+                        ),
+                        "can_approve": draft.validation.can_approve,
+                        "error_codes": [item.code for item in draft.validation.errors],
+                    },
+                )
+            )
             await transaction.commit()
             return PersistedProposalReference(
                 proposal_id=ready_proposal.id,
@@ -546,6 +570,11 @@ class ProposalRevalidationJobHandler:
                     public_payload={
                         "proposal_id": str(proposal_id),
                         "version": version_number,
+                        "approval_id": (
+                            str(proposal.approval_id)
+                            if proposal.approval_id is not None
+                            else None
+                        ),
                         "can_approve": validation.can_approve,
                         "error_codes": [item.code for item in validation.errors],
                     },

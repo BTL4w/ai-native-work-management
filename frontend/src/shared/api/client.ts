@@ -25,6 +25,7 @@ export function isDefinitiveMutationRejection(error: unknown): boolean {
 type RequestOptions<T> = {
   init?: RequestInit;
   schema: ZodType<T>;
+  expectedStatus?: number;
 };
 
 export type ApiResult<T> = {
@@ -43,7 +44,7 @@ async function parseBody(response: Response): Promise<unknown> {
 
 export async function requestJson<T>(
   path: string,
-  { init, schema }: RequestOptions<T>,
+  { init, schema, expectedStatus }: RequestOptions<T>,
 ): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -72,6 +73,10 @@ export async function requestJson<T>(
       );
     }
     throw new ApiError(response.status, "UNEXPECTED_RESPONSE");
+  }
+
+  if (expectedStatus !== undefined && response.status !== expectedStatus) {
+    throw new ApiError(response.status, "INVALID_RESPONSE");
   }
 
   const parsedBody = schema.safeParse(body);
@@ -108,6 +113,9 @@ export async function requestJsonWithMetadata<T>(
       );
     }
     throw new ApiError(response.status, "UNEXPECTED_RESPONSE");
+  }
+  if (options.expectedStatus !== undefined && response.status !== options.expectedStatus) {
+    throw new ApiError(response.status, "INVALID_RESPONSE");
   }
   const parsedBody = options.schema.safeParse(body);
   if (!parsedBody.success) {

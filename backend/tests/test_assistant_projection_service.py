@@ -13,7 +13,15 @@ from app.modules.assistant.api.schemas import MessageResponse
 from app.modules.assistant.application.ports import LinkedWorkflowEvent
 from app.modules.assistant.application.projection_service import AssistantProjectionService
 from app.modules.assistant.domain.models import AgentRun, AssistantMessage, MessageRole
+from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.organization.domain.roles import MembershipRole
+from app.modules.planning_runs.adapters.ai_runtime import (
+    _PlanningPersistenceAdapter,  # pyright: ignore[reportPrivateUsage]
+)
 from app.modules.planning_runs.domain.models import WorkflowEvent
+from work_management_ai.schemas.planning import PlanningModelOutput
+from work_management_ai.workflows.planning.ports import PlanningProposalDraft
+from work_management_ai.workflows.planning.verifier import PlanningValidationResult
 
 
 def _item(event_type: str, payload: dict[str, object], *, sequence: int = 1):
@@ -105,6 +113,117 @@ def _service(repository: _Repository, *, crash: bool = False):
 
 
 @pytest.mark.asyncio
+async def test_initial_proposal_persistence_emits_projectable_exact_version_ready_event() -> None:
+    actor = AuthenticatedActor(
+        user_id=uuid4(),
+        email="manager@example.test",
+        display_name="Manager",
+        membership_id=uuid4(),
+        organization_id=uuid4(),
+        organization_name="Tenant",
+        role=MembershipRole.MANAGER,
+    )
+    run_id = uuid4()
+
+    class InitialProposalRepository:
+        def __init__(self) -> None:
+            self.proposal = None
+            self.events: list[WorkflowEvent] = []
+
+        async def get_proposal_by_run_id(self, **_):
+            return None
+
+        async def create_proposal(self, *, proposal, initial_version):
+            del initial_version
+            self.proposal = proposal
+            return proposal
+
+        async def complete_proposal_revalidation(self, **_):
+            assert self.proposal is not None
+            self.proposal = self.proposal.mark_ready_for_decision(uuid4())
+            return self.proposal
+
+        async def append_event(self, *, event):
+            self.events.append(event)
+            return event
+
+    class InitialProposalTransaction(AbstractAsyncContextManager["InitialProposalTransaction"]):
+        def __init__(self, repository: InitialProposalRepository) -> None:
+            self.repository = repository
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def commit(self):
+            return None
+
+    initial_repository = InitialProposalRepository()
+    adapter = _PlanningPersistenceAdapter(
+        lambda _: InitialProposalTransaction(initial_repository), actor
+    )
+    draft = PlanningProposalDraft(
+        idempotency_key="initial-proposal",
+        run_id=run_id,
+        organization_id=actor.organization_id,
+        actor_membership_id=actor.membership_id,
+        content=PlanningModelOutput.model_validate(
+            {
+                "project": {
+                    "title": "Launch",
+                    "description": None,
+                    "start_date": None,
+                    "due_date": None,
+                },
+                "goal": {
+                    "title": "Launch goal",
+                    "description": None,
+                    "expected_outcomes": ["Reviewed launch"],
+                    "target_date": None,
+                },
+                "milestones": [],
+                "project_weeks": [],
+                "tasks": [],
+                "dependencies": [],
+                "assumptions": [],
+            }
+        ),
+        validation=PlanningValidationResult(errors=(), warnings=()),
+        context_reference_ids=(),
+        workflow_version="2.0.0",
+        prompt_version="2.0.0",
+        schema_version="planning-proposal.v2",
+        model_reference="mock:planning",
+        verifier_version="2.0.0",
+    )
+
+    reference = await adapter.persist_proposal(draft)
+
+    assert len(initial_repository.events) == 1
+    assert initial_repository.proposal is not None
+    approval_id = initial_repository.proposal.approval_id
+    assert approval_id is not None
+    event = initial_repository.events[0]
+    assert event.event_type == "proposal.ready"
+    assert event.public_payload == {
+        "proposal_id": str(reference.proposal_id),
+        "version": 1,
+        "approval_id": str(approval_id),
+        "can_approve": True,
+        "error_codes": [],
+    }
+    projected_repository = _Repository([_item(event.event_type, event.public_payload)])
+    await _service(projected_repository).project_once(
+        organization_id=projected_repository.items[0].event.organization_id
+    )
+    projected_block = projected_repository.projected[0]["blocks"][0]
+    assert projected_block["kind"] == "proposal"
+    assert projected_block["approval_id"] == str(approval_id)
+
+
+@pytest.mark.asyncio
 async def test_question_event_projects_once_and_marks_awaiting_input() -> None:
     item = _item(
         "workflow.needs_input",
@@ -123,9 +242,15 @@ async def test_question_event_projects_once_and_marks_awaiting_input() -> None:
 @pytest.mark.asyncio
 async def test_proposal_ready_projects_exact_version_card_once() -> None:
     proposal_id = uuid4()
+    approval_id = uuid4()
     item = _item(
         "proposal.ready",
-        {"proposal_id": str(proposal_id), "version": 4, "can_approve": True},
+        {
+            "proposal_id": str(proposal_id),
+            "version": 4,
+            "approval_id": str(approval_id),
+            "can_approve": True,
+        },
     )
     repository = _Repository([item])
 
@@ -137,6 +262,7 @@ async def test_proposal_ready_projects_exact_version_card_once() -> None:
         "workflow_run_id": str(item.event.workflow_run_id),
         "proposal_id": str(proposal_id),
         "proposal_version": 4,
+        "approval_id": str(approval_id),
         "state": "READY_FOR_DECISION",
         "can_approve": True,
         "read_only": False,

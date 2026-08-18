@@ -140,6 +140,7 @@
     "proposalVersion": "Proposal v{version}",
     "milestones": "Milestones",
     "tasks": "Tasks",
+    "taskAssignment": { "assigned": "Đã có người thực hiện", "unassigned": "Chưa giao nhân viên" },
     "dependencies": "Dependencies",
     "changes": "Thay đổi từ version trước",
     "validation": { "ready": "Deterministic validation cho phép quyết định.", "blocked": "Proposal còn lỗi chặn phê duyệt.", "missingAssignee": "Hãy chọn người thực hiện cho mọi Task trước khi phê duyệt." },
@@ -153,6 +154,24 @@
     "failed": { "title": "AI workflow không khả dụng", "description": "Bạn vẫn có thể tiếp tục bằng flow thủ công." },
     "createdProject": "Đã tạo Project",
     "error": { "safe": "Không thể hoàn tất yêu cầu lúc này.", "reference": "Mã tham chiếu: {requestId}" }
+  },
+  "assistant": {
+    "eyebrow": "Không gian hội thoại",
+    "title": "Trợ lý AI",
+    "loading": "Đang tải cuộc trò chuyện…",
+    "conversations": { "label": "Danh sách cuộc trò chuyện", "new": "Cuộc trò chuyện mới", "toggle": "Ẩn hoặc hiện danh sách cuộc trò chuyện", "empty": "Chưa có cuộc trò chuyện.", "untitled": "Cuộc trò chuyện mới" },
+    "composer": { "label": "Nhắn cho Trợ lý AI", "placeholder": "Hỏi về công việc hoặc yêu cầu lập kế hoạch…", "send": "Gửi" },
+    "empty": { "title": "Tôi có thể giúp gì cho bạn?", "description": "Hỏi về công việc hiện tại hoặc mô tả project bạn muốn lập kế hoạch." },
+    "role": { "you": "Bạn", "assistant": "Trợ lý" },
+    "status": { "PENDING": "Đang chờ", "RUNNING": "Đang thực hiện", "COMPLETED": "Hoàn tất", "FAILED": "Không thành công" },
+    "activity": { "default": "Trợ lý đang xử lý một bước an toàn", "details": "Xem chi tiết hoạt động", "agent": "Agent", "step": "Bước", "safeStep": "Xử lý dữ liệu công việc đã được kiểm soát", "status": "Trạng thái" },
+    "evidence": { "title": "Bằng chứng công việc" },
+    "question": { "title": "Cần thêm thông tin" },
+    "planning": { "status": "Workflow lập kế hoạch: {status}" },
+    "proposal": { "loading": "Đang tải proposal…", "stale": "Card này chỉ đọc. Version hiện tại là v{version}.", "validationFailed": "Proposal chưa vượt qua deterministic validation.", "edit": "Chỉnh thủ công", "askAi": "Nhờ AI chỉnh", "reject": "Từ chối", "approve": "Phê duyệt", "revisionLabel": "Yêu cầu AI chỉnh proposal", "sendRevision": "Gửi yêu cầu chỉnh", "cancel": "Hủy", "unavailable": "Không thể tải proposal hiện tại. Bạn vẫn có thể tiếp tục bằng Planning thủ công." },
+    "decision": { "title": "Kết quả quyết định", "APPROVE": "Đã phê duyệt", "REJECT": "Đã từ chối", "UNKNOWN": "Chưa xác định" },
+    "unavailable": { "title": "Khả năng chưa khả dụng", "dailyUpdate": "Daily Update chưa khả dụng trong phase hiện tại.", "default": "Khả năng này chưa khả dụng trong phase hiện tại." },
+    "error": { "title": "Không thể hoàn tất yêu cầu", "safe": "Không thể hoàn tất yêu cầu lúc này. Dữ liệu nội bộ không được hiển thị.", "manual": "Tiếp tục thủ công", "reference": "Mã tham chiếu: {requestId}" }
   },
   "planning": {
     "title": "Kế hoạch project",

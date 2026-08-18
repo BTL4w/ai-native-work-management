@@ -146,7 +146,7 @@ describe("WorkWorkspace", () => {
     );
 
     renderWithAppProviders(<WorkWorkspace actor={employeeActor} />);
-    expect(screen.queryByRole("button", { name: "Trợ lý AI" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeEnabled();
     fireEvent.click(await screen.findByText(task.title));
     expect(screen.queryByRole("button", { name: "Sửa task" })).not.toBeInTheDocument();
 

@@ -38,6 +38,7 @@ def _create_chat_model(
     model_name: str,
     api_key: SecretStr,
     timeout_seconds: float,
+    use_responses_api: bool,
 ) -> _ChatModel:
     """Create the external LangChain adapter without leaking it into contracts."""
 
@@ -46,6 +47,7 @@ def _create_chat_model(
         api_key=api_key,
         timeout=timeout_seconds,
         max_retries=0,
+        use_responses_api=use_responses_api,
     )
     return cast(_ChatModel, model)
 
@@ -75,10 +77,11 @@ class OpenAIModelGateway:
                 model_name=self._model_name,
                 api_key=self._api_key,
                 timeout_seconds=request.timeout_seconds,
+                use_responses_api=True,
             )
             structured_model = chat_model.with_structured_output(
                 request.output_schema,
-                method="json_schema",
+                method="function_calling",
             )
             messages = [(message.role, message.content) for message in request.messages]
             async with asyncio.timeout(request.timeout_seconds):

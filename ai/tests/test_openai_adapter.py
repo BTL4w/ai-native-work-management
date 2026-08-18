@@ -97,7 +97,7 @@ def gateway_with_outcome(
 
 
 @pytest.mark.asyncio
-async def test_openai_adapter_uses_typed_output_model_and_timeout() -> None:
+async def test_openai_adapter_uses_function_calling_for_flexible_typed_output() -> None:
     gateway, chat_model, configuration = gateway_with_outcome(VALID_PLAN)
 
     response = await gateway.generate_structured(planning_request())
@@ -109,9 +109,10 @@ async def test_openai_adapter_uses_typed_output_model_and_timeout() -> None:
         "model_name": "gpt-planning",
         "api_key": SecretStr("test-key-not-a-real-credential"),
         "timeout_seconds": 60,
+        "use_responses_api": True,
     }
     assert chat_model.schema is PlanningModelOutput
-    assert chat_model.method == "json_schema"
+    assert chat_model.method == "function_calling"
     assert chat_model.structured.messages == [("user", "Plan a product launch")]
 
 
