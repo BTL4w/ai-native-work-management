@@ -99,7 +99,7 @@ class PlanningAIRuntime:
 
     def validate_proposal_content(self, content: dict[str, object]) -> dict[str, object]:
         validated = PlanningModelOutput.model_validate(content)
-        return cast(dict[str, object], validated.model_dump(mode="python"))
+        return cast(dict[str, object], validated.model_dump(mode="json"))
 
     def validate_proposal_deterministically(
         self,
