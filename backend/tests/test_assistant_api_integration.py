@@ -16,6 +16,7 @@ from app.modules.assistant.api.dependencies import (
     get_assistant_event_service,
     get_assistant_service,
 )
+from app.modules.assistant.api.schemas import MessageResponse
 from app.modules.assistant.application.ports import (
     AssistantConversationMutationResult,
     AssistantConversationSnapshot,
@@ -240,6 +241,72 @@ async def test_revision_if_match_and_stale_error_are_structured() -> None:
 
     assert response.status_code == 412
     assert response.json()["error"]["code"] == "RESOURCE_VERSION_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_revision_card_action_crosses_http_boundary_as_json_values() -> None:
+    actor = _actor(MembershipRole.MANAGER)
+    service = StubAssistantService(actor)
+    workflow_run_id = uuid4()
+    proposal_id = uuid4()
+    transport = ASGITransport(app=_app(actor, service))
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/v1/ai/conversations/{service.conversation.id}/messages",
+            json={
+                "message": "Dời mốc ra mắt một tuần",
+                "locale": "vi",
+                "card_action": {
+                    "kind": "PLANNING_REVISE",
+                    "workflow_run_id": str(workflow_run_id),
+                    "proposal_id": str(proposal_id),
+                },
+            },
+            headers={
+                "Idempotency-Key": "assistant-revision-key-01",
+                "If-Match": '"1"',
+            },
+        )
+
+    assert response.status_code == 202
+    assert service.last_post is not None
+    assert service.last_post["card_action"] == {
+        "kind": "PLANNING_REVISE",
+        "workflow_run_id": str(workflow_run_id),
+        "proposal_id": str(proposal_id),
+    }
+
+
+def test_message_response_hides_private_and_legacy_card_actions() -> None:
+    message = AssistantMessage(
+        id=uuid4(),
+        organization_id=uuid4(),
+        conversation_id=uuid4(),
+        sequence=1,
+        role=MessageRole.USER,
+        content_blocks=(
+            {"kind": "text", "text": "Mở rộng đến cuối tháng 11"},
+            {
+                "kind": "accepted_card_action",
+                "action": {"kind": "PLANNING_REVISE"},
+            },
+            {
+                "kind": "PLANNING_REVISE",
+                "workflow_run_id": str(uuid4()),
+                "proposal_id": str(uuid4()),
+                "expected_version": 1,
+            },
+        ),
+        created_by_membership_id=uuid4(),
+        turn_id=uuid4(),
+    )
+
+    response = MessageResponse.from_domain(message)
+
+    assert [block.model_dump(mode="json") for block in response.content_blocks] == [
+        {"kind": "text", "text": "Mở rộng đến cuối tháng 11"}
+    ]
 
 
 @pytest.mark.asyncio

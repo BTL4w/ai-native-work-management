@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -296,6 +297,70 @@ async def test_message_turn_job_and_event_are_atomic_and_retry_safe() -> None:
             )
             assert await session.scalar(select(func.count()).select_from(AssistantEventModel)) == 1
             assert await session.scalar(select(func.count()).select_from(AssistantJobModel)) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_private_card_action_is_unwrapped_for_planning_agent() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    organization_id, membership_id = uuid4(), uuid4()
+    actor = _actor(organization_id, membership_id)
+    try:
+        async with engine.begin() as connection:
+            await _seed_members(connection, ((organization_id, membership_id),))
+        factory = PostgreSQLAssistantTransactionFactory(create_session_factory(engine))
+        conversation = AssistantConversation.create(
+            organization_id=organization_id,
+            owner_membership_id=membership_id,
+            locale="vi",
+        )
+        async with factory(actor) as transaction:
+            await transaction.repository.create_conversation_mutation(
+                actor=actor,
+                conversation=conversation,
+                request_id="request-create-action",
+                idempotency_key="conversation-action-key",
+                request_fingerprint="conversation-action-fingerprint",
+            )
+            await transaction.commit()
+        message, turn, run, job, event = _turn_graph(conversation=conversation, actor=actor)
+        proposal_id = uuid4()
+        workflow_run_id = uuid4()
+        action = {
+            "kind": "PLANNING_REVISE",
+            "workflow_run_id": str(workflow_run_id),
+            "proposal_id": str(proposal_id),
+            "expected_version": 1,
+        }
+        message = replace(
+            message,
+            content_blocks=(
+                {"kind": "text", "text": "Mở rộng đến cuối tháng 11"},
+                {"kind": "accepted_card_action", "action": action},
+            ),
+        )
+        async with factory(actor) as transaction:
+            await transaction.repository.submit_message_mutation(
+                actor=actor,
+                message=message,
+                turn=turn,
+                run=run,
+                job=job,
+                event=event,
+                request_id="request-submit-action",
+                idempotency_key="message-action-key",
+                request_fingerprint="message-action-fingerprint",
+            )
+            await transaction.commit()
+
+        async with factory(actor) as transaction:
+            accepted = await transaction.repository.get_accepted_planning_action(
+                organization_id=organization_id,
+                turn_id=turn.id,
+            )
+
+        assert accepted == action
     finally:
         await engine.dispose()
 

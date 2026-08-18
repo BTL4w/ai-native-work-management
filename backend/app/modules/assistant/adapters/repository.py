@@ -929,14 +929,13 @@ class PostgreSQLAssistantRepository:
         )
         if blocks is None:
             return None
-        return next(
-            (
-                cast(dict[str, object], block)
-                for block in blocks
-                if block.get("kind") == "accepted_card_action"
-            ),
-            None,
-        )
+        for block in blocks:
+            if block.get("kind") == "accepted_card_action":
+                action = block.get("action")
+                return cast(dict[str, object], action) if isinstance(action, dict) else None
+            if block.get("kind") in {"PLANNING_INPUT", "PLANNING_REVISE"}:
+                return cast(dict[str, object], block)
+        return None
 
     async def link_agent_workflow_run(
         self, *, organization_id: UUID, agent_run_id: UUID, workflow_run_id: UUID

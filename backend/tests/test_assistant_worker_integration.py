@@ -35,6 +35,7 @@ from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.domain.roles import MembershipRole
 from work_management_ai.agents.orchestrator.contracts import (
     ExecutionPlan,
+    OrchestratorInput,
     OrchestratorOutput,
     OrchestratorStatus,
 )
@@ -53,14 +54,17 @@ pytestmark = [
 ]
 
 
-class _NoPlanningSnapshot:
+class _FixedPlanningSnapshot:
     async def get_proposal_version(
         self, *, actor: AuthenticatedActor, proposal_id: UUID
     ) -> int | None:
-        return None
+        return 1
 
 
 class _TerminalEngine:
+    def __init__(self) -> None:
+        self.values: list[OrchestratorInput] = []
+
     async def execute(
         self,
         *,
@@ -68,6 +72,8 @@ class _TerminalEngine:
         value: object,
         recorder: ExecutionRecorderPort,
     ) -> OrchestratorOutput:
+        assert isinstance(value, OrchestratorInput)
+        self.values.append(value)
         plan = ExecutionPlan(
             objectives=("Answer safely",),
             steps=(),
@@ -154,7 +160,7 @@ async def test_worker_commits_transcript_event_and_terminal_state_once() -> None
         transactions = PostgreSQLAssistantTransactionFactory(session_factory)
         service = AssistantService(
             transaction_factory=transactions,
-            planning_snapshot=_NoPlanningSnapshot(),
+            planning_snapshot=_FixedPlanningSnapshot(),
             orchestrator_version="1.0.0",
             orchestrator_fingerprint="orchestrator-test",
         )
@@ -165,13 +171,19 @@ async def test_worker_commits_transcript_event_and_terminal_state_once() -> None
             request_id="request-create",
             idempotency_key="conversation-create",
         )
+        workflow_run_id = uuid4()
+        proposal_id = uuid4()
         submitted = await service.post_message(
             actor=actor,
             conversation_id=conversation.conversation.id,
-            message="Give me today's report",
+            message="Extend the plan through November",
             locale="en",
-            card_action=None,
-            if_match_version=None,
+            card_action={
+                "kind": "PLANNING_REVISE",
+                "workflow_run_id": str(workflow_run_id),
+                "proposal_id": str(proposal_id),
+            },
+            if_match_version=1,
             request_id="request-message",
             idempotency_key="message-create",
         )
@@ -179,10 +191,11 @@ async def test_worker_commits_transcript_event_and_terminal_state_once() -> None
         actor_resolver = CurrentActorResolver(
             CurrentActorService(SqlAlchemyAuthTransactionFactory(session_factory))
         )
+        terminal_engine = _TerminalEngine()
         executor = AssistantTurnExecutor(
             transaction_factory=transactions,
             registry=registry,
-            engine_factory=lambda _: _TerminalEngine(),  # type: ignore[arg-type]
+            engine_factory=lambda _: terminal_engine,  # type: ignore[arg-type]
         )
         execution = AssistantExecutionService(
             actor_resolver=actor_resolver,
@@ -223,5 +236,16 @@ async def test_worker_commits_transcript_event_and_terminal_state_once() -> None
                 "COMPLETED",
                 "COMPLETED",
             )
+        assert len(terminal_engine.values) == 1
+        active = terminal_engine.values[0].active_context.active_planning
+        assert active is not None
+        assert active.model_dump(mode="json") == {
+            "workflow_run_id": str(workflow_run_id),
+            "workflow_status": "WAITING_FOR_DECISION",
+            "proposal_id": str(proposal_id),
+            "proposal_version": 1,
+            "proposal_status": "READY_FOR_DECISION",
+            "requested_operation": "REVISE",
+        }
     finally:
         await engine.dispose()

@@ -6,7 +6,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from time import monotonic
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ from app.modules.assistant.domain.models import (
 from app.modules.identity.domain.auth import AuthenticatedActor
 from work_management_ai.agents.orchestrator.contracts import (
     ActiveConversationContext,
+    ActivePlanningContext,
     ActorContextResolverPort,
     ConversationExcerpt,
     OrchestratorInput,
@@ -551,6 +552,7 @@ class AssistantTurnExecutor:
         if turn is None or run.turn_id != turn.id:
             raise RuntimeError("ASSISTANT_EXECUTION_CONTEXT_INVALID")
         excerpts: list[ConversationExcerpt] = []
+        active_planning: ActivePlanningContext | None = None
         for message in snapshot.messages[-12:]:
             text = "\n".join(
                 str(block.get("text", ""))
@@ -562,6 +564,52 @@ class AssistantTurnExecutor:
                 excerpts.append(ConversationExcerpt(role="USER", text=text))
             elif text and role == "ASSISTANT":
                 excerpts.append(ConversationExcerpt(role="ASSISTANT", text=text))
+            if message.id == turn.user_message_id and role == "USER":
+                for block in message.content_blocks:
+                    action = (
+                        block.get("action")
+                        if block.get("kind") == "accepted_card_action"
+                        else block
+                    )
+                    if not isinstance(action, dict):
+                        continue
+                    trusted_action = cast(dict[str, object], action)
+                    action_kind = trusted_action.get("kind")
+                    requested_operation: Literal["RESUME_INPUT", "REVISE"]
+                    if action_kind == "PLANNING_INPUT":
+                        requested_operation = "RESUME_INPUT"
+                    elif action_kind == "PLANNING_REVISE":
+                        requested_operation = "REVISE"
+                    else:
+                        continue
+                    try:
+                        workflow_run_id = UUID(str(trusted_action["workflow_run_id"]))
+                        proposal_id = (
+                            UUID(str(trusted_action["proposal_id"]))
+                            if trusted_action.get("proposal_id") is not None
+                            else None
+                        )
+                    except (KeyError, ValueError):
+                        continue
+                    expected_version = trusted_action.get("expected_version")
+                    if expected_version is not None and not isinstance(expected_version, int):
+                        continue
+                    proposal_version = expected_version
+                    active_planning = ActivePlanningContext(
+                        workflow_run_id=workflow_run_id,
+                        workflow_status=(
+                            "WAITING_FOR_DECISION"
+                            if requested_operation == "REVISE"
+                            else "NEEDS_INPUT"
+                        ),
+                        proposal_id=proposal_id,
+                        proposal_version=proposal_version,
+                        proposal_status=(
+                            "READY_FOR_DECISION" if requested_operation == "REVISE" else None
+                        ),
+                        requested_operation=requested_operation,
+                    )
+                    break
         recorder = PostgreSQLExecutionRecorder(
             transaction_factory=self._transactions,
             registry=self._registry,
@@ -580,7 +628,9 @@ class AssistantTurnExecutor:
                     membership_id=actor.membership_id,
                     organization_id=actor.organization_id,
                 ),
-                active_context=ActiveConversationContext(recent_messages=tuple(excerpts)),
+                active_context=ActiveConversationContext(
+                    recent_messages=tuple(excerpts), active_planning=active_planning
+                ),
             ),
             recorder=recorder,
         )

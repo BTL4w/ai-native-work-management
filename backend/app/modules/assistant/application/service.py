@@ -298,7 +298,7 @@ class AssistantService:
                 trusted_action["expected_version"] = if_match_version
             content_blocks = (
                 *content_blocks,
-                {"kind": "accepted_card_action", **trusted_action},
+                {"kind": "accepted_card_action", "action": trusted_action},
             )
         user_message = AssistantMessage(
             id=message_id,

@@ -233,7 +233,7 @@ async def post_message(
     if_match: IfMatchHeader = None,
 ) -> AssistantTurnAcceptedResponse:
     if_match_version = _expected_version_optional(if_match)
-    card_dict = payload.card_action.model_dump() if payload.card_action else None
+    card_dict = payload.card_action.model_dump(mode="json") if payload.card_action else None
     try:
         result = await service.post_message(
             actor=actor,

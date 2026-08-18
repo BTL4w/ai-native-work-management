@@ -62,6 +62,7 @@ class ActivePlanningContext(_StrictFrozenModel):
     proposal_id: UUID | None
     proposal_version: int | None = Field(default=None, ge=1)
     proposal_status: str | None = Field(default=None, min_length=1, max_length=100)
+    requested_operation: Literal["RESUME_INPUT", "REVISE"]
 
 
 class ActiveConversationContext(_StrictFrozenModel):

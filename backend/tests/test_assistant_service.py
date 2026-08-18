@@ -821,6 +821,55 @@ async def test_planning_revise_rejects_stale_proposal_version_before_queueing() 
     assert repo.jobs == []
 
 
+@pytest.mark.asyncio
+async def test_planning_revise_persists_private_action_envelope() -> None:
+    repo = FakeRepository()
+    actor = _actor(MembershipRole.MANAGER)
+    service = AssistantService(
+        transaction_factory=FakeTransactionFactory(repo),
+        planning_snapshot=FixedPlanningSnapshot(1),
+        orchestrator_version="1.0.0",
+        orchestrator_fingerprint="orchestrator-manifest-fingerprint",
+    )
+    conversation = await service.create_conversation(
+        actor=actor,
+        locale="vi",
+        title=None,
+        request_id="request-create-revision",
+        idempotency_key="conversation-revision-key",
+    )
+    workflow_run_id = uuid4()
+    proposal_id = uuid4()
+
+    result = await service.post_message(
+        actor=actor,
+        conversation_id=conversation.conversation.id,
+        message="Mở rộng đến cuối tháng 11",
+        locale="vi",
+        card_action={
+            "kind": "PLANNING_REVISE",
+            "workflow_run_id": str(workflow_run_id),
+            "proposal_id": str(proposal_id),
+        },
+        if_match_version=1,
+        request_id="request-submit-revision",
+        idempotency_key="message-revision-key",
+    )
+
+    assert result.message.content_blocks == (
+        {"kind": "text", "text": "Mở rộng đến cuối tháng 11"},
+        {
+            "kind": "accepted_card_action",
+            "action": {
+                "kind": "PLANNING_REVISE",
+                "workflow_run_id": str(workflow_run_id),
+                "proposal_id": str(proposal_id),
+                "expected_version": 1,
+            },
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests: transaction rollback atomicity
 # ---------------------------------------------------------------------------

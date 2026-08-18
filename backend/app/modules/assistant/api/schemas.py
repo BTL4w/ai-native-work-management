@@ -171,11 +171,17 @@ class MessageResponse(BaseModel):
 
     @classmethod
     def from_domain(cls, m: AssistantMessage) -> MessageResponse:
+        public_blocks = tuple(
+            block
+            for block in m.content_blocks
+            if block.get("kind")
+            not in {"accepted_card_action", "PLANNING_INPUT", "PLANNING_REVISE"}
+        )
         return cls(
             id=m.id,
             sequence=m.sequence,
             role=m.role.value if hasattr(m.role, "value") else str(m.role),
-            content_blocks=_CONTENT_BLOCKS.validate_python(m.content_blocks),
+            content_blocks=_CONTENT_BLOCKS.validate_python(public_blocks),
             created_at=m.created_at,
         )
 

@@ -228,6 +228,26 @@ def _registry(tmp_path: Path, monkeypatch: MonkeyPatch) -> AgentRegistry:
     return registry
 
 
+def _revision_registry(tmp_path: Path, monkeypatch: MonkeyPatch) -> AgentRegistry:
+    registry = AgentRegistry(
+        skill_registry=SkillRegistry(),
+        tool_registry=ToolRegistry(),
+        evaluator_ids=frozenset({"orchestrator_plan@1", "planning_evaluator@1"}),
+    )
+    registry.register_resource("work_management_ai.agents.orchestrator", "agent.yaml")
+    planning_package = _write_specialist_manifest(
+        tmp_path,
+        monkeypatch,
+        package_name="test_revision_planning_agent",
+        agent_id=AgentId.PLANNING,
+        capability="planning.revise",
+        roles=("ADMIN", "MANAGER"),
+        risk="PROPOSAL_ONLY",
+    )
+    registry.register_resource(*planning_package)
+    return registry
+
+
 def _harness(
     *,
     actor: ResolvedActorContext,
@@ -445,6 +465,81 @@ async def test_manager_multi_intent_runs_work_then_planning(
         "operation": "CREATE",
         "locale": "en",
         "brief": cast(str, golden["message"]),
+    }
+
+
+@pytest.mark.asyncio
+async def test_explicit_revision_card_deterministically_delegates_planning_revise(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    actor = _resolved_actor()
+    workflow_run_id = uuid4()
+    proposal_id = uuid4()
+    runner = RecordingSpecialistRunner()
+    harness = _harness(
+        actor=actor,
+        registry=_revision_registry(tmp_path, monkeypatch),
+        runner=runner,
+        fixtures={
+            "orchestrator.vi.plan": {
+                "schema_version": "1.0",
+                "objectives": ["Create a new generic proposal"],
+                "steps": [
+                    {
+                        "step_id": "create_plan",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.create",
+                        "objective": "Create a proposal",
+                        "typed_input": {},
+                        "depends_on": [],
+                        "mode": "PROPOSAL",
+                    }
+                ],
+                "unavailable_capabilities": [],
+                "response_language": "vi",
+            },
+            "orchestrator.vi.synthesize": {"blocks": [{"kind": "text", "text": "Đã nhận."}]},
+        },
+    )
+    value = OrchestratorInput.model_validate(
+        {
+            "conversation_id": str(uuid4()),
+            "turn_id": str(uuid4()),
+            "message": "Mở rộng đến cuối tháng 11",
+            "locale": "vi",
+            "actor": {
+                "membership_id": str(actor.membership_id),
+                "organization_id": str(actor.organization_id),
+            },
+            "active_context": {
+                "recent_messages": [],
+                "active_planning": {
+                    "workflow_run_id": str(workflow_run_id),
+                    "workflow_status": "WAITING_FOR_DECISION",
+                    "proposal_id": str(proposal_id),
+                    "proposal_version": 1,
+                    "proposal_status": "READY_FOR_DECISION",
+                    "requested_operation": "REVISE",
+                },
+            },
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.COMPLETED
+    assert len(runner.handoffs) == 1
+    handoff = runner.handoffs[0]
+    assert handoff.capability == "planning.revise"
+    assert handoff.typed_input == {
+        "operation": "REVISE",
+        "workflow_run_id": str(workflow_run_id),
+        "locale": "vi",
+        "brief": "Mở rộng đến cuối tháng 11",
+        "proposal_id": str(proposal_id),
+        "expected_proposal_version": 1,
+        "manager_instruction": "Mở rộng đến cuối tháng 11",
     }
 
 

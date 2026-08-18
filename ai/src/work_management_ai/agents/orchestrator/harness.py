@@ -1,6 +1,7 @@
 """Guarded runtime for bounded Orchestrator planning and delegation."""
 
 import asyncio
+from typing import cast
 from uuid import NAMESPACE_URL, uuid5
 
 from work_management_ai.agents.orchestrator.contracts import (
@@ -12,6 +13,7 @@ from work_management_ai.agents.orchestrator.contracts import (
     OrchestratorStatus,
     OrchestratorSynthesis,
     SpecialistRunnerPort,
+    StepMode,
 )
 from work_management_ai.agents.orchestrator.evaluators.plan import (
     ExecutionPlanError,
@@ -111,6 +113,15 @@ class OrchestratorHarness:
         return {}
 
     async def plan_objective(self, state: OrchestratorState) -> dict[str, object]:
+        trusted_plan = self._trusted_planning_action_plan(state)
+        if trusted_plan is not None:
+            updates: dict[str, object] = {
+                "plan": trusted_plan,
+                "stop_reason": "RUNNING",
+            }
+            if state["original_plan"] is None:
+                updates["original_plan"] = trusted_plan
+            return updates
         requested = state["pending_requested_handoff"]
         if requested is not None:
             mode = f"replan.{state['replans_used']}"
@@ -145,6 +156,54 @@ class OrchestratorHarness:
         if state["original_plan"] is None:
             updates["original_plan"] = response.parsed
         return updates
+
+    def _trusted_planning_action_plan(self, state: OrchestratorState) -> ExecutionPlan | None:
+        active = state["value"].active_context.active_planning
+        if active is None:
+            return None
+        capability = {
+            "RESUME_INPUT": "planning.resume",
+            "REVISE": "planning.revise",
+        }[active.requested_operation]
+        actor = state["current_actor"]
+        catalog = self._registry.planning_catalog(
+            active_phase=2,
+            role=(actor.role if actor is not None else "EMPLOYEE"),
+        )
+        planning_agent = next(
+            (
+                item
+                for item in catalog
+                if item["agent_id"] == AgentId.PLANNING.value
+                and capability in cast(list[object], item["capabilities"])
+            ),
+            None,
+        )
+        if planning_agent is None:
+            return ExecutionPlan(
+                objectives=(state["value"].message,),
+                unavailable_capabilities=(capability,),
+                response_language=state["value"].locale,
+            )
+        return ExecutionPlan(
+            objectives=(state["value"].message,),
+            steps=(
+                ExecutionStep(
+                    step_id=(
+                        "resume_planning"
+                        if active.requested_operation == "RESUME_INPUT"
+                        else "revise_plan"
+                    ),
+                    target_agent_id=AgentId.PLANNING,
+                    target_agent_version=str(planning_agent["agent_version"]),
+                    capability=capability,
+                    objective=state["value"].message,
+                    typed_input={},
+                    mode=StepMode.PROPOSAL,
+                ),
+            ),
+            response_language=state["value"].locale,
+        )
 
     async def validate_plan(self, state: OrchestratorState) -> dict[str, object]:
         plan = state["plan"]
