@@ -59,19 +59,19 @@ ai-test:
 	$(MAKE) --no-print-directory -C ai test
 
 containers-build:
-	docker compose --profile tools build backend-api frontend ai-worker
+	docker compose build backend-api frontend ai-worker
 
 containers-up:
-	docker compose up -d --build --wait --wait-timeout 60 postgres backend-api frontend
+	docker compose up -d --build --wait --wait-timeout 60 postgres backend-api frontend ai-worker
 
 containers-down:
-	docker compose --profile tools down
+	docker compose down
 
 containers-config-check:
-	docker compose --profile tools config --quiet
+	docker compose config --quiet
 
 ai-worker-check:
-	docker compose --profile tools run --rm --build ai-worker timeout 3s python -m app.worker || [ $$? -eq 124 ]
+	docker compose run --rm --build ai-worker timeout 3s python -m app.worker || [ $$? -eq 124 ]
 
 lint:
 	$(MAKE) --no-print-directory -C backend lint
