@@ -315,7 +315,7 @@ class PlanningGraph:
                 validation_codes=validation_codes,
             ),
             output_schema=PlanningModelOutput,
-            timeout_seconds=60,
+            timeout_seconds=120,
         )
         try:
             response = await self._model_gateway.generate_structured(request)

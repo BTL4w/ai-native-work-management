@@ -474,16 +474,28 @@ class PlanningJobHandler:
         run: WorkflowRun,
         result: PlanningGraphResult,
     ) -> None:
+        failure_code: str | None = None
         if result.interrupt is not None and result.interrupt.kind == "MANAGER_INPUT_REQUIRED":
             updated = run.mark_needs_input()
         elif result.interrupt is not None and result.interrupt.kind == "MANAGER_DECISION_REQUIRED":
             updated = run.mark_waiting_for_decision()
         elif result.state["stage"] in {"MANUAL_FALLBACK", "UNSUPPORTED", "FORBIDDEN"}:
-            updated = run.mark_failed("AI_WORKFLOW_UNAVAILABLE")
+            failure_code = "AI_WORKFLOW_UNAVAILABLE"
+            updated = run.mark_failed(failure_code)
         else:
             return
         async with self._transactions(actor) as transaction:
             await transaction.repository.update_workflow_run(actor=actor, run=updated)
+            if failure_code is not None:
+                await transaction.repository.append_event(
+                    actor=actor,
+                    run_id=run.id,
+                    event_type="workflow.failed",
+                    public_payload={
+                        "safe_error_code": failure_code,
+                        "stage": result.state["stage"],
+                    },
+                )
             await transaction.commit()
 
 
@@ -571,9 +583,7 @@ class ProposalRevalidationJobHandler:
                         "proposal_id": str(proposal_id),
                         "version": version_number,
                         "approval_id": (
-                            str(proposal.approval_id)
-                            if proposal.approval_id is not None
-                            else None
+                            str(proposal.approval_id) if proposal.approval_id is not None else None
                         ),
                         "can_approve": validation.can_approve,
                         "error_codes": [item.code for item in validation.errors],

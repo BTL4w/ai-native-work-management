@@ -7,7 +7,12 @@ from typing import cast
 from uuid import UUID
 
 import pytest
+from pydantic import BaseModel
 
+from work_management_ai.model_gateway.contracts import (
+    StructuredModelRequest,
+    StructuredModelResponse,
+)
 from work_management_ai.model_gateway.mock import MockModelGateway
 from work_management_ai.prompts.planning import build_planning_messages
 from work_management_ai.schemas.planning import PlanningModelOutput
@@ -85,6 +90,19 @@ class FailingTracePort:
     async def record(self, metadata: TraceMetadata) -> None:
         del metadata
         raise RuntimeError("trace service unavailable with sensitive details")
+
+
+class RecordingMockModelGateway(MockModelGateway):
+    def __init__(self, *, fixtures: dict[str, object]) -> None:
+        super().__init__(fixtures=fixtures)
+        self.timeout_seconds: list[float] = []
+
+    async def generate_structured[StructuredOutputT: BaseModel](
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+    ) -> StructuredModelResponse[StructuredOutputT]:
+        self.timeout_seconds.append(request.timeout_seconds)
+        return await super().generate_structured(request)
 
 
 def new_state(*, locale: PlanningLocale = "en", brief: str = "Plan a customer conference"):
@@ -189,6 +207,20 @@ async def test_valid_bilingual_request_reaches_proposal_interrupt(
     assert result.interrupt.kind == "MANAGER_DECISION_REQUIRED"
     assert result.state["stage"] == "WAITING_FOR_DECISION"
     assert len(persistence.proposals) == 1
+
+
+@pytest.mark.asyncio
+async def test_initial_plan_generation_uses_full_workflow_timeout_budget() -> None:
+    gateway = RecordingMockModelGateway(fixtures={"planning.vi.generate": load_fixture("vi")})
+    graph = PlanningGraph(
+        model_gateway=gateway,
+        context_port=FakeContextPort(),
+        persistence_port=FakePersistencePort(),
+    )
+
+    await graph.run(new_state(locale="vi"))
+
+    assert gateway.timeout_seconds == [120]
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,18 @@
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import BaseModel
 
+from app.core.config import Settings
 from app.modules.identity.domain.auth import AuthenticatedActor
-from app.modules.planning_runs.adapters.ai_runtime import WorkflowRecordingModelGateway
+from app.modules.organization.domain.roles import MembershipRole
+from app.modules.planning_runs.adapters.ai_runtime import (
+    CurrentActorResolver,
+    PlanningJobHandler,
+    WorkflowRecordingModelGateway,
+)
 from app.modules.planning_runs.application.ports import (
     PlanningRunRepository,
     PlanningRunTransaction,
@@ -15,13 +22,18 @@ from app.modules.planning_runs.domain.models import (
     OutboxEvent,
     OutboxStatus,
     PlanningRunDomainError,
+    WorkflowEvent,
     WorkflowJob,
     WorkflowJobStatus,
+    WorkflowRun,
+    WorkflowRunStatus,
 )
 from work_management_ai.model_gateway.contracts import (
     StructuredModelRequest,
     StructuredModelResponse,
 )
+from work_management_ai.workflows.planning.graph import PlanningGraphResult
+from work_management_ai.workflows.planning.state import PlanningState, create_planning_state
 
 _TEST_ORG_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -68,6 +80,43 @@ class FakeJobRepository:
         self.failed_jobs: list[tuple[UUID, str]] = []
         self.published_events: set[UUID] = set()
         self.failed_events: list[tuple[UUID, str]] = []
+        self.updated_runs: list[WorkflowRun] = []
+        self.workflow_events: list[WorkflowEvent] = []
+
+    async def update_workflow_run(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        run: WorkflowRun,
+    ) -> WorkflowRun:
+        del actor
+        self.updated_runs.append(run)
+        return run
+
+    async def append_event(
+        self,
+        *,
+        event: WorkflowEvent | None = None,
+        actor: AuthenticatedActor | None = None,
+        run_id: UUID | None = None,
+        event_type: str | None = None,
+        public_payload: dict[str, object] | None = None,
+    ) -> WorkflowEvent:
+        if event is None:
+            assert actor is not None
+            assert run_id is not None
+            assert event_type is not None
+            assert public_payload is not None
+            event = WorkflowEvent(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                workflow_run_id=run_id,
+                sequence=len(self.workflow_events) + 1,
+                event_type=event_type,
+                public_payload=public_payload,
+            )
+        self.workflow_events.append(event)
+        return event
 
     async def claim_job(
         self,
@@ -259,6 +308,57 @@ def test_compute_backoff_seconds_cap() -> None:
     assert compute_backoff_seconds(7) == 300
     assert compute_backoff_seconds(10) == 300
     assert compute_backoff_seconds(20) == 300
+
+
+@pytest.mark.asyncio
+async def test_planning_job_records_terminal_failure_event_for_manual_fallback() -> None:
+    actor = AuthenticatedActor(
+        user_id=uuid4(),
+        email="manager@example.com",
+        display_name="Manager",
+        membership_id=uuid4(),
+        organization_id=_TEST_ORG_ID,
+        organization_name="Test",
+        role=MembershipRole.MANAGER,
+    )
+    run = WorkflowRun.create(
+        organization_id=actor.organization_id,
+        project_id=None,
+        requested_by_membership_id=actor.membership_id,
+        workflow_name="planning",
+        workflow_version="2.0.0",
+        verifier_version="2.0.0",
+        input_goal_text="Lập kế hoạch",
+    ).mark_running()
+    state = create_planning_state(
+        run_id=run.id,
+        organization_id=run.organization_id,
+        actor_membership_id=actor.membership_id,
+        actor_role=actor.role.value,
+        locale="vi",
+        user_brief=run.input_goal_text,
+    )
+    failed_state = dict(state)
+    failed_state["stage"] = "MANUAL_FALLBACK"
+    repository = FakeJobRepository()
+    handler = PlanningJobHandler(
+        Settings(environment="test"),
+        FakeJobTransactionFactory(repository),
+        cast(CurrentActorResolver, object()),
+    )
+
+    await handler._apply_result(  # pyright: ignore[reportPrivateUsage]
+        actor,
+        run,
+        PlanningGraphResult(state=cast(PlanningState, failed_state), interrupt=None),
+    )
+
+    assert repository.updated_runs[-1].status is WorkflowRunStatus.FAILED
+    assert [event.event_type for event in repository.workflow_events] == ["workflow.failed"]
+    assert repository.workflow_events[0].public_payload == {
+        "safe_error_code": "AI_WORKFLOW_UNAVAILABLE",
+        "stage": "MANUAL_FALLBACK",
+    }
 
 
 @pytest.mark.asyncio
