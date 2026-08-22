@@ -280,7 +280,7 @@ async def test_revision_does_not_persist_or_approve_inside_ai_package() -> None:
     executor = RecordingToolExecutor(_tool_result(expected))
     harness = _harness(
         actor=actor,
-        fixtures={"planning_agent.en.step_plan": _step_plan(PlanningOperation.REVISE)},
+        fixtures={},
         tool_executor=executor,
     )
 
@@ -296,6 +296,7 @@ async def test_revision_does_not_persist_or_approve_inside_ai_package() -> None:
     )
 
     assert result.status is AgentRunStatus.AWAITING_HUMAN
+    assert result.iterations_used == 0
     assert len(executor.requests) == 1
     assert not {"approved", "decision", "created_business_ids"}.intersection(
         executor.requests[0].typed_input

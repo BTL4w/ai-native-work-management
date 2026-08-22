@@ -159,6 +159,17 @@ class PlanningAgentHarness:
         selected = state["selected_skill"]
         if value is None or selected is None:
             return self._failure("PLANNING_STATE_INVALID")
+        if value.operation is PlanningOperation.REVISE:
+            return {
+                "plan": PlanningStepPlan(
+                    skill_reference="revise_project_plan@1",
+                    tool_id="planning.manage_run",
+                    tool_input={},
+                    requested_handoff=None,
+                ),
+                "route": "execute",
+                "stop_reason": "RUNNING",
+            }
         if state["iterations_used"] >= state["handoff"].budget.max_iterations:
             return self._failure("PLANNING_ITERATION_BUDGET_EXHAUSTED")
         request = StructuredModelRequest(

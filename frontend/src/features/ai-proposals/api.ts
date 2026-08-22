@@ -7,6 +7,7 @@ import {
 import {
   approvalResultSchema,
   proposalReferenceSchema,
+  proposalVersionSchema,
   workflowRunListSchema,
   workflowRunReferenceSchema,
   workflowRunSchema,
@@ -56,6 +57,12 @@ export function listPlanningRuns(): Promise<WorkflowRun[]> {
 export function getWorkflowRun(runId: string): Promise<ApiResult<WorkflowRun>> {
   return requestJsonWithMetadata(`/api/v1/workflow-runs/${runId}`, {
     schema: workflowRunSchema,
+  });
+}
+
+export function getProposalVersion(proposalId: string, version: number) {
+  return requestJsonWithMetadata(`/api/v1/proposals/${proposalId}/versions/${version}`, {
+    schema: proposalVersionSchema,
   });
 }
 

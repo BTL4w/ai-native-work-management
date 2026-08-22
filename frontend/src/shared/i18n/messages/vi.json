@@ -164,7 +164,7 @@
     "empty": { "title": "Tôi có thể giúp gì cho bạn?", "description": "Hỏi về công việc hiện tại hoặc mô tả project bạn muốn lập kế hoạch." },
     "role": { "you": "Bạn", "assistant": "Trợ lý" },
     "status": { "PENDING": "Đang chờ", "RUNNING": "Đang thực hiện", "COMPLETED": "Hoàn tất", "FAILED": "Không thành công" },
-    "activity": { "default": "Trợ lý đang xử lý một bước an toàn", "details": "Xem chi tiết hoạt động", "agent": "Agent", "step": "Bước", "safeStep": "Xử lý dữ liệu công việc đã được kiểm soát", "status": "Trạng thái" },
+    "activity": { "default": "Trợ lý đang xử lý một bước an toàn", "details": "Xem chi tiết hoạt động", "agent": "Agent", "step": "Bước", "safeStep": "Xử lý dữ liệu công việc đã được kiểm soát", "safeSteps": "{count, plural, one {# bước xử lý dữ liệu công việc đã được kiểm soát} other {# bước xử lý dữ liệu công việc đã được kiểm soát}}", "status": "Trạng thái" },
     "evidence": { "title": "Bằng chứng công việc" },
     "question": { "title": "Cần thêm thông tin" },
     "planning": { "status": "Workflow lập kế hoạch: {status}" },

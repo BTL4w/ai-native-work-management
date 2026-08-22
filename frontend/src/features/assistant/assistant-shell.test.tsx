@@ -61,6 +61,14 @@ const readyRun = {
   public_timeline: [],
   allowed_actions: ["EDIT_PROPOSAL", "DECIDE_APPROVAL"],
 };
+const proposalVersion = (currentVersion = 2) => ({
+  proposal_id: proposalId,
+  workflow_run_id: workflowRunId,
+  version: 2,
+  current_version: currentVersion,
+  content: proposalContent,
+  creator_type: "AI_SYSTEM",
+});
 
 function proposalSnapshot(readOnly = false) {
   return { conversation, messages: [{
@@ -227,6 +235,7 @@ describe("AssistantShell", () => {
       const path = String(input);
       if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
       if (path === `/api/v1/ai/conversations/${conversationId}`) return response(proposalSnapshot());
+      if (path === `/api/v1/proposals/${proposalId}/versions/2`) return response(proposalVersion());
       if (path === `/api/v1/workflow-runs/${workflowRunId}`) return response(readyRun);
       if (path.endsWith("/messages") && init?.method === "POST") return response({
         conversation_id: conversationId, message_id: messageId, turn_id: workflowRunId,
@@ -254,6 +263,7 @@ describe("AssistantShell", () => {
       const path = String(input);
       if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
       if (path === `/api/v1/ai/conversations/${conversationId}`) return response(proposalSnapshot());
+      if (path === `/api/v1/proposals/${proposalId}/versions/2`) return response(proposalVersion());
       if (path === `/api/v1/workflow-runs/${workflowRunId}`) return response(readyRun);
       if (path === `/api/v1/proposals/${proposalId}` && init?.method === "PATCH") return response({ proposal_id: proposalId, workflow_run_id: workflowRunId, status: "DRAFT", version: 3, content: proposalContent }, 202);
       if (path === `/api/v1/approvals/${approvalId}/decision` && init?.method === "POST") return response({
@@ -282,6 +292,7 @@ describe("AssistantShell", () => {
   it("renders a superseded proposal read-only and references the current version", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (String(input) === `/api/v1/proposals/${proposalId}/versions/2`) return response(proposalVersion(3));
       if (String(input).includes("workflow-runs")) return response({ ...readyRun, current_proposal: { ...readyRun.current_proposal, version: 3 } });
       return response(proposalSnapshot(true));
     }));

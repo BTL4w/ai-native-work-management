@@ -9,6 +9,7 @@ export const activityBlockSchema = strict({
   label_key: z.string(),
   status: z.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED"]),
   agent_id: z.string().nullable().optional(),
+  workflow_run_id: uuid.nullable().optional(),
 });
 const publicEvidenceSchema = strict({
   evidence_id: z.string(),

@@ -10,6 +10,7 @@ from _pytest.monkeypatch import MonkeyPatch
 
 from work_management_ai.agents.orchestrator.contracts import (
     ActiveConversationContext,
+    ActivePlanningContext,
     ExecutionPlan,
     OrchestratorInput,
     OrchestratorStatus,
@@ -278,6 +279,21 @@ def test_orchestrator_manifest_has_zero_business_tools() -> None:
     assert manifest.runtime.max_replans == 2
 
 
+def test_active_proposal_context_does_not_imply_a_revision_request() -> None:
+    value = ActivePlanningContext.model_validate(
+        {
+            "workflow_run_id": str(uuid4()),
+            "workflow_status": "WAITING_FOR_DECISION",
+            "proposal_id": str(uuid4()),
+            "proposal_version": 1,
+            "proposal_status": "READY_FOR_DECISION",
+        }
+    )
+
+    assert value is not None
+    assert value.requested_operation is None
+
+
 def test_plan_prompt_exposes_only_registry_backed_specialist_capabilities(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
@@ -541,6 +557,135 @@ async def test_explicit_revision_card_deterministically_delegates_planning_revis
         "expected_proposal_version": 1,
         "manager_instruction": "Mở rộng đến cuối tháng 11",
     }
+
+
+@pytest.mark.asyncio
+async def test_direct_chat_can_revise_the_active_proposal(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    actor = _resolved_actor()
+    workflow_run_id = uuid4()
+    proposal_id = uuid4()
+    runner = RecordingSpecialistRunner()
+    harness = _harness(
+        actor=actor,
+        registry=_revision_registry(tmp_path, monkeypatch),
+        runner=runner,
+        fixtures={
+            "orchestrator.vi.plan": {
+                "objectives": ["Mở rộng proposal hiện tại"],
+                "steps": [
+                    {
+                        "step_id": "revise_plan",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.revise",
+                        "objective": "Mở rộng proposal hiện tại đến cuối tháng 11",
+                        "typed_input": {},
+                        "mode": "PROPOSAL",
+                    }
+                ],
+                "response_language": "vi",
+            },
+            "orchestrator.vi.synthesize": {
+                "blocks": [{"kind": "text", "text": "Đã gửi proposal chỉnh sửa."}]
+            },
+        },
+    )
+    value = OrchestratorInput(
+        conversation_id=uuid4(),
+        turn_id=uuid4(),
+        message="Mở rộng kế hoạch hiện tại đến cuối tháng 11",
+        locale="vi",
+        actor=ActorReference(
+            membership_id=actor.membership_id,
+            organization_id=actor.organization_id,
+        ),
+        active_context=ActiveConversationContext(
+            recent_messages=(),
+            active_planning=ActivePlanningContext(
+                workflow_run_id=workflow_run_id,
+                workflow_status="WAITING_FOR_DECISION",
+                proposal_id=proposal_id,
+                proposal_version=1,
+                proposal_status="READY_FOR_DECISION",
+            ),
+        ),
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output is not None
+    assert output.status is OrchestratorStatus.COMPLETED
+    assert len(runner.handoffs) == 1
+    assert runner.handoffs[0].typed_input == {
+        "operation": "REVISE",
+        "workflow_run_id": str(workflow_run_id),
+        "locale": "vi",
+        "brief": "Mở rộng kế hoạch hiện tại đến cuối tháng 11",
+        "proposal_id": str(proposal_id),
+        "expected_proposal_version": 1,
+        "manager_instruction": "Mở rộng kế hoạch hiện tại đến cuối tháng 11",
+    }
+
+
+@pytest.mark.asyncio
+async def test_plain_chat_cannot_mutate_an_active_proposal(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    actor = _resolved_actor()
+    invalid_revision_plan: dict[str, object] = {
+        "objectives": ["Respond to the greeting"],
+        "steps": [
+            {
+                "step_id": "revise_plan",
+                "target_agent_id": "planning",
+                "target_agent_version": "1.0.0",
+                "capability": "planning.revise",
+                "objective": "Revise the active proposal",
+                "typed_input": {},
+                "mode": "PROPOSAL",
+            }
+        ],
+        "response_language": "en",
+    }
+    runner = RecordingSpecialistRunner()
+    harness = _harness(
+        actor=actor,
+        registry=_revision_registry(tmp_path, monkeypatch),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": invalid_revision_plan,
+            "orchestrator.en.repair": invalid_revision_plan,
+            "orchestrator.en.synthesize": {"blocks": [{"kind": "text", "text": "Hello."}]},
+        },
+    )
+    value = OrchestratorInput(
+        conversation_id=uuid4(),
+        turn_id=uuid4(),
+        message="hello",
+        locale="en",
+        actor=ActorReference(
+            membership_id=actor.membership_id,
+            organization_id=actor.organization_id,
+        ),
+        active_context=ActiveConversationContext(
+            recent_messages=(),
+            active_planning=ActivePlanningContext(
+                workflow_run_id=uuid4(),
+                workflow_status="WAITING_FOR_DECISION",
+                proposal_id=uuid4(),
+                proposal_version=1,
+                proposal_status="READY_FOR_DECISION",
+            ),
+        ),
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.FAILED
+    assert output.stop_reason == "EXECUTION_PLAN_INVALID"
+    assert runner.handoffs == []
 
 
 def test_independent_read_steps_form_one_parallel_batch() -> None:

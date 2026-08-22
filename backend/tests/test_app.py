@@ -61,6 +61,7 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/workflow-runs/{run_id}/messages",
         "/api/v1/workflow-runs/{run_id}/events",
         "/api/v1/proposals/{proposal_id}",
+        "/api/v1/proposals/{proposal_id}/versions/{version_number}",
         "/api/v1/approvals/{approval_id}/decision",
         "/api/v1/ai/conversations",
         "/api/v1/ai/conversations/{conversation_id}",

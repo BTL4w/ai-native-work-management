@@ -164,7 +164,7 @@
     "empty": { "title": "How can I help?", "description": "Ask about current work or describe a project you want to plan." },
     "role": { "you": "You", "assistant": "Assistant" },
     "status": { "PENDING": "Pending", "RUNNING": "Running", "COMPLETED": "Completed", "FAILED": "Failed" },
-    "activity": { "default": "The Assistant is performing a safe step", "details": "View activity details", "agent": "Agent", "step": "Step", "safeStep": "Processing authorized work data", "status": "Status" },
+    "activity": { "default": "The Assistant is performing a safe step", "details": "View activity details", "agent": "Agent", "step": "Step", "safeStep": "Processing authorized work data", "safeSteps": "{count, plural, one {# authorized work-data processing step} other {# authorized work-data processing steps}}", "status": "Status" },
     "evidence": { "title": "Work evidence" },
     "question": { "title": "More information needed" },
     "planning": { "status": "Planning workflow: {status}" },

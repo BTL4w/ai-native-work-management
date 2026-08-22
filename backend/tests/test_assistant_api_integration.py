@@ -309,6 +309,33 @@ def test_message_response_hides_private_and_legacy_card_actions() -> None:
     ]
 
 
+def test_message_response_recovers_workflow_id_for_historical_activity() -> None:
+    workflow_run_id = uuid4()
+    message = AssistantMessage(
+        id=uuid4(),
+        organization_id=uuid4(),
+        conversation_id=uuid4(),
+        sequence=1,
+        role=MessageRole.ASSISTANT,
+        content_blocks=(
+            {
+                "kind": "activity",
+                "label_key": "ai.activity.workflow_generating",
+                "status": "COMPLETED",
+                "agent_id": "planning",
+            },
+        ),
+        turn_id=uuid4(),
+        dedupe_key=f"workflow:{workflow_run_id}:3",
+    )
+
+    response = MessageResponse.from_domain(message)
+
+    assert response.content_blocks[0].model_dump(mode="json")["workflow_run_id"] == str(
+        workflow_run_id
+    )
+
+
 @pytest.mark.asyncio
 async def test_required_headers_strict_body_and_invalid_if_match_are_structured() -> None:
     actor = _actor()

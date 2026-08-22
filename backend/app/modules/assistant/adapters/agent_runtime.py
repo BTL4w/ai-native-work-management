@@ -18,6 +18,7 @@ from app.modules.assistant.domain.models import (
     AgentModelInvocation,
     AgentRun,
     AssistantJob,
+    AssistantMessage,
     InvocationStatus,
     OrchestrationRunStatus,
 )
@@ -40,6 +41,12 @@ from work_management_ai.model_gateway.contracts import (
     ModelGateway,
     StructuredModelRequest,
     StructuredModelResponse,
+)
+from work_management_ai.model_gateway.errors import (
+    ModelInvalidOutputError,
+    ModelRateLimitError,
+    ModelTimeoutError,
+    ModelUnavailableError,
 )
 from work_management_ai.runtime.agent_registry import AgentRegistry
 from work_management_ai.runtime.contracts import (
@@ -102,6 +109,48 @@ class CurrentActorResolverPort(Protocol):
     ) -> AuthenticatedActor | None: ...
 
 
+def resolve_ambient_planning_context(
+    messages: tuple[AssistantMessage, ...],
+) -> ActivePlanningContext | None:
+    """Resolve the latest current proposal without inferring a user operation."""
+
+    closed_workflows: set[UUID] = set()
+    for message in reversed(messages):
+        for block in reversed(message.content_blocks):
+            kind = block.get("kind")
+            try:
+                workflow_run_id = UUID(str(block["workflow_run_id"]))
+            except (KeyError, ValueError):
+                continue
+            if kind == "decision_result":
+                closed_workflows.add(workflow_run_id)
+                continue
+            if kind != "proposal" or workflow_run_id in closed_workflows:
+                continue
+            state = block.get("state")
+            if block.get("read_only") is True or state not in {
+                "READY_FOR_DECISION",
+                "VALIDATION_FAILED",
+            }:
+                continue
+            try:
+                proposal_id = UUID(str(block["proposal_id"]))
+                proposal_version = int(block["proposal_version"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if proposal_version < 1:
+                continue
+            return ActivePlanningContext(
+                workflow_run_id=workflow_run_id,
+                workflow_status="WAITING_FOR_DECISION",
+                proposal_id=proposal_id,
+                proposal_version=proposal_version,
+                proposal_status=str(state),
+                requested_operation=None,
+            )
+    return None
+
+
 @contextmanager
 def agent_model_scope(organization_id: UUID, agent_run_id: UUID) -> Generator[None]:
     """Bind safe tenant/run identity to model metadata recording for one Agent call."""
@@ -138,9 +187,9 @@ class AgentRecordingModelGateway:
         try:
             response = await self._gateway.generate_structured(request)
             model_ref = response.model_ref
-        except Exception:
+        except Exception as error:
             status = InvocationStatus.FAILED
-            safe_error_code = "MODEL_GATEWAY_FAILED"
+            safe_error_code = _safe_model_error_code(error)
             raise
         finally:
             provider, separator, model = model_ref.partition(":")
@@ -164,6 +213,18 @@ class AgentRecordingModelGateway:
                 await transaction.repository.append_agent_model_invocation(invocation=invocation)
                 await transaction.commit()
         return response
+
+
+def _safe_model_error_code(error: Exception) -> str:
+    if isinstance(error, ModelInvalidOutputError):
+        return "MODEL_INVALID_OUTPUT"
+    if isinstance(error, ModelTimeoutError):
+        return "MODEL_TIMEOUT"
+    if isinstance(error, ModelRateLimitError):
+        return "MODEL_RATE_LIMITED"
+    if isinstance(error, ModelUnavailableError):
+        return "MODEL_UNAVAILABLE"
+    return "MODEL_GATEWAY_FAILED"
 
 
 class _ScopedAgentHarness:
@@ -552,7 +613,7 @@ class AssistantTurnExecutor:
         if turn is None or run.turn_id != turn.id:
             raise RuntimeError("ASSISTANT_EXECUTION_CONTEXT_INVALID")
         excerpts: list[ConversationExcerpt] = []
-        active_planning: ActivePlanningContext | None = None
+        active_planning = resolve_ambient_planning_context(snapshot.messages)
         for message in snapshot.messages[-12:]:
             text = "\n".join(
                 str(block.get("text", ""))

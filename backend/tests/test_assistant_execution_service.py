@@ -10,6 +10,7 @@ from app.modules.assistant.adapters.agent_runtime import (
     AssistantTurnExecutor,
     agent_model_scope,
     build_agent_registry,
+    resolve_ambient_planning_context,
 )
 from app.modules.assistant.application.execution_service import (
     AssistantExecutionError,
@@ -18,6 +19,8 @@ from app.modules.assistant.application.execution_service import (
 from app.modules.assistant.domain.models import (
     AgentModelInvocation,
     AssistantJob,
+    AssistantMessage,
+    MessageRole,
     OrchestrationRun,
 )
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -25,6 +28,12 @@ from app.modules.organization.domain.roles import MembershipRole
 from work_management_ai.model_gateway.contracts import (
     StructuredModelRequest,
     StructuredModelResponse,
+)
+from work_management_ai.model_gateway.errors import (
+    ModelInvalidOutputError,
+    ModelRateLimitError,
+    ModelTimeoutError,
+    ModelUnavailableError,
 )
 
 
@@ -37,6 +46,61 @@ def _job() -> AssistantJob:
         requester_membership_id=uuid4(),
         payload={},
     )
+
+
+def test_latest_current_proposal_is_available_as_ambient_chat_context() -> None:
+    organization_id = uuid4()
+    conversation_id = uuid4()
+    workflow_run_id = uuid4()
+    proposal_id = uuid4()
+    messages = (
+        AssistantMessage(
+            id=uuid4(),
+            organization_id=organization_id,
+            conversation_id=conversation_id,
+            sequence=1,
+            role=MessageRole.ASSISTANT,
+            content_blocks=(
+                {
+                    "kind": "proposal",
+                    "workflow_run_id": str(workflow_run_id),
+                    "proposal_id": str(proposal_id),
+                    "proposal_version": 1,
+                    "state": "SUPERSEDED",
+                    "read_only": True,
+                    "current_version": 2,
+                },
+            ),
+        ),
+        AssistantMessage(
+            id=uuid4(),
+            organization_id=organization_id,
+            conversation_id=conversation_id,
+            sequence=2,
+            role=MessageRole.ASSISTANT,
+            content_blocks=(
+                {
+                    "kind": "proposal",
+                    "workflow_run_id": str(workflow_run_id),
+                    "proposal_id": str(proposal_id),
+                    "proposal_version": 2,
+                    "state": "READY_FOR_DECISION",
+                    "read_only": False,
+                },
+            ),
+        ),
+    )
+    context = resolve_ambient_planning_context(messages)
+
+    assert context is not None
+    assert context.model_dump(mode="json") == {
+        "workflow_run_id": str(workflow_run_id),
+        "workflow_status": "WAITING_FOR_DECISION",
+        "proposal_id": str(proposal_id),
+        "proposal_version": 2,
+        "proposal_status": "READY_FOR_DECISION",
+        "requested_operation": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -160,6 +224,70 @@ async def test_model_gateway_records_safe_metadata_after_transaction_free_call()
     assert recorded.agent_run_id == agent_run_id
     assert recorded.invocation_key == request.invocation_key
     assert not hasattr(recorded, "messages")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_error", "safe_error_code"),
+    [
+        (ModelInvalidOutputError("private invalid output"), "MODEL_INVALID_OUTPUT"),
+        (ModelTimeoutError("private timeout"), "MODEL_TIMEOUT"),
+        (ModelRateLimitError("private rate limit"), "MODEL_RATE_LIMITED"),
+        (ModelUnavailableError("private unavailable"), "MODEL_UNAVAILABLE"),
+    ],
+)
+async def test_model_gateway_records_specific_safe_failure_kind(
+    provider_error: Exception,
+    safe_error_code: str,
+) -> None:
+    organization_id, agent_run_id = uuid4(), uuid4()
+
+    class Output(BaseModel):
+        answer: str
+
+    class Repo:
+        recorded: AgentModelInvocation | None = None
+
+        async def append_agent_model_invocation(self, *, invocation: AgentModelInvocation) -> None:
+            self.recorded = invocation
+
+    repo = Repo()
+
+    class Transaction:
+        repository = repo
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def commit(self):
+            return None
+
+    class Gateway:
+        async def generate_structured[OutputT: BaseModel](
+            self, request: StructuredModelRequest[OutputT]
+        ) -> StructuredModelResponse[OutputT]:
+            del request
+            raise provider_error
+
+    gateway = AgentRecordingModelGateway(
+        gateway=Gateway(),  # type: ignore[arg-type]
+        transaction_factory=lambda _: Transaction(),  # type: ignore[arg-type]
+    )
+    request = StructuredModelRequest(
+        invocation_key="planning_agent.vi.step_plan",
+        messages=(),
+        output_schema=Output,
+        timeout_seconds=5,
+    )
+
+    with agent_model_scope(organization_id, agent_run_id), pytest.raises(type(provider_error)):
+        await gateway.generate_structured(request)
+
+    assert repo.recorded is not None
+    assert repo.recorded.safe_error_code == safe_error_code
 
 
 @pytest.mark.asyncio

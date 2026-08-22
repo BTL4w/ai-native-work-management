@@ -6,7 +6,7 @@ import re
 from typing import Annotated, Any, NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Header, Path, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.errors import ApplicationError, ErrorResponse
@@ -24,6 +24,7 @@ from app.modules.planning_runs.api.schemas import (
     PlanningRunCreateRequest,
     ProposalEditRequest,
     ProposalReferenceResponse,
+    ProposalVersionResponse,
     WorkflowRunListResponse,
     WorkflowRunReferenceResponse,
     WorkflowRunResponse,
@@ -229,6 +230,28 @@ async def post_manager_message(
     if result.replayed:
         response.headers["Idempotency-Replayed"] = "true"
     return WorkflowRunReferenceResponse.from_domain(result.run)
+
+
+@router.get(
+    "/proposals/{proposal_id}/versions/{version_number}",
+    response_model=ProposalVersionResponse,
+    responses=_ERROR_RESPONSES,
+)
+async def get_proposal_version(
+    proposal_id: UUID,
+    version_number: Annotated[int, Path(ge=1)],
+    actor: ActorDependency,
+    service: ProposalServiceDependency,
+) -> ProposalVersionResponse:
+    try:
+        proposal, version = await service.get_proposal_version(
+            actor=actor,
+            proposal_id=proposal_id,
+            version_number=version_number,
+        )
+    except PlanningRunDomainError as error:
+        _raise_planning_error(error)
+    return ProposalVersionResponse.from_domain(proposal, version)
 
 
 @router.patch(

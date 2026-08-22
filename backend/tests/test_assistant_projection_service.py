@@ -383,3 +383,21 @@ async def test_projected_blocks_match_conversation_snapshot_contract(
     )
 
     assert response.content_blocks[0].kind == repository.projected[0]["blocks"][0]["kind"]
+
+
+@pytest.mark.asyncio
+async def test_activity_projection_identifies_its_workflow_run() -> None:
+    item = _item("workflow.generating", {})
+    repository = _Repository([item])
+
+    await _service(repository).project_once(organization_id=item.event.organization_id)
+
+    assert repository.projected[0]["blocks"] == (
+        {
+            "kind": "activity",
+            "label_key": "ai.activity.workflow_generating",
+            "status": "COMPLETED",
+            "agent_id": "planning",
+            "workflow_run_id": str(item.event.workflow_run_id),
+        },
+    )

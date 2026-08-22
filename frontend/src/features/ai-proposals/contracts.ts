@@ -138,6 +138,14 @@ export const proposalReferenceSchema = z.object({
   version: z.number().int().positive(),
   content: proposalContentSchema,
 });
+export const proposalVersionSchema = z.object({
+  proposal_id: z.uuid(),
+  workflow_run_id: z.uuid(),
+  version: z.number().int().positive(),
+  current_version: z.number().int().positive(),
+  content: proposalContentSchema,
+  creator_type: z.enum(["AI_SYSTEM", "HUMAN_MANAGER", "UNKNOWN"]),
+});
 const createdBusinessIdsSchema = z.object({
   project_id: z.uuid().nullable(),
   goal_id: z.uuid().nullable(),

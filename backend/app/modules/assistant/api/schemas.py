@@ -52,6 +52,7 @@ class ActivityBlock(BaseModel):
     label_key: str
     status: Literal["PENDING", "RUNNING", "COMPLETED", "FAILED"]
     agent_id: str | None = None
+    workflow_run_id: UUID | None = None
 
 
 class WorkEvidenceBlock(BaseModel):
@@ -172,7 +173,7 @@ class MessageResponse(BaseModel):
     @classmethod
     def from_domain(cls, m: AssistantMessage) -> MessageResponse:
         public_blocks = tuple(
-            block
+            _public_block(block, dedupe_key=m.dedupe_key)
             for block in m.content_blocks
             if block.get("kind")
             not in {"accepted_card_action", "PLANNING_INPUT", "PLANNING_REVISE"}
@@ -184,6 +185,27 @@ class MessageResponse(BaseModel):
             content_blocks=_CONTENT_BLOCKS.validate_python(public_blocks),
             created_at=m.created_at,
         )
+
+
+def _public_block(block: dict[str, Any], *, dedupe_key: str | None) -> dict[str, Any]:
+    if block.get("kind") != "activity" or block.get("workflow_run_id") is not None:
+        return block
+    workflow_run_id = _workflow_run_id_from_dedupe_key(dedupe_key)
+    if workflow_run_id is None:
+        return block
+    return {**block, "workflow_run_id": workflow_run_id}
+
+
+def _workflow_run_id_from_dedupe_key(dedupe_key: str | None) -> UUID | None:
+    if dedupe_key is None:
+        return None
+    parts = dedupe_key.split(":")
+    if len(parts) != 3 or parts[0] != "workflow":
+        return None
+    try:
+        return UUID(parts[1])
+    except ValueError:
+        return None
 
 
 class TurnResponse(BaseModel):

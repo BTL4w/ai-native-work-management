@@ -254,3 +254,23 @@ class ProposalReferenceResponse(BaseModel):
             version=version.version_number,
             content=version.content,
         )
+
+
+class ProposalVersionResponse(BaseModel):
+    proposal_id: UUID
+    workflow_run_id: UUID
+    version: int
+    current_version: int
+    content: dict[str, object]
+    creator_type: str
+
+    @classmethod
+    def from_domain(cls, proposal: Proposal, version: ProposalVersion) -> Self:
+        return cls(
+            proposal_id=proposal.id,
+            workflow_run_id=proposal.workflow_run_id,
+            version=version.version_number,
+            current_version=proposal.current_version_number,
+            content=version.content,
+            creator_type=version.creator_type,
+        )

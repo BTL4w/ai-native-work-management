@@ -148,6 +148,7 @@ class AssistantProjectionService:
                     "label_key": f"ai.activity.{event.event_type.replace('.', '_')}",
                     "status": "COMPLETED",
                     "agent_id": "planning",
+                    "workflow_run_id": str(event.workflow_run_id),
                 },
             ),
             None,

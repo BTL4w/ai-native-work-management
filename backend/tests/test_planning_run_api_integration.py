@@ -197,6 +197,23 @@ class StubProposalService:
         )
         self.error: Exception | None = None
         self.last_edit: dict[str, Any] | None = None
+        self.last_get: dict[str, Any] | None = None
+
+    async def get_proposal_version(self, **values: Any) -> tuple[Proposal, ProposalVersion]:
+        if self.error:
+            raise self.error
+        self.last_get = values
+        version = ProposalVersion(
+            id=uuid4(),
+            organization_id=self.proposal.organization_id,
+            proposal_id=self.proposal.id,
+            version_number=values["version_number"],
+            created_by_membership_id=values["actor"].membership_id,
+            content={"project": {"title": "Immutable version"}},
+            assumptions=[],
+            creator_type="AI_SYSTEM",
+        )
+        return self.proposal, version
 
     async def edit_proposal(self, **values: Any) -> ProposalMutationResult:
         if self.error:
@@ -263,6 +280,9 @@ async def test_create_list_snapshot_message_and_proposal_edit_contracts() -> Non
         )
         listed = await client.get("/api/v1/workflow-runs")
         snapshot = await client.get(f"/api/v1/workflow-runs/{run_service.run.id}")
+        proposal_version = await client.get(
+            f"/api/v1/proposals/{proposal_service.proposal.id}/versions/1"
+        )
         message = await client.post(
             f"/api/v1/workflow-runs/{run_service.run.id}/messages",
             json={"message": "Budget is 50,000 USD"},
@@ -279,6 +299,17 @@ async def test_create_list_snapshot_message_and_proposal_edit_contracts() -> Non
     assert created.json()["run_id"] == str(run_service.run.id)
     assert listed.status_code == 200 and len(listed.json()["items"]) == 1
     assert snapshot.status_code == 200 and snapshot.json()["status"] == "QUEUED"
+    assert proposal_version.status_code == 200
+    assert proposal_version.json() == {
+        "proposal_id": str(proposal_service.proposal.id),
+        "workflow_run_id": str(proposal_service.proposal.workflow_run_id),
+        "version": 1,
+        "current_version": 4,
+        "content": {"project": {"title": "Immutable version"}},
+        "creator_type": "AI_SYSTEM",
+    }
+    assert proposal_service.last_get is not None
+    assert proposal_service.last_get["version_number"] == 1
     assert message.status_code == 202
     assert edited.status_code == 202
     assert edited.headers["etag"] == '"5"'
@@ -369,6 +400,7 @@ def test_openapi_exposes_only_task7_planning_mutation_and_stream_contracts() -> 
         "/api/v1/workflow-runs/{run_id}": {"get"},
         "/api/v1/workflow-runs/{run_id}/messages": {"post"},
         "/api/v1/proposals/{proposal_id}": {"patch"},
+        "/api/v1/proposals/{proposal_id}/versions/{version_number}": {"get"},
         "/api/v1/workflow-runs/{run_id}/events": {"get"},
     }
 
@@ -397,6 +429,7 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
     manager_user, employee_user, foreign_user = uuid4(), uuid4(), uuid4()
     manager_member, employee_member, foreign_member = uuid4(), uuid4(), uuid4()
     foreign_run = uuid4()
+    foreign_proposal, foreign_proposal_version = uuid4(), uuid4()
     slug = f"task7-api-{organization_id.hex}"
     password = "Task7Integration123!"
     manager_email = f"manager-{manager_user.hex}@example.test"
@@ -459,6 +492,31 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
                 ),
                 {"id": foreign_run, "org": foreign_organization_id, "member": foreign_member},
             )
+            await connection.execute(
+                text(
+                    "INSERT INTO proposals "
+                    "(id, organization_id, workflow_run_id, status, current_version_number) "
+                    "VALUES (:id, :org, :run, 'DRAFT', 1)"
+                ),
+                {"id": foreign_proposal, "org": foreign_organization_id, "run": foreign_run},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO proposal_versions "
+                    "(id, organization_id, proposal_id, version_number, "
+                    "created_by_membership_id, content, assumptions) "
+                    "VALUES (:id, :org, :proposal, 1, :member, "
+                    "CAST(:content AS jsonb), CAST(:assumptions AS jsonb))"
+                ),
+                {
+                    "id": foreign_proposal_version,
+                    "org": foreign_organization_id,
+                    "proposal": foreign_proposal,
+                    "member": foreign_member,
+                    "content": "{}",
+                    "assumptions": "[]",
+                },
+            )
 
         app = create_app(settings)
         async with AsyncClient(
@@ -500,6 +558,9 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
             assert await job_service.run_once("task7-test-worker", organization_id) is True
             processed = await client.get(f"/api/v1/workflow-runs/{run_id}")
             proposal_snapshot = processed.json()["current_proposal"]
+            original_version = await client.get(
+                f"/api/v1/proposals/{proposal_snapshot['proposal_id']}/versions/1"
+            )
             edited = await client.patch(
                 f"/api/v1/proposals/{proposal_snapshot['proposal_id']}",
                 json={"content": proposal_snapshot["content"]},
@@ -526,6 +587,9 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
             assert await job_service.run_once("task7-test-worker", organization_id) is True
             resumed = await client.get(f"/api/v1/workflow-runs/{needs_input_run}")
             foreign = await client.get(f"/api/v1/workflow-runs/{foreign_run}")
+            foreign_proposal_read = await client.get(
+                f"/api/v1/proposals/{foreign_proposal}/versions/1"
+            )
             await client.post("/api/v1/auth/logout")
             await client.post(
                 "/api/v1/auth/login",
@@ -545,6 +609,9 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
         assert processed.json()["status"] == "WAITING_FOR_DECISION"
         assert processed.json()["current_proposal"] is not None
         assert processed.json()["public_timeline"]
+        assert original_version.status_code == 200
+        assert original_version.json()["version"] == 1
+        assert original_version.json()["current_version"] == 1
         assert edited.status_code == 202
         assert edited.headers["etag"] == '"2"'
         assert revalidated.json()["current_proposal"]["version"] == 2
@@ -553,6 +620,7 @@ async def test_postgres_create_run_is_atomic_idempotent_audited_and_tenant_scope
         assert answered.status_code == 202
         assert resumed.json()["status"] == "WAITING_FOR_DECISION"
         assert foreign.status_code == 404
+        assert foreign_proposal_read.status_code == 404
         assert employee.status_code == 403
         async with engine.connect() as connection:
             counts = (

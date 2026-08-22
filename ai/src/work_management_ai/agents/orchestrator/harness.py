@@ -1,6 +1,7 @@
 """Guarded runtime for bounded Orchestrator planning and delegation."""
 
 import asyncio
+import re
 from typing import cast
 from uuid import NAMESPACE_URL, uuid5
 
@@ -47,6 +48,27 @@ from work_management_ai.runtime.policy_guard import AgentPolicyError, PolicyGuar
 _MAX_PLAN_REPAIRS = 1
 _MAX_REPLANS = 2
 _MAX_HANDOFFS = 6
+_REVISION_SIGNALS = (
+    "add",
+    "change",
+    "chỉnh",
+    "cập nhật",
+    "delete",
+    "dời",
+    "edit",
+    "extend",
+    "kéo dài",
+    "mở rộng",
+    "move",
+    "remove",
+    "revise",
+    "rút ngắn",
+    "sửa",
+    "thay đổi",
+    "thêm",
+    "update",
+    "xóa",
+)
 
 
 class OrchestratorHarness:
@@ -159,7 +181,7 @@ class OrchestratorHarness:
 
     def _trusted_planning_action_plan(self, state: OrchestratorState) -> ExecutionPlan | None:
         active = state["value"].active_context.active_planning
-        if active is None:
+        if active is None or active.requested_operation is None:
             return None
         capability = {
             "RESUME_INPUT": "planning.resume",
@@ -221,6 +243,7 @@ class OrchestratorHarness:
             validate_execution_plan(plan, self._registry, actor)
             if plan.response_language != state["value"].locale:
                 raise ExecutionPlanError("RESPONSE_LANGUAGE_MISMATCH")
+            self._validate_planning_context(plan, state["value"])
             requested = state["pending_requested_handoff"]
             prior = state["prior_plan"]
             if requested is not None and prior is not None:
@@ -240,6 +263,22 @@ class OrchestratorHarness:
         if not plan.steps and plan.unavailable_capabilities:
             return {"route": "capability_unavailable"}
         return {"route": "execute", "pending_requested_handoff": None}
+
+    @staticmethod
+    def _validate_planning_context(plan: ExecutionPlan, value: OrchestratorInput) -> None:
+        active = value.active_context.active_planning
+        for step in plan.steps:
+            if step.capability == "planning.revise":
+                if active is None or active.proposal_id is None or active.proposal_version is None:
+                    raise ExecutionPlanError("PLANNING_REVISION_CONTEXT_MISSING")
+                if active.requested_operation != "REVISE" and not _has_revision_signal(
+                    value.message
+                ):
+                    raise ExecutionPlanError("PLANNING_REVISION_INTENT_MISSING")
+            elif step.capability == "planning.resume" and (
+                active is None or active.requested_operation != "RESUME_INPUT"
+            ):
+                raise ExecutionPlanError("PLANNING_RESUME_CONTEXT_MISSING")
 
     async def select_next_step(self, state: OrchestratorState) -> dict[str, object]:
         plan = state["plan"]
@@ -511,3 +550,11 @@ class OrchestratorHarness:
             "status": OrchestratorStatus.FAILED,
             "stop_reason": code,
         }
+
+
+def _has_revision_signal(message: str) -> bool:
+    normalized = message.casefold()
+    return any(
+        re.search(rf"(?<!\w){re.escape(signal)}(?!\w)", normalized) is not None
+        for signal in _REVISION_SIGNALS
+    )

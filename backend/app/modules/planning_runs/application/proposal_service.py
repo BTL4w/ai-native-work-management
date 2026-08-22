@@ -20,6 +20,7 @@ from app.modules.planning_runs.domain.models import (
     PlanningRunDomainError,
     PlanningRunForbiddenError,
     PlanningRunNotFoundError,
+    Proposal,
     ProposalVersion,
     ResourceVersionMismatchError,
     WorkflowJob,
@@ -38,6 +39,39 @@ class ProposalService:
     ) -> None:
         self._transaction_factory = transaction_factory
         self._runtime = runtime
+
+    async def get_proposal_version(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        proposal_id: UUID,
+        version_number: int,
+    ) -> tuple[Proposal, ProposalVersion]:
+        if actor.role not in _WRITE_ROLES:
+            async with self._transaction_factory(actor) as transaction:
+                await transaction.repository.audit_rejection(
+                    actor=actor,
+                    action="proposal.version_viewed",
+                    request_id="read",
+                    reason_code="FORBIDDEN",
+                    resource_id=proposal_id,
+                )
+            raise PlanningRunForbiddenError
+        async with self._transaction_factory(actor) as transaction:
+            proposal = await transaction.repository.get_proposal(
+                actor=actor,
+                proposal_id=proposal_id,
+            )
+            if proposal is None:
+                raise PlanningRunNotFoundError
+            version = await transaction.repository.get_proposal_version(
+                actor=actor,
+                proposal_id=proposal_id,
+                version_number=version_number,
+            )
+            if version is None:
+                raise PlanningRunNotFoundError
+        return proposal, version
 
     async def _audit_mutation_error(
         self,

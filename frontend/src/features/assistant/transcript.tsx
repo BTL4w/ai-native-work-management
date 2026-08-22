@@ -8,6 +8,10 @@ import { UnavailableBlock } from "./blocks/unavailable-block";
 import { WorkEvidenceBlock } from "./blocks/work-evidence-block";
 
 type ProposalBlock = Extract<AssistantBlock, { kind: "proposal" }>;
+type ActivityBlockData = Extract<AssistantBlock, { kind: "activity" }>;
+type TranscriptEntry =
+  | { kind: "message"; message: AssistantMessage }
+  | { kind: "activity_group"; id: string; blocks: ActivityBlockData[] };
 
 export function Transcript({ messages, canManage, onEdit, onRevise, onApprove, onReject, onContinueManually }: {
   messages: AssistantMessage[];
@@ -20,12 +24,19 @@ export function Transcript({ messages, canManage, onEdit, onRevise, onApprove, o
 }) {
   const t = useTranslations("assistant");
   const ordered = messages.toSorted((left, right) => left.sequence - right.sequence);
+  const visibleMessages = collapseProposalBlocks(ordered);
+  const entries = groupConsecutiveActivities(visibleMessages);
   return <div className="assistant-transcript" aria-live="polite">
-    {ordered.length === 0 ? <div className="assistant-empty"><h2>{t("empty.title")}</h2><p>{t("empty.description")}</p></div> : null}
-    {ordered.map((message) => <article className={`assistant-message role-${message.role.toLowerCase()}`} key={message.id}>
-      <p className="assistant-message-role">{message.role === "USER" ? t("role.you") : t("role.assistant")}</p>
-      <div className="assistant-message-content">{message.content_blocks.map((block, index) => <BlockView
-        key={`${message.id}-${index}`}
+    {visibleMessages.length === 0 ? <div className="assistant-empty"><h2>{t("empty.title")}</h2><p>{t("empty.description")}</p></div> : null}
+    {entries.map((entry) => entry.kind === "activity_group" ? <article className="assistant-message role-assistant" key={entry.id}>
+      <p className="assistant-message-role">{t("role.assistant")}</p>
+      <div className="assistant-message-content">
+        <ActivityBlock block={entry.blocks[0]} groupedBlocks={entry.blocks} />
+      </div>
+    </article> : <article className={`assistant-message role-${entry.message.role.toLowerCase()}`} key={entry.message.id}>
+      <p className="assistant-message-role">{entry.message.role === "USER" ? t("role.you") : t("role.assistant")}</p>
+      <div className="assistant-message-content">{entry.message.content_blocks.map((block, index) => <BlockView
+        key={`${entry.message.id}-${index}`}
         block={block}
         canManage={canManage}
         onEdit={onEdit}
@@ -36,6 +47,77 @@ export function Transcript({ messages, canManage, onEdit, onRevise, onApprove, o
       />)}</div>
     </article>)}
   </div>;
+}
+
+function collapseProposalBlocks(messages: AssistantMessage[]): AssistantMessage[] {
+  const originalLocations = new Map<string, string>();
+  for (const message of messages) {
+    message.content_blocks.forEach((block, index) => {
+      if (block.kind === "proposal") {
+        const versionKey = `${block.proposal_id}:${block.proposal_version}`;
+        if (!originalLocations.has(versionKey)) {
+          originalLocations.set(versionKey, `${message.id}:${index}`);
+        }
+      }
+    });
+  }
+
+  return messages.flatMap((message) => {
+    const contentBlocks = message.content_blocks.filter((block, index) =>
+      block.kind !== "proposal"
+      || originalLocations.get(`${block.proposal_id}:${block.proposal_version}`) === `${message.id}:${index}`);
+    return contentBlocks.length > 0 ? [{ ...message, content_blocks: contentBlocks }] : [];
+  });
+}
+
+function groupConsecutiveActivities(messages: AssistantMessage[]): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = [];
+  const workflowGroups = new Map<string, Extract<TranscriptEntry, { kind: "activity_group" }>>();
+
+  for (const message of messages) {
+    const blocks = activityBlocksFrom(message);
+    if (blocks === null) {
+      entries.push({ kind: "message", message });
+      continue;
+    }
+
+    const workflowRunId = sharedWorkflowRunId(blocks);
+    const workflowGroup = workflowRunId ? workflowGroups.get(workflowRunId) : undefined;
+    if (workflowGroup) {
+      workflowGroup.blocks.push(...blocks);
+      continue;
+    }
+
+    const previous = entries.at(-1);
+    if (!workflowRunId && previous?.kind === "activity_group") {
+      previous.blocks.push(...blocks);
+      continue;
+    }
+
+    const group: Extract<TranscriptEntry, { kind: "activity_group" }> = {
+      kind: "activity_group",
+      id: message.id,
+      blocks: [...blocks],
+    };
+    entries.push(group);
+    if (workflowRunId) workflowGroups.set(workflowRunId, group);
+  }
+
+  return entries;
+}
+
+function activityBlocksFrom(message: AssistantMessage): ActivityBlockData[] | null {
+  if (message.role !== "ASSISTANT" || message.content_blocks.length === 0) return null;
+  if (!message.content_blocks.every((block) => block.kind === "activity")) return null;
+  return message.content_blocks as ActivityBlockData[];
+}
+
+function sharedWorkflowRunId(blocks: ActivityBlockData[]): string | null {
+  const workflowRunIds = new Set(blocks.flatMap((block) =>
+    block.workflow_run_id ? [block.workflow_run_id] : []));
+  return workflowRunIds.size === 1 && blocks.every((block) => block.workflow_run_id)
+    ? [...workflowRunIds][0]
+    : null;
 }
 
 function BlockView({ block, canManage, onEdit, onRevise, onApprove, onReject, onContinueManually }: {
