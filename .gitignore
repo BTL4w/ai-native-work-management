@@ -1,6 +1,7 @@
 # Planning artifacts kept local
 docs/
 .superpowers/
+.worktrees/
 
 # Environment and secrets
 .env
