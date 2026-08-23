@@ -1,5 +1,7 @@
 import { useTranslations } from "next-intl";
 
+import type { ProposalContent } from "@/features/ai-proposals/contracts";
+
 import type { AssistantMessage, AssistantBlock } from "./contracts";
 import { ActivityBlock } from "./blocks/activity-block";
 import { PlanningBlock } from "./blocks/planning-block";
@@ -16,7 +18,7 @@ type TranscriptEntry =
 export function Transcript({ messages, canManage, onEdit, onRevise, onApprove, onReject, onContinueManually }: {
   messages: AssistantMessage[];
   canManage: boolean;
-  onEdit: (block: ProposalBlock) => void;
+  onEdit: (block: ProposalBlock, content: ProposalContent) => Promise<boolean>;
   onRevise: (block: ProposalBlock, instruction: string) => void;
   onApprove: (block: ProposalBlock) => void;
   onReject: (block: ProposalBlock) => void;
@@ -123,7 +125,7 @@ function sharedWorkflowRunId(blocks: ActivityBlockData[]): string | null {
 function BlockView({ block, canManage, onEdit, onRevise, onApprove, onReject, onContinueManually }: {
   block: AssistantBlock;
   canManage: boolean;
-  onEdit: (block: ProposalBlock) => void;
+  onEdit: (block: ProposalBlock, content: ProposalContent) => Promise<boolean>;
   onRevise: (block: ProposalBlock, instruction: string) => void;
   onApprove: (block: ProposalBlock) => void;
   onReject: (block: ProposalBlock) => void;

@@ -261,7 +261,7 @@ describe("AssistantShell", () => {
     });
   });
 
-  it("uses the existing exact-version endpoints for manual edit and approval", async () => {
+  it("edits the proposal inline, expands weeks on demand, and keeps exact-version mutations", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
@@ -280,6 +280,13 @@ describe("AssistantShell", () => {
     renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={noEvents} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Chỉnh thủ công" }));
+    expect(await screen.findByLabelText("Tên Project")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Mục tiêu tuần")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Tuần 1.*Prepare.*2026-09-01.*2026-09-07/ }));
+    expect(screen.getByLabelText("Mục tiêu tuần")).toBeVisible();
+
     fireEvent.change(await screen.findByLabelText("Tên Project"), { target: { value: "Launch revised" } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu version mới" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/proposals/${proposalId}`, expect.objectContaining({ method: "PATCH" })));

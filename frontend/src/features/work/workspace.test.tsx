@@ -59,28 +59,43 @@ describe("WorkWorkspace", () => {
     expect(formatCalendarDate("2026-08-12", "en-US")).toBe("8/12/2026");
   });
 
-  it("provides a collapsible, phase-aware workspace sidebar", async () => {
+  it("keeps the conversation sidebar and history mounted across every workspace view", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "/api/v1/projects") return response(page([]));
-      if (String(input) === "/api/v1/workflow-runs?limit=20") return response({ items: [] });
+      if (String(input) === "/api/v1/my-tasks?page=1&page_size=20") return response(page([]));
+      if (String(input) === "/api/v1/ai/conversations") return response({ items: [{
+        id: "77777777-7777-4777-8777-777777777777",
+        locale: "vi",
+        title: "Kế hoạch ra mắt",
+        status: "ACTIVE",
+        last_message_sequence: 2,
+        last_event_sequence: 4,
+        created_at: "2026-08-13T10:00:00Z",
+        updated_at: "2026-08-13T10:01:00Z",
+      }] });
       throw new Error(`Unexpected request: ${String(input)}`);
     }));
 
     const { container } = renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
 
-    expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Giao task" })).toBeEnabled();
-    expect(screen.getByText("Phase 2 · Manual planning")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Trợ lý AI" }));
-    expect(await screen.findByRole("heading", { name: "Trợ lý AI" })).toBeVisible();
+    expect(await screen.findByText("Kế hoạch ra mắt")).toBeVisible();
     expect(screen.getByText("Task Management")).toBeVisible();
     expect(container.querySelectorAll("aside")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Task của tôi" }));
+    expect(await screen.findByRole("heading", { name: "Task của tôi" })).toBeVisible();
+    expect(screen.getByText("Kế hoạch ra mắt")).toBeVisible();
+
+    expect(screen.getByRole("button", { name: "Giao task" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Giao task" }));
     expect(screen.getByText("Chọn một project để tạo và giao task mới.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Thu gọn thanh bên" }));
+    expect(screen.getByText("Kế hoạch ra mắt")).toBeVisible();
 
-    expect(container.querySelector(".workspace-shell-collapsed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Mở rộng thanh bên" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Cuộc trò chuyện mới" }));
+    expect(await screen.findByRole("heading", { name: "Trợ lý AI" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Nhắn cho Trợ lý AI" })).toBeVisible();
+    expect(screen.getByText("Kế hoạch ra mắt")).toBeVisible();
+    expect(container.querySelectorAll("aside")).toHaveLength(1);
   });
 
   it("lets a Manager create a Project and assign a Task", async () => {
@@ -148,7 +163,7 @@ describe("WorkWorkspace", () => {
     );
 
     renderWithAppProviders(<WorkWorkspace actor={employeeActor} />);
-    expect(screen.getByRole("button", { name: "Trợ lý AI" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cuộc trò chuyện mới" })).toBeEnabled();
     fireEvent.click(await screen.findByText(task.title));
     expect(screen.queryByRole("button", { name: "Sửa task" })).not.toBeInTheDocument();
 

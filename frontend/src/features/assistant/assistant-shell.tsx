@@ -2,17 +2,16 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { decideApproval, editProposal, getWorkflowRun } from "@/features/ai-proposals/api";
+import { decideApproval, editProposal } from "@/features/ai-proposals/api";
 import type { ProposalContent } from "@/features/ai-proposals/contracts";
-import { ProposalEditor } from "@/features/ai-proposals/proposal-editor";
 import type { MeResponse } from "@/shared/api/contracts";
 import { ApiError, isDefinitiveMutationRejection } from "@/shared/api/client";
 
 import { assistantKeys, createConversation, getConversation, listConversations, postAssistantMessage } from "./api";
 import { Composer } from "./composer";
-import { ConversationList } from "./conversation-list";
+import { ConversationList, type AssistantNavigationSection } from "./conversation-list";
 import type { AssistantBlock, PostMessageInput } from "./contracts";
 import { connectAssistantEvents } from "./event-source";
 import { Transcript } from "./transcript";
@@ -35,12 +34,33 @@ function useAttempt() {
   };
 }
 
-export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOpenMyTasks, onAssignTask, connectEvents = connectAssistantEvents }: {
+export function AssistantShell({
+  actor,
+  activeSection = "assistant",
+  workspaceTitle,
+  workspaceContent,
+  onOpenAssistant,
+  onContinueManually,
+  onOpenProjects,
+  onOpenMyTasks,
+  onAssignTask,
+  isLoggingOut = false,
+  logoutError = false,
+  onLogout,
+  connectEvents = connectAssistantEvents,
+}: {
   actor: MeResponse;
+  activeSection?: AssistantNavigationSection;
+  workspaceTitle?: string;
+  workspaceContent?: ReactNode;
+  onOpenAssistant?: () => void;
   onContinueManually?: () => void;
   onOpenProjects?: () => void;
   onOpenMyTasks?: () => void;
   onAssignTask?: () => void;
+  isLoggingOut?: boolean;
+  logoutError?: boolean;
+  onLogout?: () => void | Promise<void>;
   connectEvents?: ConnectEvents;
 }) {
   const t = useTranslations("assistant");
@@ -49,13 +69,13 @@ export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOp
   const organizationId = actor.membership.organization_id;
   const membershipId = actor.membership.id;
   const canManage = actor.membership.role !== "EMPLOYEE";
+  const assistantActive = activeSection === "assistant";
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newConversation, setNewConversation] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [editing, setEditing] = useState<{ block: ProposalBlock; content: ProposalContent } | null>(null);
   const createAttempt = useAttempt();
   const messageAttempt = useAttempt();
   const editAttempt = useAttempt();
@@ -68,11 +88,11 @@ export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOp
   const snapshot = useQuery({
     queryKey: snapshotKey ?? [...assistantKeys.scope(organizationId, membershipId), "new"],
     queryFn: () => getConversation(activeConversationId as string).then((result) => result.data),
-    enabled: activeConversationId !== null,
+    enabled: assistantActive && activeConversationId !== null,
   });
   const projectedSequence = snapshot.data?.conversation.last_event_sequence ?? 0;
   useEffect(() => {
-    if (!activeConversationId) return;
+    if (!assistantActive || !activeConversationId) return;
     const connection = connectEvents({
       conversationId: activeConversationId,
       initialSequence: projectedSequence,
@@ -80,7 +100,7 @@ export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOp
       onPoll: () => void queryClient.invalidateQueries({ queryKey: assistantKeys.conversation(organizationId, membershipId, activeConversationId) }),
     });
     return () => connection.close();
-  }, [activeConversationId, connectEvents, membershipId, organizationId, projectedSequence, queryClient]);
+  }, [activeConversationId, assistantActive, connectEvents, membershipId, organizationId, projectedSequence, queryClient]);
 
   const orderedMessages = snapshot.data?.messages.toSorted((left, right) => right.sequence - left.sequence) ?? [];
   const latestUserSequence = orderedMessages.find((item) => item.role === "USER")?.sequence ?? 0;
@@ -125,23 +145,18 @@ export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOp
     void send({ message: normalized, locale, ...(cardAction ? { card_action: cardAction } : {}) });
   }
 
-  async function openEditor(block: ProposalBlock) {
-    setError(null);
-    try {
-      const run = await getWorkflowRun(block.workflow_run_id);
-      if (run.data.current_proposal) setEditing({ block, content: run.data.current_proposal.content });
-    } catch (caught) { setError(caught); }
-  }
-  async function saveEdit(content: ProposalContent) {
-    if (!editing || submitting) return;
-    const payload = { proposalId: editing.block.proposal_id, version: editing.block.proposal_version, content };
+  async function saveEdit(block: ProposalBlock, content: ProposalContent): Promise<boolean> {
+    if (submitting) return false;
+    const payload = { proposalId: block.proposal_id, version: block.proposal_version, content };
     setSubmitting(true); setError(null);
     try {
-      await editProposal(editing.block.proposal_id, content, editing.block.proposal_version, editAttempt.key(payload));
-      editAttempt.reset(); setEditing(null); await snapshot.refetch();
+      await editProposal(block.proposal_id, content, block.proposal_version, editAttempt.key(payload));
+      editAttempt.reset(); await snapshot.refetch();
+      return true;
     } catch (caught) {
       setError(caught); if (isDefinitiveMutationRejection(caught)) editAttempt.reset();
       if (caught instanceof ApiError && ["RESOURCE_VERSION_MISMATCH", "PROPOSAL_STALE"].includes(caught.code)) await snapshot.refetch();
+      return false;
     } finally { setSubmitting(false); }
   }
   function revise(block: ProposalBlock, instruction: string) {
@@ -162,33 +177,42 @@ export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOp
 
   const visibleError = error ?? snapshot.error ?? conversations.error;
 
-  return <section className={`assistant-shell ${collapsed ? "is-sidebar-collapsed" : ""}`} aria-labelledby="assistant-title">
+  return <section className={`assistant-shell ${collapsed ? "is-sidebar-collapsed" : ""} ${assistantActive ? "" : "has-workspace-pane"}`} aria-labelledby={assistantActive ? "assistant-title" : "workspace-title"}>
     <ConversationList
       actor={actor}
       conversations={conversations.data ?? []}
       selectedId={activeConversationId}
+      activeSection={activeSection}
       collapsed={collapsed}
-      onSelect={(id) => { setSelectedId(id); setNewConversation(false); setError(null); }}
-      onNew={() => { setSelectedId(null); setNewConversation(true); setMessage(""); setError(null); }}
+      onSelect={(id) => { setSelectedId(id); setNewConversation(false); setError(null); onOpenAssistant?.(); }}
+      onNew={() => { setSelectedId(null); setNewConversation(true); setMessage(""); setError(null); onOpenAssistant?.(); }}
       onToggle={() => setCollapsed((value) => !value)}
       onOpenProjects={onOpenProjects}
       onOpenMyTasks={onOpenMyTasks}
       onAssignTask={onAssignTask}
+      isLoggingOut={isLoggingOut}
+      logoutError={logoutError}
+      onLogout={onLogout}
     />
-    <div className="assistant-main-pane">
-      <header className="assistant-header"><div><p>{t("eyebrow")}</p><h1 id="assistant-title">{t("title")}</h1></div></header>
-      {visibleError ? <div className="assistant-safe-notice" role="alert"><p>{t("error.safe")}</p>{visibleError instanceof ApiError && visibleError.requestId ? <p>{t("error.reference", { requestId: visibleError.requestId })}</p> : null}</div> : null}
-      {snapshot.isPending && activeConversationId ? <p role="status">{t("loading")}</p> : <Transcript
-        messages={snapshot.data?.messages ?? []}
-        canManage={canManage}
-        onEdit={(block) => void openEditor(block)}
-        onRevise={revise}
-        onApprove={(block) => void decide(block, "APPROVE")}
-        onReject={(block) => void decide(block, "REJECT")}
-        onContinueManually={onContinueManually}
-      />}
-      <Composer value={message} disabled={submitting} autoFocus={!activeConversationId || (snapshot.data?.messages.length ?? 0) === 0} onChange={setMessage} onSubmit={submitComposer} />
-    </div>
-    {editing ? <div className="assistant-editor-dialog" role="dialog" aria-modal="true" aria-label={t("proposal.edit")}><ProposalEditor initial={editing.content} saving={submitting} onCancel={() => setEditing(null)} onSave={(content) => void saveEdit(content)} /></div> : null}
+    {assistantActive ? <div className="assistant-main-pane">
+        <header className="assistant-header"><div><p>{t("eyebrow")}</p><h1 id="assistant-title">{t("title")}</h1></div></header>
+        {visibleError ? <div className="assistant-safe-notice" role="alert"><p>{t("error.safe")}</p>{visibleError instanceof ApiError && visibleError.requestId ? <p>{t("error.reference", { requestId: visibleError.requestId })}</p> : null}</div> : null}
+        {snapshot.isPending && activeConversationId ? <p role="status">{t("loading")}</p> : <Transcript
+          messages={snapshot.data?.messages ?? []}
+          canManage={canManage}
+          onEdit={saveEdit}
+          onRevise={revise}
+          onApprove={(block) => void decide(block, "APPROVE")}
+          onReject={(block) => void decide(block, "REJECT")}
+          onContinueManually={onContinueManually}
+        />}
+        <Composer value={message} disabled={submitting} autoFocus={!activeConversationId || (snapshot.data?.messages.length ?? 0) === 0} onChange={setMessage} onSubmit={submitComposer} />
+      </div> : <div className="assistant-workspace-pane">
+        <header className="assistant-workspace-header">
+          <p>{actor.membership.organization_name}</p>
+          <div id="workspace-title">{workspaceTitle}</div>
+        </header>
+        <main className="assistant-workspace-content">{workspaceContent}</main>
+      </div>}
   </section>;
 }

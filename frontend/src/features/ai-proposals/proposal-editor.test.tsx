@@ -25,6 +25,7 @@ describe("ProposalEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Thêm milestone" }));
+    fireEvent.click(screen.getByRole("button", { name: /Tuần 1.*Prepare/ }));
     fireEvent.click(screen.getByRole("button", { name: "Thêm task" }));
     fireEvent.click(screen.getByRole("button", { name: "Thêm task" }));
     fireEvent.change(screen.getByLabelText("Tiêu chí chấp nhận của Task 1"), {
@@ -62,6 +63,7 @@ describe("ProposalEditor", () => {
       </AppLocaleProvider>,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: /Tuần 1.*Prepare/ }));
     fireEvent.click(screen.getByRole("button", { name: "Đưa Second lên" }));
     fireEvent.click(screen.getByRole("button", { name: "Thêm dependency" }));
 

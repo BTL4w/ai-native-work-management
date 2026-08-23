@@ -4,6 +4,8 @@ import { useTranslations } from "next-intl";
 
 import { getProposalVersion } from "@/features/ai-proposals/api";
 import { ProposalCard } from "@/features/ai-proposals/cards/proposal-card";
+import type { ProposalContent } from "@/features/ai-proposals/contracts";
+import { ProposalEditor } from "@/features/ai-proposals/proposal-editor";
 
 import type { AssistantBlock } from "../contracts";
 
@@ -12,12 +14,14 @@ type Block = Extract<AssistantBlock, { kind: "proposal" }>;
 export function PlanningBlock({ block, canManage, onEdit, onRevise, onApprove, onReject }: {
   block: Block;
   canManage: boolean;
-  onEdit: (block: Block) => void;
+  onEdit: (block: Block, content: ProposalContent) => Promise<boolean>;
   onRevise: (block: Block, instruction: string) => void;
   onApprove: (block: Block) => void;
   onReject: (block: Block) => void;
 }) {
   const t = useTranslations("assistant");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [revising, setRevising] = useState(false);
   const [instruction, setInstruction] = useState("");
   const proposalVersion = useQuery({
@@ -37,16 +41,26 @@ export function PlanningBlock({ block, canManage, onEdit, onRevise, onApprove, o
       <p>{stale ? t("proposal.status.stale") : t("proposal.status.pending")}</p>
     </div>
     {stale ? <p className="assistant-stale-notice" role="status">{t("proposal.stale", { version: block.current_version ?? proposal.current_version })}</p> : null}
-    <ProposalCard content={proposal.content} version={proposal.version} provenance={proposal.creator_type} editable={false} onEdit={() => undefined} />
-    <div className={`assistant-proposal-validation ${validationBlocked ? "is-blocked" : "is-ready"}`} role="status">
+    {editing ? <ProposalEditor
+      initial={proposal.content}
+      saving={saving}
+      onCancel={() => setEditing(false)}
+      onSave={(content) => {
+        setSaving(true);
+        void onEdit(block, content).then((saved) => {
+          if (saved) setEditing(false);
+        }).finally(() => setSaving(false));
+      }}
+    /> : <ProposalCard content={proposal.content} version={proposal.version} provenance={proposal.creator_type} editable={false} onEdit={() => undefined} />}
+    {!editing ? <div className={`assistant-proposal-validation ${validationBlocked ? "is-blocked" : "is-ready"}`} role="status">
       <span aria-hidden="true">{validationBlocked ? "!" : "✓"}</span>
       <div><strong>{validationBlocked ? t("proposal.validationFailed") : t("proposal.validationReady")}</strong><p>{t("proposal.noRowsBeforeApproval")}</p></div>
-    </div>
-    {canManage && !stale ? <footer className="assistant-proposal-footer">
+    </div> : null}
+    {canManage && !stale && !editing ? <footer className="assistant-proposal-footer">
       <p>{t("proposal.approvalHint")}</p>
       <div className="assistant-proposal-actions">
         <button className="is-reject" type="button" onClick={() => onReject(block)}>{t("proposal.reject")}</button>
-        <button type="button" onClick={() => onEdit(block)}>{t("proposal.edit")}</button>
+        <button type="button" onClick={() => setEditing(true)}>{t("proposal.edit")}</button>
         <button type="button" onClick={() => setRevising(true)}>{t("proposal.askAi")}</button>
         <button className="is-primary" disabled={block.can_approve === false} type="button" onClick={() => onApprove(block)}>{t("proposal.approve")}</button>
       </div>

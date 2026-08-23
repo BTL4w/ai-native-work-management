@@ -31,7 +31,7 @@ describe("HomePage", () => {
     renderWithAppProviders(<HomePage />, locale);
 
     expect(await screen.findByText("Demo Manager")).toBeVisible();
-    expect(screen.getByText(new RegExp(`${getMessages(locale).work.role.MANAGER} · ${locale}`, "i"))).toBeVisible();
+    expect(screen.getByText(`${getMessages(locale).work.role.MANAGER} · ${managerActor.membership.organization_name}`)).toBeVisible();
     expect(screen.getByText("manager@example.test")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Projects" })).toBeVisible();
   });
