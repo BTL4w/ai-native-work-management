@@ -1,4 +1,5 @@
 import { useTranslations } from "next-intl";
+import { useId, useState } from "react";
 
 import type { ProposalContent } from "../contracts";
 
@@ -52,20 +53,11 @@ export function ProposalCard({
       <section className="ai-proposal-section ai-proposal-timeline">
         <h4>{t("projectWeeks")}</h4>
         {content.project_weeks.toSorted((left, right) => left.week_number - right.week_number).map((week) => (
-          <section className="ai-proposal-week" key={week.ref}>
-            <div className="ai-proposal-week-heading">
-              <div><h5>{t("editor.weekNumber", { number: week.week_number })}</h5><p>{week.objective}</p></div>
-              <time>{week.start_date} → {week.end_date}</time>
-            </div>
-            <ul>{content.tasks.filter((task) => task.project_week_ref === week.ref).map((task) => (
-              <li className="ai-proposal-task" key={task.ref}>
-                <div className="ai-proposal-task-heading"><strong>{task.title}</strong><span>{task.estimated_effort_hours}h</span></div>
-                <p>{task.required_skill_labels.join(" · ") || t("noRequiredSkills")}</p>
-                <span className="ai-proposal-assignment">{task.assignee_membership_id ? t("taskAssignment.assigned") : t("taskAssignment.unassigned")}</span>
-                {task.acceptance_criteria.length ? <div className="ai-proposal-criteria"><p>{t("acceptanceCriteria")}</p><ul>{task.acceptance_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div> : null}
-              </li>
-            ))}</ul>
-          </section>
+          <ProposalWeek
+            key={`${version}-${week.ref}`}
+            week={week}
+            tasks={content.tasks.filter((task) => task.project_week_ref === week.ref)}
+          />
         ))}
       </section>
 
@@ -75,4 +67,40 @@ export function ProposalCard({
       </section> : null}
     </section>
   );
+}
+
+function ProposalWeek({ week, tasks }: {
+  week: ProposalContent["project_weeks"][number];
+  tasks: ProposalContent["tasks"];
+}) {
+  const t = useTranslations("ai");
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+
+  return <section className={`ai-proposal-week ${expanded ? "is-expanded" : ""}`}>
+    <button
+      aria-controls={contentId}
+      aria-expanded={expanded}
+      className="ai-proposal-week-heading"
+      type="button"
+      onClick={() => setExpanded((value) => !value)}
+    >
+      <span className="ai-proposal-week-summary">
+        <span className="ai-proposal-week-number">{t("editor.weekNumber", { number: week.week_number })}</span>
+        <span className="ai-proposal-week-objective">{week.objective}</span>
+      </span>
+      <span className="ai-proposal-week-meta">
+        <time>{week.start_date} → {week.end_date}</time>
+        <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"><path d="m8 10 4 4 4-4" /></svg>
+      </span>
+    </button>
+    {expanded ? <ul className="ai-proposal-week-content" id={contentId}>{tasks.map((task) => (
+      <li className="ai-proposal-task" key={task.ref}>
+        <div className="ai-proposal-task-heading"><strong>{task.title}</strong><span>{task.estimated_effort_hours}h</span></div>
+        <p>{task.required_skill_labels.join(" · ") || t("noRequiredSkills")}</p>
+        <span className="ai-proposal-assignment">{task.assignee_membership_id ? t("taskAssignment.assigned") : t("taskAssignment.unassigned")}</span>
+        {task.acceptance_criteria.length ? <div className="ai-proposal-criteria"><p>{t("acceptanceCriteria")}</p><ul>{task.acceptance_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div> : null}
+      </li>
+    ))}</ul> : null}
+  </section>;
 }

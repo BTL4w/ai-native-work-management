@@ -387,12 +387,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .ai-proposal-assumptions li, .ai-proposal-milestones li { display: flex; justify-content: space-between; gap: 16px; border-radius: 8px; background: #f7f7f8; padding: 9px 11px; }
 .ai-proposal-assumptions small, .ai-proposal-milestones time { color: #a1a1aa; font-size: 10px; white-space: nowrap; }
 .ai-proposal-timeline { display: grid; gap: 12px; }
-.ai-proposal-week { display: grid; gap: 10px; border: 0; border-radius: 10px; background: #f7f7f8; padding: 12px; }
-.ai-proposal-week-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
-.ai-proposal-week-heading h5 { color: #5b5ce2; font-size: 11px; font-weight: 700; }
-.ai-proposal-week-heading p { margin-top: 2px; color: #3f3f46; font-size: 13px; font-weight: 620; }
-.ai-proposal-week-heading time { color: #a1a1aa; font-size: 10px; white-space: nowrap; }
-.ai-proposal-week > ul { display: grid; gap: 8px; }
+.ai-proposal-week { display: block; overflow: hidden; gap: 0; border: 1px solid #e4e4e7; border-radius: 10px; background: #fff; padding-top: 0; }
+.assistant-planning-card .ai-proposal-week-heading { display: flex; width: calc(100% + 2px); align-items: center; justify-content: space-between; gap: 16px; margin: -1px -1px 0; border: 1px solid #e4e4e7; border-radius: 10px; background: #fff; padding: 11px 12px; color: inherit; text-align: left; cursor: pointer; }
+.assistant-planning-card .ai-proposal-week.is-expanded .ai-proposal-week-heading { border-radius: 10px 10px 0 0; }
+.assistant-planning-card .ai-proposal-week-heading:hover { border-color: #d4d4d8; background: #f4f4f5; }
+.assistant-planning-card .ai-proposal-week-heading:active { background: #ededf0; }
+.assistant-planning-card .ai-proposal-week-heading:focus-visible { position: relative; z-index: 1; }
+.ai-proposal-week-summary { display: grid; min-width: 0; gap: 2px; }
+.ai-proposal-week-number { color: #5b5ce2; font-size: 10px; font-weight: 700; }
+.ai-proposal-week-objective { overflow: hidden; color: #3f3f46; font-size: 13px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.ai-proposal-week-meta { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; color: #a1a1aa; }
+.ai-proposal-week-meta time { font-size: 10px; white-space: nowrap; }
+.ai-proposal-week-meta svg { width: 15px; height: 15px; transition: transform 150ms ease; }
+.ai-proposal-week.is-expanded .ai-proposal-week-meta svg { transform: rotate(180deg); }
+.ai-proposal-week-content { display: grid; gap: 8px; border-top: 1px solid #e4e4e7; background: #f7f7f8; padding: 10px; }
 .ai-proposal-week .ai-proposal-task { display: block; border: 1px solid #e4e4e7; border-radius: 9px; background: #fff; padding: 10px 11px; font-size: 12px; }
 .ai-proposal-task-heading { display: flex; justify-content: space-between; gap: 12px; }
 .ai-proposal-task-heading strong { font-weight: 650; }
@@ -469,7 +477,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .assistant-transcript { padding: 24px 16px 18px; }
   .assistant-message.role-user .assistant-message-content { max-width: 90%; }
   .assistant-composer { width: calc(100% - 24px); margin-bottom: 12px; }
-  .ai-proposal-week-heading, .ai-proposal-assumptions li, .ai-proposal-milestones li { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .assistant-planning-card .ai-proposal-week-heading, .ai-proposal-assumptions li, .ai-proposal-milestones li { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .ai-proposal-week-meta { width: 100%; justify-content: space-between; }
   .assistant-proposal-actions button.is-primary { width: 100%; margin-left: 0; }
   .phase-badge { display: none; }
 }

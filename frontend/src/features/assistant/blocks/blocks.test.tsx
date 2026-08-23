@@ -164,9 +164,20 @@ describe("Assistant blocks", () => {
 
     expect(await screen.findByRole("heading", { name: "Launch" })).toBeVisible();
     expect(screen.getByText("Mục tiêu")).toBeVisible();
-    expect(screen.getByText("Tuần 1")).toBeVisible();
-    expect(screen.getByText("Checklist ready")).toBeVisible();
+    const week = screen.getByRole("button", { name: /Tuần 1.*Prepare.*2026-09-01.*2026-09-07/ });
+    expect(week).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Prepare launch")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checklist ready")).not.toBeInTheDocument();
     expect(screen.getByText("Prepare launch → Publish release")).toBeVisible();
+
+    fireEvent.click(week);
+    expect(week).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Prepare launch")).toBeVisible();
+    expect(screen.getByText("Checklist ready")).toBeVisible();
+
+    fireEvent.click(week);
+    expect(week).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Prepare launch")).not.toBeInTheDocument();
     expect(screen.getByText("Đã kiểm tra thời hạn, dependency và dữ liệu bắt buộc")).toBeVisible();
     expect(screen.getByRole("button", { name: "Phê duyệt kế hoạch" })).toBeEnabled();
   });
