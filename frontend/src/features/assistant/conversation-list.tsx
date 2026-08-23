@@ -1,30 +1,103 @@
 import { useTranslations } from "next-intl";
+import type { ReactNode } from "react";
+
+import type { MeResponse } from "@/shared/api/contracts";
 
 import type { AssistantConversation } from "./contracts";
 
-export function ConversationList({ conversations, selectedId, collapsed, onSelect, onNew, onToggle }: {
+type IconName = "new" | "projects" | "tasks" | "assign" | "collapse" | "expand" | "chat";
+
+export function ConversationList({
+  actor,
+  conversations,
+  selectedId,
+  collapsed,
+  onSelect,
+  onNew,
+  onToggle,
+  onOpenProjects,
+  onOpenMyTasks,
+  onAssignTask,
+}: {
+  actor: MeResponse;
   conversations: AssistantConversation[];
   selectedId: string | null;
   collapsed: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
   onToggle: () => void;
+  onOpenProjects?: () => void;
+  onOpenMyTasks?: () => void;
+  onAssignTask?: () => void;
 }) {
   const t = useTranslations("assistant");
   return <aside className={`assistant-conversations ${collapsed ? "is-collapsed" : ""}`} aria-label={t("conversations.label")}>
-    <div className="assistant-conversations-heading">
-      <button type="button" onClick={onNew}>{t("conversations.new")}</button>
-      <button aria-expanded={!collapsed} aria-label={t("conversations.toggle")} type="button" onClick={onToggle}>☰</button>
+    <div className="assistant-sidebar-brand">
+      <span className="assistant-brand-icon" aria-hidden="true"><SidebarIcon name="tasks" /></span>
+      {!collapsed ? <span className="assistant-brand-name">{t("brand")}</span> : null}
+      <button className="assistant-sidebar-toggle" aria-expanded={!collapsed} aria-label={t("conversations.toggle")} type="button" onClick={onToggle}>
+        <SidebarIcon name={collapsed ? "expand" : "collapse"} />
+      </button>
     </div>
-    {!collapsed ? <div className="assistant-conversation-items">
-      {conversations.length === 0 ? <p>{t("conversations.empty")}</p> : conversations.map((conversation) =>
-        <button
-          aria-current={conversation.id === selectedId ? "page" : undefined}
-          className={conversation.id === selectedId ? "is-active" : ""}
-          key={conversation.id}
-          type="button"
-          onClick={() => onSelect(conversation.id)}
-        >{conversation.title ?? t("conversations.untitled")}</button>)}
-    </div> : null}
+
+    <nav className="assistant-sidebar-navigation" aria-label={t("navigation.label")}>
+      <SidebarAction icon="new" label={t("conversations.new")} collapsed={collapsed} active={selectedId === null} onClick={onNew} />
+      {onOpenProjects ? <SidebarAction icon="projects" label={t("navigation.projects")} collapsed={collapsed} onClick={onOpenProjects} /> : null}
+      {onOpenMyTasks ? <SidebarAction icon="tasks" label={t("navigation.myTasks")} collapsed={collapsed} onClick={onOpenMyTasks} /> : null}
+      {onAssignTask ? <SidebarAction icon="assign" label={t("navigation.assignTask")} collapsed={collapsed} onClick={onAssignTask} /> : null}
+    </nav>
+
+    {!collapsed ? <section className="assistant-history" aria-labelledby="assistant-history-title">
+      <h2 id="assistant-history-title">{t("conversations.recent")}</h2>
+      <div className="assistant-conversation-items">
+        {conversations.length === 0 ? <p>{t("conversations.empty")}</p> : conversations.map((conversation) =>
+          <button
+            aria-current={conversation.id === selectedId ? "page" : undefined}
+            className={conversation.id === selectedId ? "is-active" : ""}
+            key={conversation.id}
+            type="button"
+            onClick={() => onSelect(conversation.id)}
+          ><SidebarIcon name="chat" /><span>{conversation.title ?? t("conversations.untitled")}</span></button>)}
+      </div>
+    </section> : null}
+
+    <div className="assistant-sidebar-account">
+      <span className="assistant-account-avatar" aria-hidden="true">{initials(actor.user.display_name)}</span>
+      {!collapsed ? <div><p>{actor.user.display_name}</p><span>{actor.membership.organization_name}</span></div> : null}
+    </div>
   </aside>;
+}
+
+function SidebarAction({ icon, label, collapsed, active = false, onClick }: {
+  icon: IconName;
+  label: string;
+  collapsed: boolean;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return <button
+    aria-current={active ? "page" : undefined}
+    aria-label={label}
+    className={`assistant-sidebar-action ${active ? "is-active" : ""}`}
+    title={collapsed ? label : undefined}
+    type="button"
+    onClick={onClick}
+  ><SidebarIcon name={icon} />{!collapsed ? <span>{label}</span> : null}</button>;
+}
+
+function SidebarIcon({ name }: { name: IconName }) {
+  const paths: Record<IconName, ReactNode> = {
+    new: <><path d="M12 5v14M5 12h14" /><rect x="3" y="3" width="18" height="18" rx="5" /></>,
+    projects: <><rect x="3" y="4" width="18" height="16" rx="4" /><path d="M8 9h8M8 13h5" /></>,
+    tasks: <><rect x="3" y="3" width="18" height="18" rx="5" /><path d="m8 12 2.2 2.2L16.5 8" /></>,
+    assign: <><circle cx="9" cy="9" r="3" /><path d="M4 20c.5-3.2 2.2-5 5-5 1.2 0 2.2.3 3 .9M17 12v8M13 16h8" /></>,
+    collapse: <path d="m14 7-5 5 5 5" />,
+    expand: <path d="m10 7 5 5-5 5" />,
+    chat: <><path d="M5 18.5 2.8 21v-4.8A8.2 8.2 0 1 1 5 18.5Z" /><path d="M8 11h.01M12 11h.01M16 11h.01" /></>,
+  };
+  return <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8">{paths[name]}</svg>;
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "U";
 }

@@ -83,6 +83,28 @@ describe("Transcript", () => {
     expect(screen.getAllByText("Trợ lý đang xử lý một bước an toàn")).toHaveLength(2);
   });
 
+  it("marks conventional chat sides for user and assistant messages", () => {
+    const userMessage: AssistantMessage = {
+      id: "10000000-0000-4000-8000-000000000011",
+      sequence: 1,
+      role: "USER",
+      content_blocks: [{ kind: "text", text: "Lập kế hoạch ra mắt" }],
+      created_at: "2026-08-18T00:00:01Z",
+    };
+    const assistantMessage: AssistantMessage = {
+      id: "10000000-0000-4000-8000-000000000012",
+      sequence: 2,
+      role: "ASSISTANT",
+      content_blocks: [{ kind: "text", text: "Đây là bản kế hoạch" }],
+      created_at: "2026-08-18T00:00:02Z",
+    };
+
+    renderWithAppProviders(<Transcript messages={[userMessage, assistantMessage]} canManage {...callbacks} />);
+
+    expect(screen.getByText("Lập kế hoạch ra mắt").closest("article")).toHaveAttribute("data-side", "right");
+    expect(screen.getByText("Đây là bản kế hoạch").closest("article")).toHaveAttribute("data-side", "left");
+  });
+
   it("groups one workflow even when a proposal boundary separates its activities", () => {
     const workflowRunId = "20000000-0000-4000-8000-000000000001";
     const proposalBoundary: AssistantMessage = {

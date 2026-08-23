@@ -35,9 +35,12 @@ function useAttempt() {
   };
 }
 
-export function AssistantShell({ actor, onContinueManually, connectEvents = connectAssistantEvents }: {
+export function AssistantShell({ actor, onContinueManually, onOpenProjects, onOpenMyTasks, onAssignTask, connectEvents = connectAssistantEvents }: {
   actor: MeResponse;
   onContinueManually?: () => void;
+  onOpenProjects?: () => void;
+  onOpenMyTasks?: () => void;
+  onAssignTask?: () => void;
   connectEvents?: ConnectEvents;
 }) {
   const t = useTranslations("assistant");
@@ -159,14 +162,18 @@ export function AssistantShell({ actor, onContinueManually, connectEvents = conn
 
   const visibleError = error ?? snapshot.error ?? conversations.error;
 
-  return <section className="assistant-shell" aria-labelledby="assistant-title">
+  return <section className={`assistant-shell ${collapsed ? "is-sidebar-collapsed" : ""}`} aria-labelledby="assistant-title">
     <ConversationList
+      actor={actor}
       conversations={conversations.data ?? []}
       selectedId={activeConversationId}
       collapsed={collapsed}
       onSelect={(id) => { setSelectedId(id); setNewConversation(false); setError(null); }}
       onNew={() => { setSelectedId(null); setNewConversation(true); setMessage(""); setError(null); }}
       onToggle={() => setCollapsed((value) => !value)}
+      onOpenProjects={onOpenProjects}
+      onOpenMyTasks={onOpenMyTasks}
+      onAssignTask={onAssignTask}
     />
     <div className="assistant-main-pane">
       <header className="assistant-header"><div><p>{t("eyebrow")}</p><h1 id="assistant-title">{t("title")}</h1></div></header>

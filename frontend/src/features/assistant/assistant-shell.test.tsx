@@ -100,6 +100,9 @@ describe("AssistantShell", () => {
 
     renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={noEvents} />);
 
+    expect(screen.getByText("Task Management")).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "Điều hướng chính" })).toBeVisible();
+    expect(screen.getByText(managerActor.user.display_name)).toBeVisible();
     const composer = await screen.findByRole("textbox", { name: "Nhắn cho Trợ lý AI" });
     expect(composer).toHaveFocus();
     expect(composer.closest("form")).toHaveClass("assistant-composer");
@@ -283,7 +286,7 @@ describe("AssistantShell", () => {
     const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
     expect(new Headers(patchCall?.[1]?.headers).get("If-Match")).toBe('"2"');
 
-    fireEvent.click(await screen.findByRole("button", { name: "Phê duyệt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Phê duyệt kế hoạch" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/approvals/${approvalId}/decision`, expect.objectContaining({ method: "POST" })));
     const approvalCall = fetchMock.mock.calls.find(([path]) => String(path).includes("/approvals/"));
     expect(new Headers(approvalCall?.[1]?.headers).get("If-Match")).toBe('"2"');
@@ -299,7 +302,7 @@ describe("AssistantShell", () => {
     renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={noEvents} />);
 
     expect(await screen.findByText("Card này chỉ đọc. Version hiện tại là v3.")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Phê duyệt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Phê duyệt kế hoạch" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Nhờ AI chỉnh" })).not.toBeInTheDocument();
   });
 });

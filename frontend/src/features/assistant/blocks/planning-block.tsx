@@ -28,18 +28,29 @@ export function PlanningBlock({ block, canManage, onEdit, onRevise, onApprove, o
   const stale = block.read_only
     || (proposal !== undefined && proposal.current_version !== block.proposal_version)
     || (block.current_version !== null && block.current_version !== undefined && block.current_version !== block.proposal_version);
+  const validationBlocked = block.error_codes.length > 0 || block.can_approve === false;
   if (proposalVersion.isPending) return <p role="status">{t("proposal.loading")}</p>;
   if (!proposal) return <SafePlanningFallback block={block} />;
   return <section className={`assistant-planning-card ${stale ? "is-stale" : ""}`}>
-    {stale ? <p role="status">{t("proposal.stale", { version: block.current_version ?? proposal.current_version })}</p> : null}
+    <div className="assistant-planning-status">
+      <span aria-hidden="true" />
+      <p>{stale ? t("proposal.status.stale") : t("proposal.status.pending")}</p>
+    </div>
+    {stale ? <p className="assistant-stale-notice" role="status">{t("proposal.stale", { version: block.current_version ?? proposal.current_version })}</p> : null}
     <ProposalCard content={proposal.content} version={proposal.version} provenance={proposal.creator_type} editable={false} onEdit={() => undefined} />
-    {block.error_codes.length ? <p className="error-message">{t("proposal.validationFailed")}</p> : null}
-    {canManage && !stale ? <div className="assistant-proposal-actions">
-      <button type="button" onClick={() => onEdit(block)}>{t("proposal.edit")}</button>
-      <button type="button" onClick={() => setRevising(true)}>{t("proposal.askAi")}</button>
-      <button type="button" onClick={() => onReject(block)}>{t("proposal.reject")}</button>
-      <button disabled={block.can_approve === false} type="button" onClick={() => onApprove(block)}>{t("proposal.approve")}</button>
-    </div> : null}
+    <div className={`assistant-proposal-validation ${validationBlocked ? "is-blocked" : "is-ready"}`} role="status">
+      <span aria-hidden="true">{validationBlocked ? "!" : "✓"}</span>
+      <div><strong>{validationBlocked ? t("proposal.validationFailed") : t("proposal.validationReady")}</strong><p>{t("proposal.noRowsBeforeApproval")}</p></div>
+    </div>
+    {canManage && !stale ? <footer className="assistant-proposal-footer">
+      <p>{t("proposal.approvalHint")}</p>
+      <div className="assistant-proposal-actions">
+        <button className="is-reject" type="button" onClick={() => onReject(block)}>{t("proposal.reject")}</button>
+        <button type="button" onClick={() => onEdit(block)}>{t("proposal.edit")}</button>
+        <button type="button" onClick={() => setRevising(true)}>{t("proposal.askAi")}</button>
+        <button className="is-primary" disabled={block.can_approve === false} type="button" onClick={() => onApprove(block)}>{t("proposal.approve")}</button>
+      </div>
+    </footer> : null}
     {revising ? <form onSubmit={(event) => { event.preventDefault(); if (instruction.trim()) onRevise(block, instruction.trim()); }}>
       <label>{t("proposal.revisionLabel")}<textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label>
       <button disabled={!instruction.trim()} type="submit">{t("proposal.sendRevision")}</button>

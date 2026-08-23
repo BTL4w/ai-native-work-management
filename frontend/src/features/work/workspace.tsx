@@ -164,8 +164,8 @@ export function WorkWorkspace({
     : selectedProject?.name ?? t("project.title");
 
   return (
-    <div className={`workspace-shell ${sidebarCollapsed ? "workspace-shell-collapsed" : ""}`}>
-      <aside className="workspace-sidebar">
+    <div className={`workspace-shell ${sidebarCollapsed ? "workspace-shell-collapsed" : ""} ${view === "aiAssistant" ? "workspace-shell-assistant" : ""}`}>
+      {view !== "aiAssistant" ? <aside className="workspace-sidebar">
         <div className="sidebar-brand">
           <span aria-hidden="true" className="brand-mark"><AppIcon name="spark" /></span>
           <div className="sidebar-copy min-w-0">
@@ -185,7 +185,7 @@ export function WorkWorkspace({
 
         <nav aria-label={t("navigationLabel")} className="sidebar-navigation">
           <p className="sidebar-section-label sidebar-copy">{t("sidebar.workspace")}</p>
-          <SidebarItem active={view === "aiAssistant"} icon="chat" label={t("nav.chat")} onClick={openAiAssistant} />
+          <SidebarItem active={false} icon="chat" label={t("nav.chat")} onClick={openAiAssistant} />
           <SidebarItem active={view === "projects"} icon="grid" label={t("nav.projects")} onClick={openProjects} />
           <SidebarItem active={view === "myTasks"} icon="check" label={t("nav.myTasks")} onClick={openMyTasks} />
           {canManage ? <SidebarItem icon="plus" label={t("nav.assignTask")} onClick={openAssignmentFlow} /> : null}
@@ -217,19 +217,25 @@ export function WorkWorkspace({
             </button>
           ) : null}
         </div>
-      </aside>
+      </aside> : null}
 
       <div className="workspace-main">
-        <header className="workspace-topbar">
+        {view !== "aiAssistant" ? <header className="workspace-topbar">
           <div className="min-w-0">
             <p className="text-xs font-semibold tracking-[0.12em] text-slate-400 uppercase">{actor.membership.organization_name}</p>
             <p className="truncate text-base font-semibold text-slate-900">{pageTitle}</p>
           </div>
           <span className="phase-badge"><span aria-hidden="true" className="phase-dot" />{t("sidebar.phase")}</span>
-        </header>
+        </header> : null}
         <main className="workspace-content">
         {view === "aiAssistant" ? (
-          <AiAssistant actor={actor} onContinueManually={openProjects} />
+          <AiAssistant
+            actor={actor}
+            onContinueManually={openProjects}
+            onOpenProjects={openProjects}
+            onOpenMyTasks={openMyTasks}
+            onAssignTask={canManage ? openAssignmentFlow : undefined}
+          />
         ) : view === "projects" ? (
           <ProjectsView
             canManage={canManage}

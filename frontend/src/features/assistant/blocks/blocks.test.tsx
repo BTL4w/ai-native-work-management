@@ -19,6 +19,18 @@ const proposalContent = (title: string) => ({
   dependencies: [],
   assumptions: [],
 });
+const detailedProposalContent = {
+  project: { title: "Launch", description: "Ship the new experience", start_date: "2026-09-01", due_date: "2026-09-14" },
+  goal: { title: "Ship safely", description: null, expected_outcomes: ["Customers can onboard"], target_date: "2026-09-14" },
+  milestones: [{ ref: "m1", title: "Ready for release", description: null, due_date: "2026-09-07" }],
+  project_weeks: [{ ref: "w1", week_number: 1, start_date: "2026-09-01", end_date: "2026-09-07", objective: "Prepare" }],
+  tasks: [
+    { ref: "t1", project_week_ref: "w1", milestone_ref: "m1", title: "Prepare launch", description: null, due_date: "2026-09-05", assignee_membership_id: null, required_skill_labels: ["communication"], estimated_effort_hours: 8, acceptance_criteria: ["Checklist ready"] },
+    { ref: "t2", project_week_ref: "w1", milestone_ref: null, title: "Publish release", description: null, due_date: "2026-09-07", assignee_membership_id: null, required_skill_labels: [], estimated_effort_hours: 4, acceptance_criteria: ["Release is live"] },
+  ],
+  dependencies: [{ predecessor_ref: "t1", successor_ref: "t2" }],
+  assumptions: [{ description: "The release date is fixed", source: "Manager request" }],
+};
 
 describe("Assistant blocks", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -119,5 +131,77 @@ describe("Assistant blocks", () => {
     expect(screen.getByText("Proposal v2")).toBeVisible();
     expect(screen.getByText("Card này chỉ đọc. Version hiện tại là v2.")).toBeVisible();
     expect(screen.getAllByRole("button", { name: "Nhờ AI chỉnh" })).toHaveLength(1);
+  });
+
+  it("shows the complete planning proposal inline before approval", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      proposal_id: proposalId,
+      workflow_run_id: workflowRunId,
+      version: 3,
+      current_version: 3,
+      content: detailedProposalContent,
+      creator_type: "AI_SYSTEM",
+    }), { headers: { "Content-Type": "application/json" } })));
+
+    renderWithAppProviders(<PlanningBlock
+      block={{
+        kind: "proposal",
+        workflow_run_id: workflowRunId,
+        proposal_id: proposalId,
+        proposal_version: 3,
+        approval_id: "33333333-3333-4333-8333-333333333333",
+        can_approve: true,
+        read_only: false,
+        current_version: 3,
+        error_codes: [],
+      }}
+      canManage
+      onEdit={vi.fn()}
+      onRevise={vi.fn()}
+      onApprove={vi.fn()}
+      onReject={vi.fn()}
+    />);
+
+    expect(await screen.findByRole("heading", { name: "Launch" })).toBeVisible();
+    expect(screen.getByText("Mục tiêu")).toBeVisible();
+    expect(screen.getByText("Tuần 1")).toBeVisible();
+    expect(screen.getByText("Checklist ready")).toBeVisible();
+    expect(screen.getByText("Prepare launch → Publish release")).toBeVisible();
+    expect(screen.getByText("Đã kiểm tra thời hạn, dependency và dữ liệu bắt buộc")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Phê duyệt kế hoạch" })).toBeEnabled();
+  });
+
+  it("does not present a non-approvable proposal as validation-ready", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      proposal_id: proposalId,
+      workflow_run_id: workflowRunId,
+      version: 4,
+      current_version: 4,
+      content: detailedProposalContent,
+      creator_type: "AI_SYSTEM",
+    }), { headers: { "Content-Type": "application/json" } })));
+
+    renderWithAppProviders(<PlanningBlock
+      block={{
+        kind: "proposal",
+        workflow_run_id: workflowRunId,
+        proposal_id: proposalId,
+        proposal_version: 4,
+        approval_id: "33333333-3333-4333-8333-333333333333",
+        can_approve: false,
+        read_only: false,
+        current_version: 4,
+        error_codes: [],
+      }}
+      canManage
+      onEdit={vi.fn()}
+      onRevise={vi.fn()}
+      onApprove={vi.fn()}
+      onReject={vi.fn()}
+    />);
+
+    expect(await screen.findByText("Proposal chưa vượt qua deterministic validation.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Phê duyệt kế hoạch" })).toBeDisabled();
+    expect(screen.queryByText("Đã kiểm tra thời hạn, dependency và dữ liệu bắt buộc")).not.toBeInTheDocument();
   });
 });

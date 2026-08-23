@@ -22,7 +22,7 @@ export function Composer({ value, disabled, autoFocus, onChange, onSubmit }: {
       id="assistant-message"
       maxLength={8000}
       placeholder={t("composer.placeholder")}
-      rows={2}
+      rows={1}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       onKeyDown={(event) => {
@@ -32,6 +32,11 @@ export function Composer({ value, disabled, autoFocus, onChange, onSubmit }: {
         }
       }}
     />
-    <button disabled={disabled || !value.trim()} type="submit">{t("composer.send")}</button>
+    <div className="assistant-composer-footer">
+      <span className="assistant-composer-mode"><span aria-hidden="true">◇</span>{t("composer.mode")}</span>
+      <button aria-label={t("composer.send")} disabled={disabled || !value.trim()} type="submit">
+        <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+      </button>
+    </div>
   </form>;
 }

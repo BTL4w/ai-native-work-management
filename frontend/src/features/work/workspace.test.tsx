@@ -73,6 +73,8 @@ describe("WorkWorkspace", () => {
     expect(screen.getByText("Phase 2 · Manual planning")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Trợ lý AI" }));
     expect(await screen.findByRole("heading", { name: "Trợ lý AI" })).toBeVisible();
+    expect(screen.getByText("Task Management")).toBeVisible();
+    expect(container.querySelectorAll("aside")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Giao task" }));
     expect(screen.getByText("Chọn một project để tạo và giao task mới.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Thu gọn thanh bên" }));

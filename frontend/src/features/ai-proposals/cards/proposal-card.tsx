@@ -16,32 +16,63 @@ export function ProposalCard({
   editable: boolean;
 }) {
   const t = useTranslations("ai");
+  const tasksByRef = new Map(content.tasks.map((task) => [task.ref, task.title]));
   return (
-    <section aria-labelledby="proposal-card" className="ai-card">
+    <section className="ai-card ai-proposal-card">
       <div className="ai-card-heading">
-        <div><h3 id="proposal-card">{t("proposalVersion", { version })}</h3><p>{t(`provenance.${provenance}`)}</p></div>
+        <div className="ai-proposal-kicker"><span>{t("proposalVersion", { version })}</span><span>·</span><span>{t(`provenance.${provenance}`)}</span></div>
         {editable ? <button type="button" onClick={onEdit}>{t("action.edit")}</button> : null}
       </div>
-      <h4>{content.project.title}</h4>
-      <p>{content.goal.title}</p>
-      <dl className="ai-counts">
-        <div><dt>{t("milestones")}</dt><dd>{content.milestones.length}</dd></div>
-        <div><dt>{t("tasks")}</dt><dd>{content.tasks.length}</dd></div>
-        <div><dt>{t("dependencies")}</dt><dd>{content.dependencies.length}</dd></div>
-      </dl>
-      {content.project_weeks.toSorted((left, right) => left.week_number - right.week_number).map((week) => (
-        <section className="ai-proposal-week" key={week.ref}>
-          <h5>{t("editor.weekNumber", { number: week.week_number })} · {week.objective}</h5>
-          <p>{week.start_date} → {week.end_date}</p>
-          <ul>{content.tasks.filter((task) => task.project_week_ref === week.ref).map((task) => (
-            <li key={task.ref}>
-              <strong>{task.title}</strong>
-              <span>{task.estimated_effort_hours}h · {task.required_skill_labels.join(", ") || "—"}</span>
-              <span>{task.assignee_membership_id ? t("taskAssignment.assigned") : t("taskAssignment.unassigned")}</span>
-            </li>
-          ))}</ul>
-        </section>
-      ))}
+      <header className="ai-proposal-title">
+        <h3>{content.project.title}</h3>
+        {content.project.description ? <p>{content.project.description}</p> : null}
+        <dl>
+          <div><dt>{t("editor.startDate")}</dt><dd>{content.project.start_date ?? t("label.unknown")}</dd></div>
+          <div><dt>{t("editor.projectDueDate")}</dt><dd>{content.project.due_date ?? t("label.unknown")}</dd></div>
+        </dl>
+      </header>
+
+      <section className="ai-proposal-section ai-proposal-goal">
+        <p className="ai-proposal-section-label">{t("goal")}</p>
+        <p className="ai-proposal-goal-title">{content.goal.title}</p>
+        {content.goal.description ? <p>{content.goal.description}</p> : null}
+        {content.goal.expected_outcomes.length ? <ul>{content.goal.expected_outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul> : null}
+      </section>
+
+      {content.assumptions.length ? <section className="ai-proposal-section">
+        <h4>{t("editor.assumptions")}</h4>
+        <ul className="ai-proposal-assumptions">{content.assumptions.map((assumption) => <li key={`${assumption.description}-${assumption.source}`}><span>{assumption.description}</span><small>{assumption.source}</small></li>)}</ul>
+      </section> : null}
+
+      {content.milestones.length ? <section className="ai-proposal-section">
+        <h4>{t("milestones")}</h4>
+        <ul className="ai-proposal-milestones">{content.milestones.map((milestone) => <li key={milestone.ref}><span>{milestone.title}</span><time>{milestone.due_date ?? t("label.unknown")}</time></li>)}</ul>
+      </section> : null}
+
+      <section className="ai-proposal-section ai-proposal-timeline">
+        <h4>{t("projectWeeks")}</h4>
+        {content.project_weeks.toSorted((left, right) => left.week_number - right.week_number).map((week) => (
+          <section className="ai-proposal-week" key={week.ref}>
+            <div className="ai-proposal-week-heading">
+              <div><h5>{t("editor.weekNumber", { number: week.week_number })}</h5><p>{week.objective}</p></div>
+              <time>{week.start_date} → {week.end_date}</time>
+            </div>
+            <ul>{content.tasks.filter((task) => task.project_week_ref === week.ref).map((task) => (
+              <li className="ai-proposal-task" key={task.ref}>
+                <div className="ai-proposal-task-heading"><strong>{task.title}</strong><span>{task.estimated_effort_hours}h</span></div>
+                <p>{task.required_skill_labels.join(" · ") || t("noRequiredSkills")}</p>
+                <span className="ai-proposal-assignment">{task.assignee_membership_id ? t("taskAssignment.assigned") : t("taskAssignment.unassigned")}</span>
+                {task.acceptance_criteria.length ? <div className="ai-proposal-criteria"><p>{t("acceptanceCriteria")}</p><ul>{task.acceptance_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div> : null}
+              </li>
+            ))}</ul>
+          </section>
+        ))}
+      </section>
+
+      {content.dependencies.length ? <section className="ai-proposal-section ai-proposal-dependencies">
+        <h4>{t("dependencies")}</h4>
+        <ul>{content.dependencies.map((dependency) => <li key={`${dependency.predecessor_ref}-${dependency.successor_ref}`}>{tasksByRef.get(dependency.predecessor_ref) ?? dependency.predecessor_ref} → {tasksByRef.get(dependency.successor_ref) ?? dependency.successor_ref}</li>)}</ul>
+      </section> : null}
     </section>
   );
 }

@@ -28,12 +28,12 @@ export function Transcript({ messages, canManage, onEdit, onRevise, onApprove, o
   const entries = groupConsecutiveActivities(visibleMessages);
   return <div className="assistant-transcript" aria-live="polite">
     {visibleMessages.length === 0 ? <div className="assistant-empty"><h2>{t("empty.title")}</h2><p>{t("empty.description")}</p></div> : null}
-    {entries.map((entry) => entry.kind === "activity_group" ? <article className="assistant-message role-assistant" key={entry.id}>
+    {entries.map((entry) => entry.kind === "activity_group" ? <article className="assistant-message role-assistant" data-side="left" key={entry.id}>
       <p className="assistant-message-role">{t("role.assistant")}</p>
       <div className="assistant-message-content">
         <ActivityBlock block={entry.blocks[0]} groupedBlocks={entry.blocks} />
       </div>
-    </article> : <article className={`assistant-message role-${entry.message.role.toLowerCase()}`} key={entry.message.id}>
+    </article> : <article className={`assistant-message role-${entry.message.role.toLowerCase()}`} data-side={entry.message.role === "USER" ? "right" : "left"} key={entry.message.id}>
       <p className="assistant-message-role">{entry.message.role === "USER" ? t("role.you") : t("role.assistant")}</p>
       <div className="assistant-message-content">{entry.message.content_blocks.map((block, index) => <BlockView
         key={`${entry.message.id}-${index}`}
