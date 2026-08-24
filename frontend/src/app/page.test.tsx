@@ -10,6 +10,7 @@ const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation,
+  useSearchParams: () => new URLSearchParams(globalThis.location.search),
 }));
 
 describe("HomePage", () => {

@@ -22,6 +22,15 @@ type Connection = { close(): void };
 type ConnectEvents = (options: Parameters<typeof connectAssistantEvents>[0]) => Connection;
 
 function nextKey() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`; }
+function syncConversationLocation(conversationId: string | null) {
+  const url = new URL(globalThis.location.href);
+  if (conversationId) url.searchParams.set("conversation", conversationId);
+  else url.searchParams.delete("conversation");
+  globalThis.history.replaceState(globalThis.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+function retryTransientQuery(failureCount: number, caught: Error) {
+  return failureCount < 1 && (!(caught instanceof ApiError) || caught.status >= 500);
+}
 function useAttempt() {
   const current = useRef<Attempt | null>(null);
   return {
@@ -36,6 +45,7 @@ function useAttempt() {
 
 export function AssistantShell({
   actor,
+  initialConversationId = null,
   activeSection = "assistant",
   workspaceTitle,
   workspaceContent,
@@ -50,6 +60,7 @@ export function AssistantShell({
   connectEvents = connectAssistantEvents,
 }: {
   actor: MeResponse;
+  initialConversationId?: string | null;
   activeSection?: AssistantNavigationSection;
   workspaceTitle?: string;
   workspaceContent?: ReactNode;
@@ -70,7 +81,7 @@ export function AssistantShell({
   const membershipId = actor.membership.id;
   const canManage = actor.membership.role !== "EMPLOYEE";
   const assistantActive = activeSection === "assistant";
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialConversationId);
   const [newConversation, setNewConversation] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [message, setMessage] = useState("");
@@ -82,25 +93,36 @@ export function AssistantShell({
   const decisionAttempt = useAttempt();
 
   const conversationsKey = assistantKeys.conversations(organizationId, membershipId);
-  const conversations = useQuery({ queryKey: conversationsKey, queryFn: listConversations });
+  const conversations = useQuery({
+    queryKey: conversationsKey,
+    queryFn: listConversations,
+    retry: retryTransientQuery,
+    retryDelay: 100,
+  });
   const activeConversationId = newConversation ? null : selectedId ?? conversations.data?.[0]?.id ?? null;
   const snapshotKey = activeConversationId ? assistantKeys.conversation(organizationId, membershipId, activeConversationId) : null;
   const snapshot = useQuery({
     queryKey: snapshotKey ?? [...assistantKeys.scope(organizationId, membershipId), "new"],
     queryFn: () => getConversation(activeConversationId as string).then((result) => result.data),
     enabled: assistantActive && activeConversationId !== null,
+    retry: retryTransientQuery,
+    retryDelay: 100,
   });
   const projectedSequence = snapshot.data?.conversation.last_event_sequence ?? 0;
+  const projectedSequenceRef = useRef(projectedSequence);
+  useEffect(() => {
+    projectedSequenceRef.current = projectedSequence;
+  }, [projectedSequence]);
   useEffect(() => {
     if (!assistantActive || !activeConversationId) return;
     const connection = connectEvents({
       conversationId: activeConversationId,
-      initialSequence: projectedSequence,
+      initialSequence: projectedSequenceRef.current,
       onSequence: () => void queryClient.invalidateQueries({ queryKey: assistantKeys.conversation(organizationId, membershipId, activeConversationId) }),
       onPoll: () => void queryClient.invalidateQueries({ queryKey: assistantKeys.conversation(organizationId, membershipId, activeConversationId) }),
     });
     return () => connection.close();
-  }, [activeConversationId, assistantActive, connectEvents, membershipId, organizationId, projectedSequence, queryClient]);
+  }, [activeConversationId, assistantActive, connectEvents, membershipId, organizationId, queryClient]);
 
   const orderedMessages = snapshot.data?.messages.toSorted((left, right) => right.sequence - left.sequence) ?? [];
   const latestUserSequence = orderedMessages.find((item) => item.role === "USER")?.sequence ?? 0;
@@ -123,6 +145,7 @@ export function AssistantShell({
         createAttempt.reset();
         conversationId = created.data.id;
         setSelectedId(conversationId); setNewConversation(false);
+        syncConversationLocation(conversationId);
         await queryClient.invalidateQueries({ queryKey: conversationsKey });
       }
       await postAssistantMessage(conversationId, input, messageAttempt.key({ conversationId, input, version }), version);
@@ -168,7 +191,11 @@ export function AssistantShell({
     setSubmitting(true); setError(null);
     try {
       await decideApproval(block.approval_id, decision, block.proposal_version, null, decisionAttempt.key(payload));
-      decisionAttempt.reset(); await snapshot.refetch();
+      decisionAttempt.reset();
+      if (decision === "APPROVE") {
+        await queryClient.invalidateQueries({ queryKey: ["work", organizationId, membershipId] });
+      }
+      await snapshot.refetch();
     } catch (caught) {
       setError(caught); if (isDefinitiveMutationRejection(caught)) decisionAttempt.reset();
       if (caught instanceof ApiError && ["RESOURCE_VERSION_MISMATCH", "PROPOSAL_STALE", "APPROVAL_STATE_CONFLICT"].includes(caught.code)) await snapshot.refetch();
@@ -184,8 +211,8 @@ export function AssistantShell({
       selectedId={activeConversationId}
       activeSection={activeSection}
       collapsed={collapsed}
-      onSelect={(id) => { setSelectedId(id); setNewConversation(false); setError(null); onOpenAssistant?.(); }}
-      onNew={() => { setSelectedId(null); setNewConversation(true); setMessage(""); setError(null); onOpenAssistant?.(); }}
+      onSelect={(id) => { setSelectedId(id); setNewConversation(false); setError(null); syncConversationLocation(id); onOpenAssistant?.(); }}
+      onNew={() => { setSelectedId(null); setNewConversation(true); setMessage(""); setError(null); syncConversationLocation(null); onOpenAssistant?.(); }}
       onToggle={() => setCollapsed((value) => !value)}
       onOpenProjects={onOpenProjects}
       onOpenMyTasks={onOpenMyTasks}

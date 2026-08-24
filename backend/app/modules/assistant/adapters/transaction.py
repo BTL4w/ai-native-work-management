@@ -1,8 +1,10 @@
 """Tenant-scoped PostgreSQL transaction boundary for Assistant persistence."""
 
+import asyncio
 from typing import Self
 from uuid import UUID
 
+from anyio import CancelScope
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_sessionmaker
 
@@ -39,17 +41,29 @@ class PostgreSQLAssistantTransaction(AssistantTransaction):
         if self._transaction is not None:
             raise RuntimeError("Assistant transaction cannot be entered twice.")
         self._transaction = self._session.begin()
-        await self._transaction.__aenter__()
-        await self._session.execute(text("SET LOCAL ROLE app_runtime"))
-        await self._session.execute(
-            text("SELECT set_config('app.organization_id', :value, true)"),
-            {"value": str(self._organization_id)},
-        )
-        if self._membership_id is not None:
+        try:
+            await self._transaction.__aenter__()
+            await self._session.execute(text("SET LOCAL ROLE app_runtime"))
             await self._session.execute(
-                text("SELECT set_config('app.membership_id', :value, true)"),
-                {"value": str(self._membership_id)},
+                text("SELECT set_config('app.organization_id', :value, true)"),
+                {"value": str(self._organization_id)},
             )
+            if self._membership_id is not None:
+                await self._session.execute(
+                    text("SELECT set_config('app.membership_id', :value, true)"),
+                    {"value": str(self._membership_id)},
+                )
+        except BaseException as error:
+            with CancelScope(shield=True):
+                if isinstance(error, asyncio.CancelledError):
+                    await self._session.invalidate()
+                else:
+                    try:
+                        if self._transaction.is_active:
+                            await self._transaction.rollback()
+                    finally:
+                        await self._session.close()
+            raise
         return self
 
     async def commit(self) -> None:
@@ -65,10 +79,14 @@ class PostgreSQLAssistantTransaction(AssistantTransaction):
     async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         if self._transaction is None:
             raise RuntimeError("Assistant transaction was not entered.")
-        try:
-            await self._transaction.__aexit__(exc_type, exc_val, exc_tb)
-        finally:
-            await self._session.close()
+        with CancelScope(shield=True):
+            if isinstance(exc_val, asyncio.CancelledError):
+                await self._session.invalidate()
+            else:
+                try:
+                    await self._transaction.__aexit__(exc_type, exc_val, exc_tb)
+                finally:
+                    await self._session.close()
 
 
 class PostgreSQLAssistantTransactionFactory:

@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -93,7 +94,112 @@ function proposalSnapshot(readOnly = false) {
 }
 
 describe("AssistantShell", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    globalThis.history.replaceState({}, "", "/");
+    vi.unstubAllGlobals();
+  });
+
+  it("stores the selected conversation in the URL for refresh reconstruction", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (path === `/api/v1/ai/conversations/${conversationId}`) {
+        return response({ conversation, messages: [] });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderWithAppProviders(<AssistantShell
+      actor={managerActor}
+      activeSection="projects"
+      workspaceTitle="Projects"
+      workspaceContent={<div>Workspace</div>}
+      onOpenAssistant={() => undefined}
+      connectEvents={noEvents}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Kế hoạch ra mắt" }));
+
+    expect(globalThis.location.search).toBe(`?conversation=${conversationId}`);
+  });
+
+  it("recovers the shared conversation history after one transient load failure", async () => {
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) !== "/api/v1/ai/conversations") {
+        throw new Error(`Unexpected request: ${String(input)}`);
+      }
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("temporary network failure");
+      return response({ items: [conversation] });
+    }));
+
+    renderWithAppProviders(<AssistantShell
+      actor={managerActor}
+      activeSection="projects"
+      workspaceTitle="Projects"
+      workspaceContent={<div>Workspace</div>}
+      connectEvents={noEvents}
+    />);
+
+    expect(await screen.findByText("Kế hoạch ra mắt", {}, { timeout: 3_000 })).toBeVisible();
+    expect(attempts).toBe(2);
+  });
+
+  it("reconstructs the selected transcript after one transient snapshot failure", async () => {
+    let snapshotAttempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (path === `/api/v1/ai/conversations/${conversationId}`) {
+        snapshotAttempts += 1;
+        if (snapshotAttempts === 1) throw new TypeError("temporary network failure");
+        return response({ conversation, messages: [{
+          id: messageId,
+          sequence: 1,
+          role: "ASSISTANT",
+          content_blocks: [{ kind: "text", text: "Recovered transcript" }],
+          created_at: "2026-08-13T10:01:00Z",
+        }] });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={noEvents} />);
+
+    expect(await screen.findByText("Recovered transcript", {}, { timeout: 3_000 })).toBeVisible();
+    expect(snapshotAttempts).toBe(2);
+  });
+
+  it("keeps one SSE connection while durable snapshot sequences advance", async () => {
+    let snapshotSequence = 1;
+    let poll: (() => void) | undefined;
+    const connectEvents = vi.fn((options: { onPoll?: () => void }) => {
+      poll = options.onPoll;
+      return { close() {} };
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (path === `/api/v1/ai/conversations/${conversationId}`) {
+        const current = snapshotSequence;
+        snapshotSequence += 1;
+        return response({
+          conversation: { ...conversation, last_event_sequence: current },
+          messages: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={connectEvents} />);
+    await screen.findByText("Kế hoạch ra mắt");
+    await waitFor(() => expect(connectEvents).toHaveBeenCalledTimes(1));
+
+    poll?.();
+    await waitFor(() => expect(snapshotSequence).toBeGreaterThan(2));
+    expect(connectEvents).toHaveBeenCalledTimes(1);
+  });
 
   it("focuses the fixed composer in the empty state", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ items: [] })));
@@ -262,6 +368,7 @@ describe("AssistantShell", () => {
   });
 
   it("edits the proposal inline, expands weeks on demand, and keeps exact-version mutations", async () => {
+    const invalidateQueries = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
@@ -297,6 +404,9 @@ describe("AssistantShell", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/approvals/${approvalId}/decision`, expect.objectContaining({ method: "POST" })));
     const approvalCall = fetchMock.mock.calls.find(([path]) => String(path).includes("/approvals/"));
     expect(new Headers(approvalCall?.[1]?.headers).get("If-Match")).toBe('"2"');
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["work", managerActor.membership.organization_id, managerActor.membership.id],
+    });
   });
 
   it("renders a superseded proposal read-only and references the current version", async () => {

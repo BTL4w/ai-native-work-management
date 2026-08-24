@@ -36,7 +36,7 @@ test:
 	$(UV) run pytest -m "not integration and not live_provider"
 
 test-ai:
-	$(UV) run pytest ../ai/tests -m "not live_provider"
+	$(UV) run pytest ../ai/tests ../ai/src/work_management_ai/agents -m "not live_provider"
 
 test-integration:
 	RUN_POSTGRES_INTEGRATION=1 $(UV) run pytest -m integration

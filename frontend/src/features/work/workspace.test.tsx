@@ -52,6 +52,7 @@ function page(items: unknown[]) {
 describe("WorkWorkspace", () => {
   afterEach(() => {
     globalThis.localStorage.clear();
+    globalThis.history.replaceState({}, "", "/");
     vi.unstubAllGlobals();
   });
 
@@ -96,6 +97,38 @@ describe("WorkWorkspace", () => {
     expect(screen.getByRole("textbox", { name: "Nhắn cho Trợ lý AI" })).toBeVisible();
     expect(screen.getByText("Kế hoạch ra mắt")).toBeVisible();
     expect(container.querySelectorAll("aside")).toHaveLength(1);
+  });
+
+  it("restores the selected Assistant conversation from the URL after refresh", async () => {
+    const conversationId = "77777777-7777-4777-8777-777777777777";
+    const conversation = {
+      id: conversationId,
+      locale: "vi",
+      title: "Kế hoạch ra mắt",
+      status: "ACTIVE",
+      last_message_sequence: 0,
+      last_event_sequence: 0,
+      created_at: "2026-08-13T10:00:00Z",
+      updated_at: "2026-08-13T10:01:00Z",
+    };
+    globalThis.history.replaceState({}, "", `/?conversation=${conversationId}`);
+    vi.stubGlobal("EventSource", class {
+      addEventListener() {}
+      close() {}
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (path === `/api/v1/ai/conversations/${conversationId}`) {
+        return response({ conversation, messages: [] });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
+
+    expect(await screen.findByRole("heading", { name: "Trợ lý AI" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Projects" })).not.toBeInTheDocument();
   });
 
   it("lets a Manager create a Project and assign a Task", async () => {

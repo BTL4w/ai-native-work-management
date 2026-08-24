@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Self
+from typing import Any, Self, cast
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransaction
 from app.modules.assistant.application.event_service import AssistantEventService
 from app.modules.assistant.application.ports import AssistantConversationSnapshot
 from app.modules.assistant.application.service import ResourceNotFoundError
@@ -90,6 +93,40 @@ class EventTransactionFactory:
 
     def __call__(self, _: AuthenticatedActor) -> EventTransaction:
         return EventTransaction(self.repository)
+
+
+class _CancelledEnterTransaction:
+    is_active = True
+
+    def __init__(self) -> None:
+        self.rolled_back = False
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
+        self.is_active = False
+
+
+class _CancelledEnterSession:
+    def __init__(self) -> None:
+        self.transaction = _CancelledEnterTransaction()
+        self.closed = False
+        self.invalidated = False
+
+    def begin(self) -> _CancelledEnterTransaction:
+        return self.transaction
+
+    async def execute(self, *_: Any, **__: Any) -> None:
+        raise asyncio.CancelledError
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def invalidate(self) -> None:
+        self.invalidated = True
+        self.closed = True
 
 
 def _fixture() -> tuple[AuthenticatedActor, AssistantConversation, list[AssistantEvent]]:
@@ -179,6 +216,22 @@ async def test_stream_emits_keepalive_without_creating_work() -> None:
     await stream.aclose()
     assert repository.read_count == 1
     assert repository.job_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_transaction_entry_rolls_back_before_returning_connection() -> None:
+    session = _CancelledEnterSession()
+    transaction = PostgreSQLAssistantTransaction(
+        session=cast(AsyncSession, session),
+        organization_id=uuid4(),
+        membership_id=uuid4(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await transaction.__aenter__()
+
+    assert session.invalidated is True
+    assert session.closed is True
 
 
 @pytest.mark.asyncio

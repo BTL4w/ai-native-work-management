@@ -50,6 +50,7 @@ from work_management_ai.model_gateway.errors import (
 )
 from work_management_ai.runtime.agent_registry import AgentRegistry
 from work_management_ai.runtime.contracts import (
+    ActivityResponseBlock,
     ActorReference,
     AgentHandoff,
     AgentHarness,
@@ -677,6 +678,18 @@ class AssistantTurnExecutor:
             job=job,
         )
         root_run_id = await recorder.ensure_orchestrator_run()
+        await recorder.append_public_blocks(
+            job.conversation_id,
+            job.turn_id,
+            (
+                ActivityResponseBlock(
+                    label_key="assistant.turn.running",
+                    status="RUNNING",
+                    agent_id=AgentId.ORCHESTRATOR,
+                ),
+            ),
+            f"assistant:{job.turn_id}:running",
+        )
         output = await self._engine_factory(recorder).execute(
             orchestration_run_id=job.orchestration_run_id,
             value=OrchestratorInput(

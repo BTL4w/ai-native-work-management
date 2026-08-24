@@ -12,6 +12,8 @@ from collections.abc import AsyncGenerator
 from typing import Any, cast
 from uuid import UUID
 
+from anyio import CancelScope
+
 from app.modules.assistant.application.service import ResourceNotFoundError
 from app.modules.assistant.domain.models import AssistantEvent, ConversationStatus
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -129,9 +131,18 @@ class AssistantEventService:
         """Async generator that yields SSE frames and keepalive comments."""
         cursor = after_sequence
         while True:
-            is_terminal, events = await self._read_events(
-                actor=actor, conversation_id=conversation_id, after_sequence=cursor
-            )
+            is_terminal = False
+            events: list[AssistantEvent] = []
+            # Starlette cancels this generator as soon as the browser closes an
+            # EventSource.  Do not let that cancellation interrupt psycopg while
+            # it is checking out or querying a pooled connection: psycopg cannot
+            # safely return a connection whose protocol state is still ACTIVE.
+            # Each read is short and bounded; cancellation is observed at the
+            # sleep/send boundary immediately after the transaction is closed.
+            with CancelScope(shield=True):
+                is_terminal, events = await self._read_events(
+                    actor=actor, conversation_id=conversation_id, after_sequence=cursor
+                )
             for event in events:
                 cursor = event.sequence
                 yield _frame(event)

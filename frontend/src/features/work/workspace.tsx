@@ -2,6 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
+import { useSearchParams } from "next/navigation";
 import {
   useEffect,
   useRef,
@@ -75,6 +76,7 @@ export function WorkWorkspace({
   onLogout?: () => void | Promise<void>;
 }) {
   const t = useTranslations("work");
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const workQueryKey: WorkQueryKey = [
     "work",
@@ -82,7 +84,13 @@ export function WorkWorkspace({
     actor.membership.id,
   ] as const;
   const canManage = actor.membership.role !== "EMPLOYEE";
-  const [view, setView] = useState<View>(canManage ? "projects" : "myTasks");
+  const initialConversationId = searchParams?.get("conversation")
+    ?? (typeof globalThis.location === "undefined"
+      ? null
+      : new URLSearchParams(globalThis.location.search).get("conversation"));
+  const [view, setView] = useState<View>(
+    initialConversationId ? "aiAssistant" : canManage ? "projects" : "myTasks",
+  );
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [projectForm, setProjectForm] = useState<ProjectFormState | null>(null);
@@ -111,6 +119,7 @@ export function WorkWorkspace({
   });
 
   function openProjects() {
+    clearConversationLocation();
     setAssignmentMode(false);
     setView("projects");
     setSelectedTask(null);
@@ -124,6 +133,7 @@ export function WorkWorkspace({
   }
 
   function openMyTasks() {
+    clearConversationLocation();
     setAssignmentMode(false);
     setView("myTasks");
     setSelectedProject(null);
@@ -131,6 +141,7 @@ export function WorkWorkspace({
   }
 
   function openAssignmentFlow() {
+    clearConversationLocation();
     setView("projects");
     setSelectedTask(null);
     if (selectedProject) {
@@ -233,6 +244,7 @@ export function WorkWorkspace({
     <>
       <AiAssistant
         actor={actor}
+        initialConversationId={initialConversationId}
         activeSection={assignmentMode ? "assignTask" : view === "aiAssistant" ? "assistant" : view}
         workspaceTitle={pageTitle}
         workspaceContent={workspaceContent}
@@ -275,6 +287,12 @@ export function WorkWorkspace({
       ) : null}
     </>
   );
+}
+
+function clearConversationLocation() {
+  const url = new URL(globalThis.location.href);
+  url.searchParams.delete("conversation");
+  globalThis.history.replaceState(globalThis.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function ProjectsView(props: {

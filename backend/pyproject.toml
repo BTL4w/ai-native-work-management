@@ -29,7 +29,7 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
 pythonpath = ["."]
-testpaths = ["tests", "../ai/tests"]
+testpaths = ["tests", "../ai/tests", "../ai/src/work_management_ai/agents"]
 markers = [
     "integration: requires the local PostgreSQL container",
     "live_provider: requires explicit provider credentials and network access",
