@@ -36,6 +36,20 @@ export function connectAssistantEvents({
     if (pollTimer !== null) clearInterval(pollTimer);
     pollTimer = null;
   }
+  function pollOnce() {
+    if (pollAttempts >= maxPollAttempts) {
+      stopPolling();
+      return;
+    }
+    pollAttempts += 1;
+    onPoll();
+    if (pollAttempts >= maxPollAttempts) stopPolling();
+  }
+  function startPolling(immediate = false) {
+    if (pollTimer !== null || maxPollAttempts <= 0) return;
+    if (immediate) pollOnce();
+    if (pollAttempts < maxPollAttempts) pollTimer = setInterval(pollOnce, pollIntervalMs);
+  }
   function handleEvent(event: MessageEvent) {
     const sequence = Number.parseInt(event.lastEventId, 10);
     if (!Number.isSafeInteger(sequence) || sequence <= lastSequence) return;
@@ -47,21 +61,13 @@ export function connectAssistantEvents({
     if (closed) return;
     pollAttempts = 0;
     stopPolling();
+    startPolling(true);
     onStatus("connected");
   };
   source.onerror = () => {
     if (closed) return;
     onStatus("reconnecting");
-    if (pollTimer !== null || maxPollAttempts <= 0) return;
-    pollTimer = setInterval(() => {
-      if (pollAttempts >= maxPollAttempts) {
-        stopPolling();
-        return;
-      }
-      pollAttempts += 1;
-      onPoll();
-      if (pollAttempts >= maxPollAttempts) stopPolling();
-    }, pollIntervalMs);
+    startPolling();
   };
 
   return {

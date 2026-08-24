@@ -4,7 +4,7 @@ UV := uv
 
 .DEFAULT_GOAL := check
 
-.PHONY: sync lint format-check typecheck test check
+.PHONY: sync lint format-check typecheck test eval check
 
 sync:
 	$(UV) sync --locked
@@ -21,4 +21,7 @@ typecheck:
 test:
 	$(UV) run --locked pytest -m "not live_provider"
 
-check: lint format-check typecheck test
+eval:
+	$(UV) run --locked python -m work_management_ai.evaluation.phase2_multi_agent
+
+check: lint format-check typecheck test eval

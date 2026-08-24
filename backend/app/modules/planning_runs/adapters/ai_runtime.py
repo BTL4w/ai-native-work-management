@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Protocol, cast
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -36,7 +37,7 @@ from work_management_ai.model_gateway.contracts import (
     StructuredModelRequest,
     StructuredModelResponse,
 )
-from work_management_ai.model_gateway.errors import ModelUnavailableError
+from work_management_ai.model_gateway.errors import ModelInvalidOutputError, ModelUnavailableError
 from work_management_ai.model_gateway.mock import MockModelGateway
 from work_management_ai.model_gateway.openai import OpenAIModelGateway
 from work_management_ai.schemas.planning import PlanningModelOutput
@@ -145,15 +146,12 @@ def _mock_plan() -> dict[str, object]:
     }
 
 
-def build_model_gateway(settings: Settings) -> ModelGateway:
-    if settings.ai_provider == "openai" and settings.openai_api_key is not None:
-        return OpenAIModelGateway(
-            model_name=settings.ai_model,
-            api_key=settings.openai_api_key,
-        )
-    if settings.ai_provider == "mock":
+class _Phase2MockModelGateway:
+    """Deterministic fixtures for both Planning Graph and activated Agent contracts."""
+
+    def __init__(self) -> None:
         fixture = _mock_plan()
-        return MockModelGateway(
+        self._planning = MockModelGateway(
             fixtures={
                 f"planning.{locale}.{mode}": fixture
                 for locale in ("vi", "en")
@@ -167,6 +165,171 @@ def build_model_gateway(settings: Settings) -> ModelGateway:
                 for locale in ("vi", "en")
             }
         )
+
+    async def generate_structured[StructuredOutputT: BaseModel](
+        self, request: StructuredModelRequest[StructuredOutputT]
+    ) -> StructuredModelResponse[StructuredOutputT]:
+        if request.invocation_key.startswith("planning."):
+            return await self._planning.generate_structured(request)
+        fixture = self._agent_fixture(request)
+        try:
+            parsed = request.output_schema.model_validate(fixture)
+        except (TypeError, ValidationError, ValueError) as error:
+            raise ModelInvalidOutputError("mock fixture failed schema validation") from error
+        return StructuredModelResponse(parsed=parsed, model_ref="mock:phase2-assistant-v1")
+
+    @staticmethod
+    def _payload[StructuredOutputT: BaseModel](
+        request: StructuredModelRequest[StructuredOutputT],
+    ) -> dict[str, object]:
+        if not request.messages:
+            return {}
+        try:
+            value = json.loads(request.messages[-1].content)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return cast(dict[str, object], value) if isinstance(value, dict) else {}
+
+    def _agent_fixture[StructuredOutputT: BaseModel](
+        self, request: StructuredModelRequest[StructuredOutputT]
+    ) -> dict[str, object]:
+        key = request.invocation_key
+        payload = self._payload(request)
+        locale = "vi" if ".vi." in key else "en"
+        if key.startswith("orchestrator.") and key.endswith(".synthesize"):
+            return {
+                "blocks": [
+                    {
+                        "kind": "work_evidence",
+                        "summary": (
+                            "Chỉ hiển thị dữ liệu công việc mà bạn được phép xem."
+                            if locale == "vi"
+                            else "Only work data you are permitted to view is shown."
+                        ),
+                        "evidence": cast(list[object], []),
+                    }
+                ]
+            }
+        if key.startswith("orchestrator.") and any(
+            marker in key for marker in (".plan", ".repair", ".replan.")
+        ):
+            return self._orchestrator_plan(payload, locale)
+        if key.startswith("work_intelligence.") and key.endswith(".plan"):
+            return {
+                "question_kind": "MY_TASKS",
+                "skill_reference": "answer_work_question@1",
+                "tool_id": "work.read_my_tasks",
+                "tool_input": {
+                    "status": None,
+                    "due_from": None,
+                    "due_to": None,
+                    "limit": 20,
+                },
+                "requested_handoff": None,
+            }
+        if key.startswith("work_intelligence.") and key.endswith(".synthesize"):
+            return {
+                "question_kind": "MY_TASKS",
+                "claims": [],
+                "needs_clarification": False,
+                "clarification_question": None,
+            }
+        if key.startswith("planning_agent.") and key.endswith(".step_plan"):
+            return {
+                "skill_reference": "create_project_plan@1",
+                "tool_id": "planning.manage_run",
+                "tool_input": {},
+                "requested_handoff": None,
+            }
+        raise ModelUnavailableError("model fixture unavailable")
+
+    @staticmethod
+    def _orchestrator_plan(payload: dict[str, object], locale: str) -> dict[str, object]:
+        message = str(payload.get("message", "")).casefold()
+        raw_catalog = payload.get("specialist_catalog", [])
+        catalog = cast(list[object], raw_catalog) if isinstance(raw_catalog, list) else []
+
+        def is_planning_entry(item: object) -> bool:
+            if not isinstance(item, dict):
+                return False
+            entry = cast(dict[str, object], item)
+            capabilities = entry.get("capabilities")
+            return (
+                entry.get("agent_id") == "planning"
+                and isinstance(capabilities, list)
+                and "planning.create" in cast(list[object], capabilities)
+            )
+
+        planning_available = any(is_planning_entry(item) for item in catalog)
+        asks_for_planning = any(
+            signal in message
+            for signal in (
+                "plan",
+                "planning",
+                "proposal",
+                "project plan",
+                "kế hoạch",
+                "lập kế hoạch",
+                "dự án",
+            )
+        )
+        if asks_for_planning and not planning_available:
+            return {
+                "objectives": [message or "planning request"],
+                "steps": [],
+                "unavailable_capabilities": ["planning.create"],
+                "response_language": locale,
+            }
+        if asks_for_planning:
+            return {
+                "objectives": [message or "create a Project plan"],
+                "steps": [
+                    {
+                        "step_id": "create_plan",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.create",
+                        "objective": message or "create a Project plan",
+                        "typed_input": {},
+                        "depends_on": [],
+                        "mode": "PROPOSAL",
+                    }
+                ],
+                "unavailable_capabilities": [],
+                "response_language": locale,
+            }
+        return {
+            "objectives": [message or "read permitted work"],
+            "steps": [
+                {
+                    "step_id": "read_my_tasks",
+                    "target_agent_id": "work_intelligence",
+                    "target_agent_version": "1.0.0",
+                    "capability": "work.read_my_tasks",
+                    "objective": message or "read permitted work",
+                    "typed_input": {
+                        "question": message or "What are my current tasks?",
+                        "locale": locale,
+                        "requested_kind": "MY_TASKS",
+                        "entity_reference": None,
+                    },
+                    "depends_on": [],
+                    "mode": "READ_ONLY",
+                }
+            ],
+            "unavailable_capabilities": [],
+            "response_language": locale,
+        }
+
+
+def build_model_gateway(settings: Settings) -> ModelGateway:
+    if settings.ai_provider == "openai" and settings.openai_api_key is not None:
+        return OpenAIModelGateway(
+            model_name=settings.ai_model,
+            api_key=settings.openai_api_key,
+        )
+    if settings.ai_provider == "mock":
+        return _Phase2MockModelGateway()
     return _DisabledModelGateway()
 
 

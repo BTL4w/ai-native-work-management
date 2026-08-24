@@ -74,4 +74,29 @@ describe("Assistant EventSource", () => {
     expect(onStatus).toHaveBeenCalledWith("connected");
     connection.close();
   });
+
+  it("reconciles REST once when SSE opens after a fast worker response", () => {
+    vi.useFakeTimers();
+    const onPoll = vi.fn();
+    connectAssistantEvents({
+      conversationId: "11111111-1111-4111-8111-111111111111",
+      initialSequence: 1,
+      eventSourceFactory: (url) => new FakeEventSource(url) as unknown as EventSource,
+      onSequence: vi.fn(),
+      onPoll,
+      pollIntervalMs: 1000,
+      maxPollAttempts: 3,
+    });
+
+    const source = FakeEventSource.instances[0];
+    source.onopen?.();
+    vi.advanceTimersByTime(3000);
+
+    expect(onPoll).toHaveBeenCalledTimes(3);
+
+    source.emit("assistant.turn.response.v1", 2);
+    vi.advanceTimersByTime(3000);
+
+    expect(onPoll).toHaveBeenCalledTimes(3);
+  });
 });

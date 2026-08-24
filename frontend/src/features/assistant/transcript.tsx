@@ -53,6 +53,7 @@ export function Transcript({ messages, canManage, onEdit, onRevise, onApprove, o
 
 function collapseProposalBlocks(messages: AssistantMessage[]): AssistantMessage[] {
   const originalLocations = new Map<string, string>();
+  const latestBlocks = new Map<string, ProposalBlock>();
   for (const message of messages) {
     message.content_blocks.forEach((block, index) => {
       if (block.kind === "proposal") {
@@ -60,14 +61,22 @@ function collapseProposalBlocks(messages: AssistantMessage[]): AssistantMessage[
         if (!originalLocations.has(versionKey)) {
           originalLocations.set(versionKey, `${message.id}:${index}`);
         }
+        latestBlocks.set(versionKey, block);
       }
     });
   }
 
   return messages.flatMap((message) => {
-    const contentBlocks = message.content_blocks.filter((block, index) =>
-      block.kind !== "proposal"
-      || originalLocations.get(`${block.proposal_id}:${block.proposal_version}`) === `${message.id}:${index}`);
+    const contentBlocks: AssistantBlock[] = [];
+    message.content_blocks.forEach((block, index) => {
+      if (block.kind !== "proposal") {
+        contentBlocks.push(block);
+        return;
+      }
+      const versionKey = `${block.proposal_id}:${block.proposal_version}`;
+      const isOriginalLocation = originalLocations.get(versionKey) === `${message.id}:${index}`;
+      if (isOriginalLocation) contentBlocks.push(latestBlocks.get(versionKey) ?? block);
+    });
     return contentBlocks.length > 0 ? [{ ...message, content_blocks: contentBlocks }] : [];
   });
 }

@@ -2,7 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 import { useAuth } from "@/features/auth/auth-provider";
 import { WorkWorkspace } from "@/features/work/workspace";
@@ -60,13 +60,15 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-[var(--background)]">
-      <WorkWorkspace
-        key={`${actor.membership.organization_id}:${actor.membership.id}`}
-        actor={actor}
-        isLoggingOut={isLoggingOut}
-        logoutError={logoutFailed}
-        onLogout={handleLogout}
-      />
+      <Suspense fallback={<CenteredStatus message={common("loadingSession")} />}>
+        <WorkWorkspace
+          key={`${actor.membership.organization_id}:${actor.membership.id}`}
+          actor={actor}
+          isLoggingOut={isLoggingOut}
+          logoutError={logoutFailed}
+          onLogout={handleLogout}
+        />
+      </Suspense>
     </main>
   );
 }

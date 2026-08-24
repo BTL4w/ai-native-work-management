@@ -151,7 +151,7 @@ describe("Transcript", () => {
         proposal_id: proposalId,
         workflow_run_id: workflowRunId,
         version,
-        current_version: 2,
+        current_version: version,
         content: content(version === 1 ? "Original" : "Revised"),
         creator_type: "AI_SYSTEM",
       }), { headers: { "Content-Type": "application/json" } });
@@ -199,6 +199,10 @@ describe("Transcript", () => {
     expect(await screen.findAllByText("Proposal v2")).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "Original" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Revised" })).toBeVisible();
+    expect(screen.getByText("Version chỉ đọc")).toBeVisible();
+    expect(screen.getByText("Card này chỉ đọc. Version hiện tại là v2.")).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Phê duyệt kế hoạch" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Chỉnh thủ công" })).toHaveLength(1);
     expect(screen.getAllByText(/^Proposal v/)).toHaveLength(2);
     const transcript = container.querySelector(".assistant-transcript")?.textContent ?? "";
     expect(transcript.indexOf("Proposal v1")).toBeLessThan(transcript.indexOf("Extend the plan"));

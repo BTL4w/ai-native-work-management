@@ -217,9 +217,9 @@ async def test_worker_commits_transcript_event_and_terminal_state_once() -> None
             assert await session.scalar(select(func.count()).select_from(AgentRunModel)) == 1
             assert await session.scalar(select(func.count()).select_from(AgentCheckpointModel)) == 1
             assert (
-                await session.scalar(select(func.count()).select_from(AssistantMessageModel)) == 2
+                await session.scalar(select(func.count()).select_from(AssistantMessageModel)) == 3
             )
-            assert await session.scalar(select(func.count()).select_from(AssistantEventModel)) == 2
+            assert await session.scalar(select(func.count()).select_from(AssistantEventModel)) == 3
             job_status = await session.scalar(
                 select(AssistantJobModel.status).where(AssistantJobModel.id == submitted.job.id)
             )

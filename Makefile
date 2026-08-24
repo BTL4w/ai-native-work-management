@@ -6,7 +6,7 @@ E2E_DATABASE_URL := postgresql+psycopg://work_management:work_management@localho
 
 .DEFAULT_GOAL := dev
 
-.PHONY: dev up bootstrap install db-up backend-dev frontend-dev worker-dev migrate seed down ai ai-sync ai-lint ai-typecheck ai-test containers-build containers-up containers-down containers-config-check ai-worker-check lint typecheck test test-ai test-e2e e2e-db-reset migration-check
+.PHONY: dev up bootstrap install db-up backend-dev frontend-dev worker-dev migrate seed down ai ai-sync ai-lint ai-typecheck ai-test eval containers-build containers-up containers-down containers-config-check ai-worker-check lint typecheck test test-ai test-e2e e2e-db-reset migration-check
 
 dev: bootstrap
 	$(MAKE) --no-print-directory -j3 backend-dev frontend-dev worker-dev
@@ -57,6 +57,9 @@ ai-typecheck:
 
 ai-test:
 	$(MAKE) --no-print-directory -C ai test
+
+eval:
+	$(MAKE) --no-print-directory -C ai eval
 
 containers-build:
 	docker compose build backend-api frontend ai-worker
