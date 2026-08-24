@@ -43,5 +43,32 @@
     "FieldError": { "required": ["field", "code", "message_key"], "properties": { "field": "string", "code": "string", "message_key": "string" } },
     "ErrorDetail": { "required": ["code", "message_key", "request_id"], "properties": { "code": "string", "message_key": "string", "request_id": "string", "field_errors": "array:ref:FieldError", "details": "object" } },
     "ErrorResponse": { "required": ["error"], "properties": { "error": "ref:ErrorDetail" } }
+  },
+  "assistant": {
+    "paths": {
+      "/api/v1/ai/conversations": ["get", "post"],
+      "/api/v1/ai/conversations/{conversation_id}": ["get"],
+      "/api/v1/ai/conversations/{conversation_id}/messages": ["post"],
+      "/api/v1/ai/conversations/{conversation_id}/events": ["get"]
+    },
+    "content_block_mapping": {
+      "activity": "#/components/schemas/ActivityBlock",
+      "capability_unavailable": "#/components/schemas/CapabilityUnavailableBlock",
+      "decision_result": "#/components/schemas/DecisionResultBlock",
+      "planning_run": "#/components/schemas/PlanningRunBlock",
+      "proposal": "#/components/schemas/ProposalBlock",
+      "question": "#/components/schemas/QuestionBlock",
+      "safe_error": "#/components/schemas/SafeErrorBlock",
+      "text": "#/components/schemas/TextBlock",
+      "work_evidence": "#/components/schemas/WorkEvidenceBlock"
+    },
+    "schemas": {
+      "CreateConversationRequest": { "required": ["locale"], "properties": { "locale": "literal:vi|en", "title": "null|string[,120]" } },
+      "ConversationResponse": { "required": ["id", "locale", "title", "status", "last_message_sequence", "last_event_sequence", "created_at", "updated_at"], "properties": { "id": "string:uuid", "locale": "literal:vi|en", "title": "null|string", "status": "string", "last_message_sequence": "integer", "last_event_sequence": "integer", "created_at": "string:date-time", "updated_at": "string:date-time" } },
+      "ConversationListResponse": { "required": ["items"], "properties": { "items": "array:ref:ConversationResponse" } },
+      "PostAssistantMessageRequest": { "required": ["message", "locale"], "properties": { "message": "string[1,8000]", "locale": "literal:vi|en", "card_action": "null|ref:CardAction" } },
+      "AssistantTurnAcceptedResponse": { "required": ["conversation_id", "message_id", "turn_id", "orchestration_run_id", "status"], "properties": { "conversation_id": "string:uuid", "message_id": "string:uuid", "turn_id": "string:uuid", "orchestration_run_id": "string:uuid", "status": "literal:QUEUED" } },
+      "ConversationSnapshotResponse": { "required": ["conversation", "messages"], "properties": { "conversation": "ref:ConversationResponse", "messages": "array:ref:MessageResponse" } }
+    }
   }
 }

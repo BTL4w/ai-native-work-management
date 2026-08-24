@@ -20,6 +20,13 @@ def _describe(schema: dict[str, object], schemas: dict[str, object]) -> str:
         fragments = cast(list[dict[str, object]], any_of)
         return "|".join(sorted(_describe(item, schemas) for item in fragments))
 
+    enum = schema.get("enum")
+    if isinstance(enum, list):
+        values = cast(list[object], enum)
+        return "literal:" + "|".join(str(value) for value in values)
+    if "const" in schema:
+        return f"literal:{schema['const']}"
+
     schema_type = schema.get("type")
     if schema_type == "array":
         return f"array:{_describe(schema['items'], schemas)}"  # type: ignore[arg-type]
@@ -84,14 +91,37 @@ def test_frontend_work_contract_manifest_matches_openapi() -> None:
 
 def test_assistant_openapi_exposes_typed_transcript_contract() -> None:
     schema = app.openapi()
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "features"
+        / "work"
+        / "openapi-contract.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["assistant"]
+    schemas = cast(dict[str, object], schema["components"]["schemas"])
     message = schema["components"]["schemas"]["MessageResponse"]
     block_items = message["properties"]["content_blocks"]["items"]
 
     assert block_items["discriminator"]["propertyName"] == "kind"
-    assert set(schema["paths"]["/api/v1/ai/conversations"]) == {"get", "post"}
-    assert set(schema["paths"]["/api/v1/ai/conversations/{conversation_id}/messages"]) == {"post"}
-    assert schema["paths"]["/api/v1/ai/conversations/{conversation_id}/messages"]["post"][
-        "responses"
-    ]["202"]["content"]["application/json"]["schema"] == {
+    assert block_items["discriminator"]["mapping"] == manifest["content_block_mapping"]
+
+    for path, expected_methods in manifest["paths"].items():
+        assert set(schema["paths"][path]) == set(expected_methods)
+
+    for schema_name, expected in manifest["schemas"].items():
+        contract = cast(dict[str, object], schemas[schema_name])
+        properties = cast(dict[str, dict[str, object]], contract["properties"])
+        actual = {
+            "required": cast(list[str], contract.get("required", [])),
+            "properties": {name: _describe(value, schemas) for name, value in properties.items()},
+        }
+        assert actual == expected, schema_name
+
+    message_post = schema["paths"][
+        "/api/v1/ai/conversations/{conversation_id}/messages"
+    ]["post"]
+    assert message_post["responses"]["202"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/AssistantTurnAcceptedResponse"
     }

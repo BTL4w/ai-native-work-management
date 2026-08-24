@@ -138,3 +138,28 @@ counts only. It does not call a model-as-judge or a hosted provider.
 
 Do not start Phase 3, a future Agent package, personalized memory, autonomous
 mutation, a broker or an optional integration from this runbook.
+
+## Phase 2 closure evidence — 2026-08-24
+
+Task 11 closes the Phase 2 slice with deterministic local evidence:
+
+- `make lint` and `make typecheck` pass for Python, TypeScript and the E2E suite.
+- `make test` passes 398 backend/AI tests and 95 frontend tests.
+- `make migration-check` reaches Alembic `0010` with no schema drift and passes
+  all 37 PostgreSQL integration tests.
+- `make eval` passes all 24 bilingual cases with zero policy violations,
+  unsupported claims or duplicate side effects.
+- `make test-e2e` passes all three browser scenarios. The Assistant scenario
+  verifies an approved Goal/Milestone/Project Week/Task/dependency/acceptance
+  graph, including that every AI-planned Task remains unassigned; it also
+  verifies rejection creates no second Project. The manual scenario creates a
+  Goal, Milestone, Project Week and assigned Task without posting an Assistant
+  mutation while the API remains in its default disabled-provider mode.
+- The frontend contract manifest pins Assistant routes, transcript block
+  discriminators and conversation request/response schemas to FastAPI OpenAPI.
+
+The default closure suite uses the deterministic mock provider. Hosted-provider
+verification remains opt-in and credential-gated; it is not claimed by this
+record. Expected local outbox retries remain visible because Phase 2 has no
+external publisher, and no optional integration or deployment track is
+activated.

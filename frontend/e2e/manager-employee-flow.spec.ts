@@ -37,6 +37,12 @@ test("Manager plans a week, explicitly assigns a Task, and Employee completes it
   const suffix = `${Date.now()}`;
   const projectName = `E2E Project ${suffix}`;
   const taskTitle = `E2E Task ${suffix}`;
+  const assistantMutations: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().includes("/api/v1/ai/")) {
+      assistantMutations.push(request.url());
+    }
+  });
 
   await signIn(page, "manager@example.test");
   await page.getByRole("button", { name: "Tạo project" }).click();
@@ -46,6 +52,17 @@ test("Manager plans a week, explicitly assigns a Task, and Employee completes it
   await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
 
   await page.getByRole("tab", { name: "Kế hoạch" }).click();
+  await page.getByRole("button", { name: "Thêm mục tiêu" }).click();
+  await page.getByLabel("Tiêu đề mục tiêu").fill(`Goal ${suffix}`);
+  await page.getByLabel("Kết quả mong đợi").fill("Manual planning remains available");
+  await page.getByRole("button", { name: "Lưu mục tiêu" }).click();
+  await expect(page.getByText(`Goal ${suffix}`)).toBeVisible();
+
+  await page.getByRole("button", { name: "Thêm milestone" }).click();
+  await page.getByLabel("Tên milestone").fill(`Milestone ${suffix}`);
+  await page.getByRole("button", { name: "Lưu milestone" }).click();
+  await expect(page.getByText(`Milestone ${suffix}`)).toBeVisible();
+
   await page.getByRole("button", { name: "Thêm tuần" }).click();
   await page.getByLabel("Ngày bắt đầu").fill("2026-08-10");
   await page.getByLabel("Ngày kết thúc").fill("2026-08-16");
@@ -61,6 +78,7 @@ test("Manager plans a week, explicitly assigns a Task, and Employee completes it
   await page.getByRole("button", { name: "Lưu task" }).click();
   await expect(page.getByRole("heading", { name: taskTitle })).toBeVisible();
   await expect(page.getByText("Demo Employee")).toBeVisible();
+  expect(assistantMutations).toEqual([]);
   await signOut(page);
 
   await signIn(page, "employee@example.test");

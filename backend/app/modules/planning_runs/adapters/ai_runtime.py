@@ -128,21 +128,66 @@ def _mock_plan() -> dict[str, object]:
     return {
         "project": {
             "title": "Proposed project",
-            "description": None,
-            "start_date": None,
-            "due_date": None,
+            "description": "Deterministic Phase 2 acceptance plan",
+            "start_date": "2026-09-01",
+            "due_date": "2026-09-07",
         },
         "goal": {
             "title": "Proposed goal",
             "description": None,
             "expected_outcomes": ["Manager-reviewed outcome"],
-            "target_date": None,
+            "target_date": "2026-09-07",
         },
-        "milestones": [],
-        "project_weeks": [],
-        "tasks": [],
-        "dependencies": [],
-        "assumptions": [],
+        "milestones": [
+            {
+                "ref": "m1",
+                "title": "Launch readiness",
+                "description": "The launch package is reviewed and ready.",
+                "due_date": "2026-09-07",
+            }
+        ],
+        "project_weeks": [
+            {
+                "ref": "w1",
+                "week_number": 1,
+                "start_date": "2026-09-01",
+                "end_date": "2026-09-07",
+                "objective": "Prepare and verify the launch package",
+            }
+        ],
+        "tasks": [
+            {
+                "ref": "t1",
+                "project_week_ref": "w1",
+                "milestone_ref": "m1",
+                "title": "Prepare launch package",
+                "description": None,
+                "due_date": "2026-09-04",
+                "assignee_membership_id": None,
+                "required_skill_labels": ["planning"],
+                "estimated_effort_hours": 8,
+                "acceptance_criteria": ["Launch package is ready for review"],
+            },
+            {
+                "ref": "t2",
+                "project_week_ref": "w1",
+                "milestone_ref": "m1",
+                "title": "Verify launch readiness",
+                "description": None,
+                "due_date": "2026-09-07",
+                "assignee_membership_id": None,
+                "required_skill_labels": ["quality review"],
+                "estimated_effort_hours": 4,
+                "acceptance_criteria": ["Readiness review is recorded"],
+            },
+        ],
+        "dependencies": [{"predecessor_ref": "t1", "successor_ref": "t2"}],
+        "assumptions": [
+            {
+                "description": "The launch scope has been approved.",
+                "source": "manager_request",
+            }
+        ],
     }
 
 
