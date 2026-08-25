@@ -7,6 +7,7 @@ from app.modules.assistant.adapters import database_models as assistant_models
 from app.modules.audit.adapters import database_models as audit_models
 from app.modules.identity.adapters import database_models as identity_models
 from app.modules.organization.adapters import database_models as organization_models
+from app.modules.people_capacity.adapters import database_models as people_capacity_models
 from app.modules.work.adapters import database_models as work_models
 
 _MODEL_MODULES = (
@@ -14,6 +15,7 @@ _MODEL_MODULES = (
     audit_models,
     identity_models,
     organization_models,
+    people_capacity_models,
     work_models,
 )
 
@@ -57,6 +59,11 @@ def test_active_phase_tables_are_registered() -> None:
         "agent_model_invocations",
         "assistant_events",
         "assistant_jobs",
+        "skills",
+        "skill_versions",
+        "person_skills",
+        "skill_evidence",
+        "work_outcome_evidence",
     }
 
 

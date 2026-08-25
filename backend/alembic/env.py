@@ -15,6 +15,7 @@ from app.modules.assistant.adapters import database_models as assistant_models
 from app.modules.audit.adapters import database_models as audit_models
 from app.modules.identity.adapters import database_models as identity_models
 from app.modules.organization.adapters import database_models as organization_models
+from app.modules.people_capacity.adapters import database_models as people_capacity_models
 from app.modules.planning_runs.adapters import database_models as planning_runs_models
 from app.modules.work.adapters import database_models as work_models
 from app.modules.work.planning.adapters import database_models as planning_models
@@ -27,6 +28,7 @@ _MODEL_MODULES = (
     work_models,
     planning_models,
     planning_runs_models,
+    people_capacity_models,
 )
 
 config = context.config

@@ -63,6 +63,18 @@ class EmptyPersonSkillPatchError(PeopleSkillError):
     """A verified person-skill update supplied no mutable field."""
 
 
+class PeopleSkillIdempotencyKeyReusedError(PeopleSkillError):
+    """An idempotency key was reused for different People Skills input."""
+
+
+class PeopleSkillVersionMismatchError(PeopleSkillError):
+    """A stale mutation attempted to overwrite a verified person skill."""
+
+    def __init__(self, current_version: int) -> None:
+        super().__init__(current_version)
+        self.current_version = current_version
+
+
 def _skill_name(value: str) -> tuple[str, str]:
     display_name = value.strip()
     if not 1 <= len(display_name) <= 100:
@@ -356,6 +368,7 @@ class VerifiedPersonSkill:
     version: int
     created_at: datetime
     updated_at: datetime
+    active: bool = True
 
     def apply(
         self,
