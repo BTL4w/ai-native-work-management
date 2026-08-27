@@ -10,11 +10,13 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.audit.adapters.database_models import AuditEventModel
 from app.modules.audit.domain.events import AuditOutcome
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.organization.adapters.database_models import MembershipModel
 from app.modules.people_capacity.adapters.database_models import (
     PersonSkillModel,
     SkillEvidenceModel,
@@ -23,23 +25,33 @@ from app.modules.people_capacity.adapters.database_models import (
     WorkOutcomeEvidenceModel,
 )
 from app.modules.people_capacity.application.ports import (
+    EvidenceSourceSnapshot,
     PeopleCapacityRepository,
     PeopleMutationResult,
 )
 from app.modules.people_capacity.domain.skills import (
+    PeopleSkillConflictError,
     PeopleSkillIdempotencyKeyReusedError,
+    PeopleSkillNotFoundError,
     PeopleSkillVersionMismatchError,
     PersonSkillDraft,
     PersonSkillPatch,
     Skill,
     SkillDraft,
+    SkillEvidence,
     SkillEvidenceType,
     SkillLevel,
+    SkillPatch,
     VerifiedPersonSkill,
     WorkOutcomeEvidence,
     WorkOutcomeEvidenceDraft,
 )
-from app.modules.work.adapters.database_models import IdempotencyRecordModel, IdempotencyState
+from app.modules.work.adapters.database_models import (
+    IdempotencyRecordModel,
+    IdempotencyState,
+    TaskModel,
+)
+from app.modules.work.domain.tasks import TaskStatus
 
 _IDEMPOTENCY_TTL = timedelta(hours=24)
 
@@ -150,6 +162,51 @@ def _work_evidence_to_domain(model: WorkOutcomeEvidenceModel) -> WorkOutcomeEvid
     )
 
 
+def _skill_evidence_to_domain(model: SkillEvidenceModel) -> SkillEvidence:
+    return SkillEvidence(
+        id=model.id,
+        organization_id=model.organization_id,
+        person_skill_id=model.person_skill_id,
+        evidence_type=model.evidence_type,
+        summary=model.summary,
+        source_resource_type=model.source_resource_type,
+        source_resource_id=model.source_resource_id,
+        occurred_at=model.occurred_at,
+        created_by_membership_id=model.created_by_membership_id,
+        created_at=model.created_at,
+    )
+
+
+def _skill_evidence_to_json(evidence: SkillEvidence) -> dict[str, Any]:
+    return {
+        "id": str(evidence.id),
+        "organization_id": str(evidence.organization_id),
+        "person_skill_id": str(evidence.person_skill_id),
+        "evidence_type": evidence.evidence_type.value,
+        "summary": evidence.summary,
+        "source_resource_type": evidence.source_resource_type,
+        "source_resource_id": str(evidence.source_resource_id),
+        "occurred_at": evidence.occurred_at.isoformat(),
+        "created_by_membership_id": str(evidence.created_by_membership_id),
+        "created_at": evidence.created_at.isoformat(),
+    }
+
+
+def _skill_evidence_from_json(value: dict[str, Any]) -> SkillEvidence:
+    return SkillEvidence(
+        id=UUID(str(value["id"])),
+        organization_id=UUID(str(value["organization_id"])),
+        person_skill_id=UUID(str(value["person_skill_id"])),
+        evidence_type=SkillEvidenceType(str(value["evidence_type"])),
+        summary=str(value["summary"]),
+        source_resource_type=str(value["source_resource_type"]),
+        source_resource_id=UUID(str(value["source_resource_id"])),
+        occurred_at=datetime.fromisoformat(str(value["occurred_at"])),
+        created_by_membership_id=UUID(str(value["created_by_membership_id"])),
+        created_at=datetime.fromisoformat(str(value["created_at"])),
+    )
+
+
 def _work_evidence_to_json(evidence: WorkOutcomeEvidence) -> dict[str, Any]:
     return {
         "id": str(evidence.id),
@@ -187,6 +244,12 @@ class SqlAlchemyPeopleCapacityRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def _flush_or_conflict(self) -> None:
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            raise PeopleSkillConflictError from error
 
     async def _activate_actor(self, actor: AuthenticatedActor) -> None:
         await self._session.execute(text("SET LOCAL ROLE app_runtime"))
@@ -260,7 +323,46 @@ class SqlAlchemyPeopleCapacityRepository:
             raise PeopleSkillIdempotencyKeyReusedError
         return (
             None,
-            PeopleMutationResult(resource=loader(record.response_body), replayed=True),
+            PeopleMutationResult(
+                resource=loader(record.response_body),
+                replayed=True,
+                evidence=tuple(
+                    _skill_evidence_from_json(value)
+                    for value in record.response_body.get("_evidence", [])
+                ),
+            ),
+        )
+
+    async def _get_idempotency_replay[T](
+        self,
+        *,
+        actor: AuthenticatedActor,
+        operation: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        loader: Callable[[dict[str, Any]], T],
+    ) -> PeopleMutationResult[T] | None:
+        record = await self._session.scalar(
+            select(IdempotencyRecordModel).where(
+                IdempotencyRecordModel.organization_id == actor.organization_id,
+                IdempotencyRecordModel.actor_membership_id == actor.membership_id,
+                IdempotencyRecordModel.operation == operation,
+                IdempotencyRecordModel.idempotency_key == idempotency_key,
+            )
+        )
+        if record is None:
+            return None
+        if record.request_fingerprint != request_fingerprint:
+            raise PeopleSkillIdempotencyKeyReusedError
+        if record.state is not IdempotencyState.COMPLETED or record.response_body is None:
+            raise PeopleSkillIdempotencyKeyReusedError
+        return PeopleMutationResult(
+            resource=loader(record.response_body),
+            replayed=True,
+            evidence=tuple(
+                _skill_evidence_from_json(value)
+                for value in record.response_body.get("_evidence", [])
+            ),
         )
 
     def _audit_success(
@@ -301,6 +403,69 @@ class SqlAlchemyPeopleCapacityRepository:
         )
         return tuple(_skill_to_domain(model) for model in models)
 
+    async def membership_is_active(self, *, actor: AuthenticatedActor, membership_id: UUID) -> bool:
+        await self._activate_actor(actor)
+        return bool(
+            await self._session.scalar(
+                select(MembershipModel.is_active).where(
+                    MembershipModel.organization_id == actor.organization_id,
+                    MembershipModel.id == membership_id,
+                )
+            )
+        )
+
+    async def get_evidence_source(
+        self, *, actor: AuthenticatedActor, resource_type: str, resource_id: UUID
+    ) -> EvidenceSourceSnapshot | None:
+        await self._activate_actor(actor)
+        if resource_type != "task":
+            return None
+        row = (
+            await self._session.execute(
+                select(TaskModel)
+                .where(
+                    TaskModel.organization_id == actor.organization_id,
+                    TaskModel.id == resource_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None or row.assignee_membership_id is None:
+            return None
+        return EvidenceSourceSnapshot(
+            resource_type="task",
+            resource_id=resource_id,
+            version=row.version,
+            completed=row.status == TaskStatus.DONE,
+            subject_membership_id=row.assignee_membership_id,
+        )
+
+    async def get_skill(self, *, actor: AuthenticatedActor, skill_id: UUID) -> Skill | None:
+        await self._activate_actor(actor)
+        model = await self._session.scalar(
+            select(SkillModel).where(
+                SkillModel.organization_id == actor.organization_id,
+                SkillModel.id == skill_id,
+            )
+        )
+        return _skill_to_domain(model) if model is not None else None
+
+    def _add_skill_version(self, *, actor: AuthenticatedActor, skill: Skill) -> None:
+        self._session.add(
+            SkillVersionModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                skill_id=skill.id,
+                version=skill.version,
+                name=skill.name,
+                normalized_name=skill.normalized_name,
+                description=skill.description,
+                active=skill.active,
+                changed_by_membership_id=actor.membership_id,
+                created_at=skill.updated_at,
+            )
+        )
+
     async def create_skill(
         self,
         *,
@@ -339,7 +504,7 @@ class SqlAlchemyPeopleCapacityRepository:
             updated_at=now,
         )
         self._session.add(model)
-        await self._session.flush()
+        await self._flush_or_conflict()
         skill = _skill_to_domain(model)
         self._session.add(
             SkillVersionModel(
@@ -376,6 +541,193 @@ class SqlAlchemyPeopleCapacityRepository:
         record.response_status = 201
         record.response_body = _skill_to_json(skill)
         return PeopleMutationResult(resource=skill, replayed=False)
+
+    async def _mutate_skill(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        skill_id: UUID,
+        patch: SkillPatch,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        operation: str,
+        action: str,
+    ) -> PeopleMutationResult[Skill]:
+        await self._activate_actor(actor)
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_skill_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+        model = await self._session.scalar(
+            select(SkillModel)
+            .where(
+                SkillModel.organization_id == actor.organization_id,
+                SkillModel.id == skill_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PeopleSkillNotFoundError
+        current = _skill_to_domain(model)
+        if current.version != expected_version:
+            raise PeopleSkillVersionMismatchError(current.version)
+        now = datetime.now(UTC)
+        updated = current.apply(patch, updated_at=now)
+        model.name = updated.name
+        model.normalized_name = updated.normalized_name
+        model.description = updated.description
+        model.active = updated.active
+        model.version = updated.version
+        model.updated_by_membership_id = actor.membership_id
+        model.updated_at = now
+        self._add_skill_version(actor=actor, skill=updated)
+        self._audit_success(
+            actor=actor,
+            action=action,
+            resource_type="skill",
+            resource_id=skill_id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data={
+                "name": current.name,
+                "normalized_name": current.normalized_name,
+                "description": current.description,
+                "active": current.active,
+                "version": current.version,
+            },
+            after_data={
+                "name": updated.name,
+                "normalized_name": updated.normalized_name,
+                "description": updated.description,
+                "active": updated.active,
+                "version": updated.version,
+            },
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = _skill_to_json(updated)
+        await self._flush_or_conflict()
+        return PeopleMutationResult(resource=updated, replayed=False)
+
+    async def update_skill(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        skill_id: UUID,
+        patch: SkillPatch,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[Skill]:
+        return await self._mutate_skill(
+            actor=actor,
+            skill_id=skill_id,
+            patch=patch,
+            expected_version=expected_version,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            operation="people.skill.update",
+            action="people.skill.updated",
+        )
+
+    async def delete_skill(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        skill_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[Skill]:
+        return await self._mutate_skill(
+            actor=actor,
+            skill_id=skill_id,
+            patch=SkillPatch.create(active=False, active_supplied=True),
+            expected_version=expected_version,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            operation="people.skill.delete",
+            action="people.skill.deleted",
+        )
+
+    async def list_person_skills(
+        self, *, actor: AuthenticatedActor, membership_id: UUID
+    ) -> tuple[VerifiedPersonSkill, ...]:
+        await self._activate_actor(actor)
+        models = await self._session.scalars(
+            select(PersonSkillModel)
+            .where(
+                PersonSkillModel.organization_id == actor.organization_id,
+                PersonSkillModel.membership_id == membership_id,
+                PersonSkillModel.active.is_(True),
+            )
+            .order_by(PersonSkillModel.skill_id, PersonSkillModel.id)
+        )
+        return tuple(_person_skill_to_domain(model) for model in models)
+
+    async def get_person_skill(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        skill_id: UUID,
+        include_inactive: bool,
+    ) -> VerifiedPersonSkill | None:
+        await self._activate_actor(actor)
+        query = select(PersonSkillModel).where(
+            PersonSkillModel.organization_id == actor.organization_id,
+            PersonSkillModel.membership_id == membership_id,
+            PersonSkillModel.skill_id == skill_id,
+        )
+        if not include_inactive:
+            query = query.where(PersonSkillModel.active.is_(True))
+        model = await self._session.scalar(query)
+        return _person_skill_to_domain(model) if model is not None else None
+
+    async def get_person_skill_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[VerifiedPersonSkill] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.person_skill.upsert",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_person_skill_from_json,
+        )
+
+    async def get_person_skill_delete_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[VerifiedPersonSkill] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.person_skill.delete",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_person_skill_from_json,
+        )
 
     async def upsert_person_skill(
         self,
@@ -432,7 +784,7 @@ class SqlAlchemyPeopleCapacityRepository:
             action = "people.person_skill.created"
             response_status = 201
             self._session.add(model)
-            await self._session.flush()
+            await self._flush_or_conflict()
         else:
             if expected_version is None or model.version != expected_version:
                 raise PeopleSkillVersionMismatchError(model.version)
@@ -496,8 +848,11 @@ class SqlAlchemyPeopleCapacityRepository:
                     created_at=now,
                 )
             )
-        await self._session.flush()
+        await self._flush_or_conflict()
         person_skill = _person_skill_to_domain(model)
+        response_evidence = await self.list_skill_evidence(
+            actor=actor, person_skill_id=person_skill.id
+        )
         after_data: dict[str, object] = {
             "skill_id": str(person_skill.skill_id),
             "level": person_skill.level.value,
@@ -518,8 +873,125 @@ class SqlAlchemyPeopleCapacityRepository:
         )
         record.state = IdempotencyState.COMPLETED
         record.response_status = response_status
-        record.response_body = _person_skill_to_json(person_skill)
-        return PeopleMutationResult(resource=person_skill, replayed=False)
+        record.response_body = {
+            **_person_skill_to_json(person_skill),
+            "_evidence": [_skill_evidence_to_json(item) for item in response_evidence],
+        }
+        return PeopleMutationResult(
+            resource=person_skill, replayed=False, evidence=response_evidence
+        )
+
+    async def delete_person_skill(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        skill_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[VerifiedPersonSkill]:
+        await self._activate_actor(actor)
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation="people.person_skill.delete",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_person_skill_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+        model = await self._session.scalar(
+            select(PersonSkillModel)
+            .where(
+                PersonSkillModel.organization_id == actor.organization_id,
+                PersonSkillModel.membership_id == membership_id,
+                PersonSkillModel.skill_id == skill_id,
+                PersonSkillModel.active.is_(True),
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PeopleSkillNotFoundError
+        current = _person_skill_to_domain(model)
+        if current.version != expected_version:
+            raise PeopleSkillVersionMismatchError(current.version)
+        before: dict[str, object] = {
+            "skill_id": str(current.skill_id),
+            "level": current.level.value,
+            "verified_by_membership_id": str(current.verified_by_membership_id),
+            "active": current.active,
+            "version": current.version,
+        }
+        model.active = False
+        model.version += 1
+        model.updated_at = datetime.now(UTC)
+        deleted = _person_skill_to_domain(model)
+        response_evidence = await self.list_skill_evidence(actor=actor, person_skill_id=deleted.id)
+        self._audit_success(
+            actor=actor,
+            action="people.person_skill.deleted",
+            resource_type="person_skill",
+            resource_id=deleted.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data=before,
+            after_data={**before, "active": False, "version": deleted.version},
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = {
+            **_person_skill_to_json(deleted),
+            "_evidence": [_skill_evidence_to_json(item) for item in response_evidence],
+        }
+        return PeopleMutationResult(resource=deleted, replayed=False, evidence=response_evidence)
+
+    async def list_skill_evidence(
+        self, *, actor: AuthenticatedActor, person_skill_id: UUID
+    ) -> tuple[SkillEvidence, ...]:
+        await self._activate_actor(actor)
+        models = await self._session.scalars(
+            select(SkillEvidenceModel)
+            .where(
+                SkillEvidenceModel.organization_id == actor.organization_id,
+                SkillEvidenceModel.person_skill_id == person_skill_id,
+            )
+            .order_by(SkillEvidenceModel.occurred_at, SkillEvidenceModel.id)
+        )
+        return tuple(_skill_evidence_to_domain(model) for model in models)
+
+    async def list_work_outcome_evidence(
+        self, *, actor: AuthenticatedActor, membership_id: UUID
+    ) -> tuple[WorkOutcomeEvidence, ...]:
+        await self._activate_actor(actor)
+        models = await self._session.scalars(
+            select(WorkOutcomeEvidenceModel)
+            .where(
+                WorkOutcomeEvidenceModel.organization_id == actor.organization_id,
+                WorkOutcomeEvidenceModel.membership_id == membership_id,
+            )
+            .order_by(WorkOutcomeEvidenceModel.observed_at, WorkOutcomeEvidenceModel.id)
+        )
+        return tuple(_work_evidence_to_domain(model) for model in models)
+
+    async def get_work_outcome_evidence_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[WorkOutcomeEvidence] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.work_outcome_evidence.create",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_work_evidence_from_json,
+        )
 
     async def record_work_outcome_evidence(
         self,
@@ -563,7 +1035,7 @@ class SqlAlchemyPeopleCapacityRepository:
             created_at=now,
         )
         self._session.add(model)
-        await self._session.flush()
+        await self._flush_or_conflict()
         evidence = _work_evidence_to_domain(model)
         after_data: dict[str, object] = {
             "membership_id": str(evidence.membership_id),
@@ -586,6 +1058,34 @@ class SqlAlchemyPeopleCapacityRepository:
         record.response_status = 201
         record.response_body = _work_evidence_to_json(evidence)
         return PeopleMutationResult(resource=evidence, replayed=False)
+
+    async def audit_rejection(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        reason_code: str,
+        idempotency_key: str | None = None,
+        resource_id: UUID | None = None,
+    ) -> None:
+        await self._activate_actor(actor)
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                actor_membership_id=actor.membership_id,
+                action=action,
+                outcome=AuditOutcome.REJECTED,
+                resource_type="people_capacity",
+                resource_id=resource_id,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                before_data={},
+                after_data={},
+                reason_data={"code": reason_code},
+            )
+        )
 
 
 class SqlAlchemyPeopleCapacityTransactionFactory:

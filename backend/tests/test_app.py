@@ -43,6 +43,11 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/projects/{project_id}/weeks",
         "/api/v1/projects/{project_id}/weeks/{project_week_id}",
         "/api/v1/members",
+        "/api/v1/skills",
+        "/api/v1/skills/{skill_id}",
+        "/api/v1/members/{membership_id}/skills",
+        "/api/v1/members/{membership_id}/skills/{skill_id}",
+        "/api/v1/members/{membership_id}/work-evidence",
         "/api/v1/tasks",
         "/api/v1/tasks/{task_id}",
         "/api/v1/tasks/{task_id}/status",
@@ -88,6 +93,20 @@ async def test_openapi_document_is_available() -> None:
     assert project_collection["post"]["responses"]["201"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/ProjectResponse"}
+    people_mutations = (
+        response.json()["paths"]["/api/v1/skills"]["post"],
+        response.json()["paths"]["/api/v1/skills/{skill_id}"]["patch"],
+        response.json()["paths"]["/api/v1/skills/{skill_id}"]["delete"],
+        response.json()["paths"]["/api/v1/members/{membership_id}/skills/{skill_id}"]["put"],
+        response.json()["paths"]["/api/v1/members/{membership_id}/skills/{skill_id}"]["delete"],
+        response.json()["paths"]["/api/v1/members/{membership_id}/work-evidence"]["post"],
+    )
+    for operation in people_mutations:
+        parameters = {item["name"]: item for item in operation["parameters"]}
+        assert parameters["Idempotency-Key"]["required"] is True
+    for operation in (*people_mutations[1:3], people_mutations[4]):
+        parameters = {item["name"]: item for item in operation["parameters"]}
+        assert parameters["If-Match"]["required"] is True
     assert set(response.json()["paths"]["/api/v1/tasks"]) == {"get", "post"}
     assert set(response.json()["paths"]["/api/v1/tasks/{task_id}"]) == {"get", "patch"}
     assert set(response.json()["paths"]["/api/v1/tasks/{task_id}/status"]) == {"post"}

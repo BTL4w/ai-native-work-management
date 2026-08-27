@@ -3,7 +3,8 @@
     "MembershipRole": ["ADMIN", "MANAGER", "EMPLOYEE"],
     "TaskStatus": ["TO_DO", "IN_PROGRESS", "DONE"],
     "ApprovalDecision": ["APPROVE", "REJECT"],
-    "ProjectWeekStatus": ["PLANNED", "ACTIVE", "COMPLETED"]
+    "ProjectWeekStatus": ["PLANNED", "ACTIVE", "COMPLETED"],
+    "SkillEvidenceType": ["MANAGER_NOTE", "CERTIFICATE", "COMPLETED_TASK", "REVIEW_OUTCOME"]
   },
   "schemas": {
     "ProjectCreateRequest": { "required": ["name"], "properties": { "name": "string[1,160]", "description": "null|string[,5000]" } },
@@ -42,7 +43,25 @@
     "ApprovalDecisionResponse": { "required": ["approval", "proposal", "created", "workflow_run_id", "finalization_job_id"], "properties": { "approval": "ref:ApprovalStatusResponse", "proposal": "ref:DecidedProposalResponse", "created": "ref:CreatedBusinessIdsResponse", "workflow_run_id": "string:uuid", "finalization_job_id": "string:uuid" } },
     "FieldError": { "required": ["field", "code", "message_key"], "properties": { "field": "string", "code": "string", "message_key": "string" } },
     "ErrorDetail": { "required": ["code", "message_key", "request_id"], "properties": { "code": "string", "message_key": "string", "request_id": "string", "field_errors": "array:ref:FieldError", "details": "object" } },
-    "ErrorResponse": { "required": ["error"], "properties": { "error": "ref:ErrorDetail" } }
+    "ErrorResponse": { "required": ["error"], "properties": { "error": "ref:ErrorDetail" } },
+    "SkillCreateRequest": { "required": ["name"], "properties": { "name": "string[1,100]", "description": "null|string[,2000]" } },
+    "SkillUpdateRequest": { "required": [], "properties": { "name": "null|string[1,100]", "description": "null|string[,2000]", "active": "boolean|null" } },
+    "SkillResponse": { "required": ["id", "organization_id", "name", "normalized_name", "description", "active", "version", "created_at", "updated_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "name": "string", "normalized_name": "string", "description": "null|string", "active": "boolean", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time" } },
+    "SkillEvidenceCreateRequest": { "required": ["evidence_type", "summary", "source_resource_type", "source_resource_id", "occurred_at"], "properties": { "evidence_type": "enum:SkillEvidenceType", "summary": "string[1,2000]", "source_resource_type": "string[1,100]", "source_resource_id": "string:uuid", "occurred_at": "string:date-time" } },
+    "SkillEvidenceResponse": { "required": ["id", "organization_id", "person_skill_id", "evidence_type", "summary", "source_resource_type", "source_resource_id", "occurred_at", "created_by_membership_id", "created_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "person_skill_id": "string:uuid", "evidence_type": "enum:SkillEvidenceType", "summary": "string", "source_resource_type": "string", "source_resource_id": "string:uuid", "occurred_at": "string:date-time", "created_by_membership_id": "string:uuid", "created_at": "string:date-time" } },
+    "PersonSkillUpsertRequest": { "required": ["skill_id", "level"], "properties": { "skill_id": "string:uuid", "level": "integer", "evidence": "array:ref:SkillEvidenceCreateRequest" } },
+    "PersonSkillResponse": { "required": ["id", "organization_id", "membership_id", "skill_id", "level", "verified_by_membership_id", "verified_at", "version", "created_at", "updated_at", "active", "evidence"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "skill_id": "string:uuid", "level": "integer", "verified_by_membership_id": "string:uuid", "verified_at": "string:date-time", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time", "active": "boolean", "evidence": "array:ref:SkillEvidenceResponse" } },
+    "WorkOutcomeEvidenceCreateRequest": { "required": ["evidence_type", "summary", "source_resource_type", "source_resource_id", "source_resource_version", "observed_at"], "properties": { "evidence_type": "enum:SkillEvidenceType", "summary": "string[1,2000]", "source_resource_type": "string[1,100]", "source_resource_id": "string:uuid", "source_resource_version": "integer", "observed_at": "string:date-time" } },
+    "WorkOutcomeEvidenceResponse": { "required": ["id", "organization_id", "membership_id", "evidence_type", "summary", "source_resource_type", "source_resource_id", "source_resource_version", "observed_at", "created_by_membership_id", "created_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "evidence_type": "enum:SkillEvidenceType", "summary": "string", "source_resource_type": "string", "source_resource_id": "string:uuid", "source_resource_version": "integer", "observed_at": "string:date-time", "created_by_membership_id": "string:uuid", "created_at": "string:date-time" } }
+  },
+  "people_capacity": {
+    "paths": {
+      "/api/v1/skills": ["get", "post"],
+      "/api/v1/skills/{skill_id}": ["get", "patch", "delete"],
+      "/api/v1/members/{membership_id}/skills": ["get"],
+      "/api/v1/members/{membership_id}/skills/{skill_id}": ["get", "put", "delete"],
+      "/api/v1/members/{membership_id}/work-evidence": ["get", "post"]
+    }
   },
   "assistant": {
     "paths": {

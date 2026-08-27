@@ -31,6 +31,26 @@ class PeopleSkillError(Exception):
     """Base class for expected People Skills domain failures."""
 
 
+class PeopleSkillForbiddenError(PeopleSkillError):
+    """The actor may not mutate People Skills data."""
+
+
+class PeopleSkillNotFoundError(PeopleSkillError):
+    """A People Skills resource is absent or invisible to the actor."""
+
+
+class PeopleSkillReferenceError(PeopleSkillError):
+    """A tenant-owned member or evidence source is invalid."""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
+        self.field = field
+
+
+class PeopleSkillConflictError(PeopleSkillError):
+    """A unique People Skills fact already exists."""
+
+
 class InvalidSkillFieldError(PeopleSkillError):
     """A Skill or verified person-skill field violates its boundary."""
 
@@ -309,12 +329,15 @@ class PersonSkillDraft:
     ) -> PersonSkillDraft:
         if verified_by_membership_id is None:
             raise InvalidSkillFieldError("verified_by_membership_id")
+        normalized_evidence = tuple(evidence)
+        if len(normalized_evidence) > 20:
+            raise InvalidEvidenceFieldError("evidence")
         return cls(
             membership_id=membership_id,
             skill_id=skill_id,
             level=_skill_level(level),
             verified_by_membership_id=verified_by_membership_id,
-            evidence=tuple(evidence),
+            evidence=normalized_evidence,
         )
 
 
@@ -338,6 +361,8 @@ class PersonSkillPatch:
     ) -> PersonSkillPatch:
         effective_level_supplied = level_supplied or level is not None
         normalized_evidence = tuple(evidence)
+        if len(normalized_evidence) > 20:
+            raise InvalidEvidenceFieldError("evidence")
         if effective_level_supplied and level is None:
             raise InvalidSkillLevelError
         if (effective_level_supplied or normalized_evidence) and verified_by_membership_id is None:

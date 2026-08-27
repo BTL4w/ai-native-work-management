@@ -25,6 +25,11 @@ from app.modules.identity.application.auth_service import AuthService
 from app.modules.organization.adapters.member_repository import SqlAlchemyMemberTransactionFactory
 from app.modules.organization.api.members import router as member_router
 from app.modules.organization.application.member_service import MemberService
+from app.modules.people_capacity.adapters.repository import (
+    SqlAlchemyPeopleCapacityTransactionFactory,
+)
+from app.modules.people_capacity.api.routes import router as people_capacity_router
+from app.modules.people_capacity.application.service import PeopleCapacityService
 from app.modules.planning_runs.adapters.ai_runtime import PlanningAIRuntime
 from app.modules.planning_runs.adapters.transaction import (
     PostgreSQLPlanningRunTransactionFactory,
@@ -74,6 +79,7 @@ def create_app(
     approval_service: ApprovalService | None = None,
     assistant_service: AssistantService | None = None,
     assistant_event_service: AssistantEventService | None = None,
+    people_capacity_service: PeopleCapacityService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -102,6 +108,13 @@ def create_app(
             database_engine = create_database_engine(resolved_settings)
         resolved_member_service = MemberService(
             SqlAlchemyMemberTransactionFactory(create_session_factory(database_engine))
+        )
+    resolved_people_capacity_service = people_capacity_service
+    if resolved_people_capacity_service is None:
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        resolved_people_capacity_service = PeopleCapacityService(
+            SqlAlchemyPeopleCapacityTransactionFactory(create_session_factory(database_engine))
         )
     resolved_manual_planning_service = manual_planning_service
     if resolved_manual_planning_service is None:
@@ -190,6 +203,7 @@ def create_app(
     app.state.project_service = resolved_project_service
     app.state.task_service = resolved_task_service
     app.state.member_service = resolved_member_service
+    app.state.people_capacity_service = resolved_people_capacity_service
     app.state.manual_planning_service = resolved_manual_planning_service
     app.state.planning_run_service = resolved_planning_run_service
     app.state.proposal_service = resolved_proposal_service
@@ -202,7 +216,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[resolved_settings.frontend_origin],
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key", "If-Match"],
     )
 
@@ -222,6 +236,7 @@ def create_app(
     app.include_router(project_router, prefix="/api/v1")
     app.include_router(task_router, prefix="/api/v1")
     app.include_router(member_router, prefix="/api/v1")
+    app.include_router(people_capacity_router, prefix="/api/v1")
     app.include_router(planning_router, prefix="/api/v1")
     app.include_router(planning_run_router, prefix="/api/v1")
     app.include_router(assistant_router, prefix="/api/v1")

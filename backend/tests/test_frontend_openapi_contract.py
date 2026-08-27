@@ -125,3 +125,19 @@ def test_assistant_openapi_exposes_typed_transcript_contract() -> None:
     assert message_post["responses"]["202"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/AssistantTurnAcceptedResponse"
     }
+
+
+def test_people_capacity_openapi_paths_match_frontend_manifest() -> None:
+    schema = app.openapi()
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "features"
+        / "work"
+        / "openapi-contract.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["people_capacity"]
+
+    for path, expected_methods in manifest["paths"].items():
+        assert set(schema["paths"][path]) == set(expected_methods)
