@@ -93,6 +93,71 @@ describe("PeopleCapacityPanel", () => {
     expect(screen.getByRole("button", { name: "Thêm skill" })).toHaveFocus();
   });
 
+  it("reuses frozen evidence and idempotency data when an upsert response is lost", async () => {
+    const attempts: Array<{ idempotencyKey: string; occurredAt: string }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/members?is_active=true&page=1&page_size=100") return response(memberPage);
+      if (path === "/api/v1/skills") return response([skill]);
+      if (path === `/api/v1/members/${managerId}/skills`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/skills`) return response([]);
+      if (path === `/api/v1/members/${managerId}/work-evidence`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/work-evidence`) return response([workEvidence]);
+      if (path === `/api/v1/members/${employeeId}/skills/${skillId}` && init?.method === "PUT") {
+        const headers = new Headers(init.headers);
+        const body = JSON.parse(String(init.body)) as { evidence: Array<{ occurred_at: string }> };
+        attempts.push({ idempotencyKey: headers.get("Idempotency-Key") ?? "", occurredAt: body.evidence[0]?.occurred_at ?? "" });
+        if (attempts.length === 1) throw new TypeError("response lost after commit");
+        return response(savedPersonSkill, 200, { ETag: '"1"', "Idempotency-Replayed": "true" });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+    renderPeopleCapacity();
+
+    await screen.findByText("Demo Employee");
+    fireEvent.click(screen.getByRole("button", { name: "Thêm skill" }));
+    fireEvent.change(screen.getByLabelText("Thành viên"), { target: { value: employeeId } });
+    fireEvent.change(screen.getByLabelText("Skill"), { target: { value: skillId } });
+    fireEvent.change(screen.getByLabelText("Evidence"), { target: { value: "Frozen evidence" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
+
+    expect(await screen.findByText("Level 5")).toBeVisible();
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+  });
+
+  it("reuses the delete idempotency key after a lost response", async () => {
+    const deleteKeys: string[] = [];
+    const existing = { ...savedPersonSkill, level: 3, evidence: [] };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/members?is_active=true&page=1&page_size=100") return response(memberPage);
+      if (path === "/api/v1/skills") return response([skill]);
+      if (path === `/api/v1/members/${managerId}/skills`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/skills`) return response([existing]);
+      if (path === `/api/v1/members/${managerId}/work-evidence`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/work-evidence`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/skills/${skillId}` && init?.method === "DELETE") {
+        deleteKeys.push(new Headers(init.headers).get("Idempotency-Key") ?? "");
+        if (deleteKeys.length === 1) throw new TypeError("response lost after delete");
+        return response({ ...existing, active: false, version: 2 }, 200, { ETag: '"2"', "Idempotency-Replayed": "true" });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+    renderPeopleCapacity();
+
+    await screen.findByText("Level 3");
+    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
+
+    await waitFor(() => expect(screen.queryByText("Level 3")).not.toBeInTheDocument());
+    expect(deleteKeys).toHaveLength(2);
+    expect(deleteKeys[1]).toBe(deleteKeys[0]);
+  });
+
   it("closes the skill editor with Escape and restores focus to its trigger", async () => {
     stubPeopleApi();
     renderPeopleCapacity();

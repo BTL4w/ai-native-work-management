@@ -88,6 +88,7 @@ export function PeopleCapacityPanel({
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [error, setError] = useState<unknown>(null);
   const editorTrigger = useRef<HTMLButtonElement | null>(null);
+  const deleteAttempt = useRef<MutationAttempt | null>(null);
 
   function openEditor(state: EditorState, trigger: HTMLButtonElement) {
     editorTrigger.current = trigger;
@@ -112,16 +113,21 @@ export function PeopleCapacityPanel({
   }
 
   async function removeSkill(memberId: string, personSkill: PersonSkill) {
-    const idempotencyKey = mutationKey();
+    const fingerprint = JSON.stringify({ memberId, skillId: personSkill.skill_id, version: personSkill.version });
+    if (deleteAttempt.current?.fingerprint !== fingerprint) {
+      deleteAttempt.current = { fingerprint, key: mutationKey() };
+    }
     setError(null);
     try {
-      await deletePersonSkill(memberId, personSkill.skill_id, personSkill.version, idempotencyKey);
+      await deletePersonSkill(memberId, personSkill.skill_id, personSkill.version, deleteAttempt.current.key);
+      deleteAttempt.current = null;
       replacePersonSkill(memberId, null, personSkill.skill_id);
     } catch (caught) {
       setError(caught);
       if (caught instanceof ApiError && caught.code === "RESOURCE_VERSION_MISMATCH") {
         await people.refetch();
       }
+      if (isDefinitiveMutationRejection(caught)) deleteAttempt.current = null;
     }
   }
 
@@ -190,6 +196,7 @@ function PersonCard({ canManage, person, skills, verifierName, onEdit, onDelete 
 
 type EditorField = "member" | "skill" | "level" | "evidence";
 type EditorFieldErrors = Partial<Record<EditorField, string>>;
+type EvidenceAttempt = { fingerprint: string; occurredAt: string };
 
 function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSaved, onStale }: {
   actorMembershipId: string;
@@ -213,6 +220,7 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
   const dialog = useRef<HTMLFormElement>(null);
   const memberField = useRef<HTMLSelectElement>(null);
   const levelField = useRef<HTMLSelectElement>(null);
+  const evidenceAttempt = useRef<EvidenceAttempt | null>(null);
   const isEditing = personSkill !== undefined;
 
   useEffect(() => {
@@ -274,21 +282,26 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
     }
     const numericLevel = Number(level);
     if (!Number.isInteger(numericLevel) || numericLevel < 1 || numericLevel > 5) { setFieldErrors({ level: t("error.level") }); return; }
+    const evidenceSummary = evidence.trim();
+    const evidenceFingerprint = JSON.stringify({ memberId, skillId, level: numericLevel, evidence: evidenceSummary });
+    if (evidenceAttempt.current?.fingerprint !== evidenceFingerprint) {
+      evidenceAttempt.current = { fingerprint: evidenceFingerprint, occurredAt: new Date().toISOString() };
+    }
     const payload = {
       skill_id: skillId,
       level: numericLevel,
-      evidence: evidence.trim() ? [{
+      evidence: evidenceSummary ? [{
         evidence_type: "MANAGER_NOTE" as const,
-        summary: evidence.trim(),
+        summary: evidenceSummary,
         source_resource_type: "manager_note",
         source_resource_id: actorMembershipId,
-        occurred_at: new Date().toISOString(),
+        occurred_at: evidenceAttempt.current.occurredAt,
       }] : [],
     };
     setSubmitting(true); setFieldErrors({}); setFormError(null);
     try {
       const result = await setPersonSkill(memberId, skillId, payload, personSkill?.version, attempt.keyFor({ memberId, ...payload, version: personSkill?.version }));
-      attempt.reset(); onSaved(memberId, result.data);
+      attempt.reset(); evidenceAttempt.current = null; onSaved(memberId, result.data);
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "RESOURCE_VERSION_MISMATCH") {
         const refreshed = await onStale(memberId, skillId);
@@ -298,7 +311,10 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
         const mapped = caught instanceof ApiError ? apiFieldErrors(caught) : {};
         if (Object.keys(mapped).length) setFieldErrors(mapped);
         else setFormError(t("error.mutation"));
-        if (isDefinitiveMutationRejection(caught)) attempt.reset();
+        if (isDefinitiveMutationRejection(caught)) {
+          attempt.reset();
+          evidenceAttempt.current = null;
+        }
       }
     } finally { setSubmitting(false); }
   }
