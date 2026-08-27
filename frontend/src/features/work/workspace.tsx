@@ -185,6 +185,12 @@ export function WorkWorkspace({
           <PeopleCapacityPanel
             organizationId={actor.membership.organization_id}
             actorMembershipId={actor.membership.id}
+            actorMember={{
+              membership_id: actor.membership.id,
+              display_name: actor.user.display_name,
+              role: actor.membership.role,
+              is_active: true,
+            }}
             canManage={canManage}
           />
         ) : view === "projects" ? (
