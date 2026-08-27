@@ -125,6 +125,39 @@ describe("PeopleCapacityPanel", () => {
     expect(saveButton).toHaveFocus();
   });
 
+  it("keeps focus in the dialog while every save control is disabled", async () => {
+    let resolveMutation: (result: Response) => void = () => undefined;
+    const mutation = new Promise<Response>((resolve) => { resolveMutation = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/members?is_active=true&page=1&page_size=100") return response(memberPage);
+      if (path === "/api/v1/skills") return response([skill]);
+      if (path === `/api/v1/members/${managerId}/skills`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/skills`) return response([]);
+      if (path === `/api/v1/members/${managerId}/work-evidence`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/work-evidence`) return response([workEvidence]);
+      if (path === `/api/v1/members/${employeeId}/skills/${skillId}` && init?.method === "PUT") return mutation;
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+    renderPeopleCapacity();
+
+    await screen.findByText("Demo Employee");
+    fireEvent.click(screen.getByRole("button", { name: "Thêm skill" }));
+    fireEvent.change(screen.getByLabelText("Thành viên"), { target: { value: employeeId } });
+    fireEvent.change(screen.getByLabelText("Skill"), { target: { value: skillId } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Đang lưu…" })).toBeDisabled());
+
+    const dialog = screen.getByRole("dialog", { name: "Thêm kỹ năng đã xác minh" });
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(dialog).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(dialog).toHaveFocus();
+
+    resolveMutation(response(savedPersonSkill, 200, { ETag: '"1"' }));
+    expect(await screen.findByText("Level 5")).toBeVisible();
+  });
+
   it("shows versioned work-outcome provenance without a global score", async () => {
     stubPeopleApi();
     renderPeopleCapacity();
