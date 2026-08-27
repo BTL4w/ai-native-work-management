@@ -360,4 +360,19 @@ describe("PeopleCapacityPanel", () => {
     expect(await screen.findByText("Mức độ phải từ 1 đến 5.")).toBeVisible();
     expect(screen.getByLabelText("Mức độ")).toHaveAttribute("aria-describedby", "people-skill-level-error");
   });
+
+  it("maps local payload validation errors to the evidence field", async () => {
+    stubPeopleApi();
+    renderPeopleCapacity();
+
+    await screen.findByText("Demo Employee");
+    fireEvent.click(screen.getByRole("button", { name: "Thêm skill" }));
+    fireEvent.change(screen.getByLabelText("Thành viên"), { target: { value: employeeId } });
+    fireEvent.change(screen.getByLabelText("Skill"), { target: { value: skillId } });
+    fireEvent.change(screen.getByLabelText("Evidence"), { target: { value: "x".repeat(2_001) } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
+
+    expect(await screen.findByText("Một hoặc nhiều trường không hợp lệ.")).toBeVisible();
+    expect(screen.getByLabelText("Evidence")).toHaveAttribute("aria-describedby", "people-skill-evidence-error");
+  });
 });

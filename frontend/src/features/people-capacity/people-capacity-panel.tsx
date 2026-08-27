@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ZodError } from "zod";
 
 import { listMembers } from "@/features/work/api";
 import type { Member } from "@/features/work/contracts";
@@ -308,7 +309,15 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
         if (refreshed) setEditedPersonSkill(refreshed);
         setFormError(t("error.stale"));
       } else {
-        const mapped = caught instanceof ApiError ? apiFieldErrors(caught) : {};
+        const mapped = caught instanceof ApiError
+          ? apiFieldErrors(caught)
+          : caught instanceof ZodError
+          ? caught.issues.reduce<EditorFieldErrors>((result, issue) => {
+            const field = issue.path[0] === "evidence" ? "evidence" : issue.path[0] === "level" ? "level" : null;
+            if (field) result[field] = messageForField(field);
+            return result;
+          }, {})
+          : {};
         if (Object.keys(mapped).length) setFieldErrors(mapped);
         else setFormError(t("error.mutation"));
         if (isDefinitiveMutationRejection(caught)) {

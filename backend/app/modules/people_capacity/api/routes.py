@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Request, Response
 from fastapi import status as http_status
 
-from app.api.errors import ApplicationError, ErrorResponse
+from app.api.errors import ApplicationError, ErrorResponse, FieldError
 from app.modules.identity.api.dependencies import ActorDependency
 from app.modules.people_capacity.api.dependencies import (
     PeopleCapacityServiceDependency,
@@ -110,8 +110,18 @@ def _raise(error: PeopleSkillError) -> NoReturn:
             PeopleSkillReferenceError,
         ),
     ):
+        field = getattr(error, "field", "body")
         mapped = ApplicationError(
-            status_code=422, code="VALIDATION_FAILED", message_key="common.error.validation"
+            status_code=422,
+            code="VALIDATION_FAILED",
+            message_key="common.error.validation",
+            field_errors=[
+                FieldError(
+                    field=field,
+                    code=type(error).__name__.upper(),
+                    message_key="validation.invalid",
+                )
+            ],
         )
     else:
         raise error

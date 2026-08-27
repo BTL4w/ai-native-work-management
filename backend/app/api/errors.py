@@ -48,12 +48,14 @@ class ApplicationError(Exception):
         status_code: int,
         code: str,
         message_key: str,
+        field_errors: list[FieldError] | None = None,
         details: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
         self.message_key = message_key
+        self.field_errors = list(field_errors or [])
         self.details = dict(details or {})
 
 
@@ -114,6 +116,7 @@ def register_error_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             code=exc.code,
             message_key=exc.message_key,
+            field_errors=exc.field_errors,
             details=exc.details,
         )
 

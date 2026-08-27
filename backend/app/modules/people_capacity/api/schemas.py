@@ -31,6 +31,7 @@ class SkillUpdateRequest(BaseModel):
 
 
 class SkillResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: UUID
     organization_id: UUID
     name: str
@@ -56,6 +57,7 @@ class SkillEvidenceCreateRequest(BaseModel):
 
 
 class SkillEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: UUID
     organization_id: UUID
     person_skill_id: UUID
@@ -82,11 +84,12 @@ class PersonSkillUpsertRequest(BaseModel):
 
 
 class PersonSkillResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: UUID
     organization_id: UUID
     membership_id: UUID
     skill_id: UUID
-    level: int
+    level: int = Field(ge=1, le=5)
     verified_by_membership_id: UUID
     verified_at: datetime
     version: int
@@ -115,6 +118,7 @@ class WorkOutcomeEvidenceCreateRequest(BaseModel):
 
 
 class WorkOutcomeEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: UUID
     organization_id: UUID
     membership_id: UUID

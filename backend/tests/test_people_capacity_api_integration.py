@@ -206,6 +206,13 @@ async def test_person_skill_invalid_evidence_uses_structured_validation_error() 
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert response.json()["error"]["field_errors"] == [
+        {
+            "field": "source_resource_type",
+            "code": "PEOPLESKILLREFERENCEERROR",
+            "message_key": "validation.invalid",
+        }
+    ]
 
 
 @pytest.mark.asyncio
