@@ -51,7 +51,7 @@
   "work": {
     "product": "Work Management",
     "navigationLabel": "Điều hướng công việc",
-    "nav": { "chat": "Trợ lý AI", "projects": "Projects", "myTasks": "Task của tôi", "assignTask": "Giao task" },
+    "nav": { "chat": "Trợ lý AI", "projects": "Projects", "myTasks": "Task của tôi", "peopleCapacity": "Con người & kỹ năng", "assignTask": "Giao task" },
     "sidebar": {
       "workspace": "Không gian làm việc",
       "account": "Tài khoản",
@@ -119,6 +119,28 @@
       "invalidField": "Một hoặc nhiều trường chưa hợp lệ."
     }
   },
+  "people": {
+    "eyebrow": "Tổ chức",
+    "title": "Con người & kỹ năng",
+    "description": "Kỹ năng đã xác minh và bằng chứng công việc có nguồn gốc rõ ràng.",
+    "loading": "Đang tải thành viên…",
+    "empty": "Chưa có thành viên đang hoạt động.",
+    "skills": "Kỹ năng đã xác minh",
+    "skillsLabel": "Kỹ năng của {name}",
+    "noSkills": "Chưa có kỹ năng đã xác minh.",
+    "workEvidence": "Bằng chứng kết quả công việc",
+    "workEvidenceLabel": "Bằng chứng công việc của {name}",
+    "noWorkEvidence": "Chưa có bằng chứng kết quả công việc.",
+    "unknownSkill": "Kỹ năng không xác định",
+    "unknownMember": "Thành viên không xác định",
+    "level": "Level {level}",
+    "verifiedBy": "Verified by {name}",
+    "role": { "ADMIN": "Quản trị viên", "MANAGER": "Quản lý", "EMPLOYEE": "Nhân viên" },
+    "saving": "Đang lưu…",
+    "action": { "add": "Thêm skill", "edit": "Sửa", "delete": "Xóa", "save": "Lưu skill", "cancel": "Hủy", "reload": "Tải lại dữ liệu" },
+    "editor": { "title": "Trình sửa kỹ năng", "addTitle": "Thêm kỹ năng đã xác minh", "editTitle": "Sửa kỹ năng đã xác minh", "member": "Thành viên", "skill": "Skill", "selectSkill": "Chọn skill", "level": "Mức độ", "evidence": "Evidence", "evidenceHint": "Evidence được lưu là ghi chú của Manager, có liên kết với người xác minh." },
+    "error": { "load": "Chưa thể tải dữ liệu con người và kỹ năng.", "mutation": "Không thể hoàn tất thay đổi kỹ năng.", "stale": "Dữ liệu kỹ năng đã thay đổi. Hãy tải lại trước khi thử lại.", "required": "Chọn thành viên và skill.", "level": "Mức độ phải từ 1 đến 5.", "invalid": "Một hoặc nhiều trường không hợp lệ." }
+  },
   "ai": {
     "eyebrow": "Lập kế hoạch có phê duyệt",
     "title": "Trợ lý AI",
@@ -164,7 +186,7 @@
     "eyebrow": "Không gian hội thoại",
     "title": "Trợ lý AI",
     "loading": "Đang tải cuộc trò chuyện…",
-    "navigation": { "label": "Điều hướng chính", "projects": "Projects", "myTasks": "Task của tôi", "assignTask": "Giao task" },
+    "navigation": { "label": "Điều hướng chính", "projects": "Projects", "myTasks": "Task của tôi", "peopleCapacity": "Con người & kỹ năng", "assignTask": "Giao task" },
     "conversations": { "label": "Danh sách cuộc trò chuyện", "new": "Cuộc trò chuyện mới", "recent": "Gần đây", "toggle": "Ẩn hoặc hiện danh sách cuộc trò chuyện", "empty": "Chưa có cuộc trò chuyện.", "untitled": "Cuộc trò chuyện mới" },
     "composer": { "label": "Nhắn cho Trợ lý AI", "placeholder": "Hỏi về công việc hoặc yêu cầu lập kế hoạch…", "mode": "Planning", "send": "Gửi" },
     "empty": { "title": "Tôi có thể giúp gì cho bạn?", "description": "Hỏi về công việc hiện tại hoặc mô tả project bạn muốn lập kế hoạch." },

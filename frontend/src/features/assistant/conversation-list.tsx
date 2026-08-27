@@ -6,9 +6,9 @@ import { LocaleSwitcher } from "@/shared/i18n/locale-switcher";
 
 import type { AssistantConversation } from "./contracts";
 
-export type AssistantNavigationSection = "assistant" | "projects" | "myTasks" | "assignTask";
+export type AssistantNavigationSection = "assistant" | "projects" | "myTasks" | "peopleCapacity" | "assignTask";
 
-type IconName = "new" | "projects" | "tasks" | "assign" | "collapse" | "expand" | "chat" | "logout";
+type IconName = "new" | "projects" | "tasks" | "people" | "assign" | "collapse" | "expand" | "chat" | "logout";
 
 export function ConversationList({
   actor,
@@ -21,6 +21,7 @@ export function ConversationList({
   onToggle,
   onOpenProjects,
   onOpenMyTasks,
+  onOpenPeopleCapacity,
   onAssignTask,
   isLoggingOut = false,
   logoutError = false,
@@ -36,6 +37,7 @@ export function ConversationList({
   onToggle: () => void;
   onOpenProjects?: () => void;
   onOpenMyTasks?: () => void;
+  onOpenPeopleCapacity?: () => void;
   onAssignTask?: () => void;
   isLoggingOut?: boolean;
   logoutError?: boolean;
@@ -57,6 +59,7 @@ export function ConversationList({
       <SidebarAction icon="new" label={t("conversations.new")} collapsed={collapsed} active={activeSection === "assistant" && selectedId === null} onClick={onNew} />
       {onOpenProjects ? <SidebarAction icon="projects" label={t("navigation.projects")} collapsed={collapsed} active={activeSection === "projects"} onClick={onOpenProjects} /> : null}
       {onOpenMyTasks ? <SidebarAction icon="tasks" label={t("navigation.myTasks")} collapsed={collapsed} active={activeSection === "myTasks"} onClick={onOpenMyTasks} /> : null}
+      {onOpenPeopleCapacity ? <SidebarAction icon="people" label={t("navigation.peopleCapacity")} collapsed={collapsed} active={activeSection === "peopleCapacity"} onClick={onOpenPeopleCapacity} /> : null}
       {onAssignTask ? <SidebarAction icon="assign" label={t("navigation.assignTask")} collapsed={collapsed} active={activeSection === "assignTask"} onClick={onAssignTask} /> : null}
     </nav>
 
@@ -119,6 +122,7 @@ function SidebarIcon({ name }: { name: IconName }) {
     new: <><path d="M12 5v14M5 12h14" /><rect x="3" y="3" width="18" height="18" rx="5" /></>,
     projects: <><rect x="3" y="4" width="18" height="16" rx="4" /><path d="M8 9h8M8 13h5" /></>,
     tasks: <><rect x="3" y="3" width="18" height="18" rx="5" /><path d="m8 12 2.2 2.2L16.5 8" /></>,
+    people: <><circle cx="9" cy="8" r="3" /><circle cx="17" cy="9" r="2" /><path d="M3.5 20c.5-3.6 2.4-5.5 5.5-5.5s5 1.9 5.5 5.5M14 20c.2-1.8.9-3.1 2.4-3.8" /></>,
     assign: <><circle cx="9" cy="9" r="3" /><path d="M4 20c.5-3.2 2.2-5 5-5 1.2 0 2.2.3 3 .9M17 12v8M13 16h8" /></>,
     collapse: <path d="m14 7-5 5 5 5" />,
     expand: <path d="m10 7 5 5-5 5" />,

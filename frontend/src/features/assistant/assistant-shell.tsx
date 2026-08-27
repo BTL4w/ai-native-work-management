@@ -53,6 +53,7 @@ export function AssistantShell({
   onContinueManually,
   onOpenProjects,
   onOpenMyTasks,
+  onOpenPeopleCapacity,
   onAssignTask,
   isLoggingOut = false,
   logoutError = false,
@@ -68,6 +69,7 @@ export function AssistantShell({
   onContinueManually?: () => void;
   onOpenProjects?: () => void;
   onOpenMyTasks?: () => void;
+  onOpenPeopleCapacity?: () => void;
   onAssignTask?: () => void;
   isLoggingOut?: boolean;
   logoutError?: boolean;
@@ -216,6 +218,7 @@ export function AssistantShell({
       onToggle={() => setCollapsed((value) => !value)}
       onOpenProjects={onOpenProjects}
       onOpenMyTasks={onOpenMyTasks}
+      onOpenPeopleCapacity={onOpenPeopleCapacity}
       onAssignTask={onAssignTask}
       isLoggingOut={isLoggingOut}
       logoutError={logoutError}

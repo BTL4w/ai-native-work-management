@@ -17,6 +17,7 @@ import { ApiError, isDefinitiveMutationRejection } from "@/shared/api/client";
 import { ProjectPlanPanel } from "@/features/planning/project-plan";
 import { listProjectWeeks } from "@/features/planning/api";
 import { AiAssistant } from "@/features/ai-proposals/ai-assistant";
+import { PeopleCapacityPanel } from "@/features/people-capacity/people-capacity-panel";
 
 import {
   createProject,
@@ -33,7 +34,7 @@ import {
 } from "./api";
 import type { Member, Project, ProjectPage, Task, TaskPage, TaskStatus } from "./contracts";
 
-type View = "aiAssistant" | "projects" | "myTasks";
+type View = "aiAssistant" | "projects" | "myTasks" | "peopleCapacity";
 type ProjectFormState = { project: Project | null };
 type TaskFormState = { task: Task | null };
 type WorkQueryKey = readonly ["work", string, string];
@@ -140,6 +141,14 @@ export function WorkWorkspace({
     setSelectedTask(null);
   }
 
+  function openPeopleCapacity() {
+    clearConversationLocation();
+    setAssignmentMode(false);
+    setView("peopleCapacity");
+    setSelectedProject(null);
+    setSelectedTask(null);
+  }
+
   function openAssignmentFlow() {
     clearConversationLocation();
     setView("projects");
@@ -168,9 +177,17 @@ export function WorkWorkspace({
     ? t("nav.chat")
     : view === "myTasks"
     ? t("task.myTitle")
+    : view === "peopleCapacity"
+    ? t("nav.peopleCapacity")
     : selectedProject?.name ?? t("project.title");
 
-  const workspaceContent = view === "aiAssistant" ? undefined : view === "projects" ? (
+  const workspaceContent = view === "aiAssistant" ? undefined : view === "peopleCapacity" ? (
+          <PeopleCapacityPanel
+            organizationId={actor.membership.organization_id}
+            actorMembershipId={actor.membership.id}
+            canManage={canManage}
+          />
+        ) : view === "projects" ? (
           <ProjectsView
             canManage={canManage}
             projects={projects.data ?? emptyProjectPage}
@@ -252,6 +269,7 @@ export function WorkWorkspace({
         onContinueManually={openProjects}
         onOpenProjects={openProjects}
         onOpenMyTasks={openMyTasks}
+        onOpenPeopleCapacity={openPeopleCapacity}
         onAssignTask={canManage ? openAssignmentFlow : undefined}
         isLoggingOut={isLoggingOut}
         logoutError={logoutError}

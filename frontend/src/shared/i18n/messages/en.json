@@ -51,7 +51,7 @@
   "work": {
     "product": "Work Management",
     "navigationLabel": "Work navigation",
-    "nav": { "chat": "AI Assistant", "projects": "Projects", "myTasks": "My Tasks", "assignTask": "Assign task" },
+    "nav": { "chat": "AI Assistant", "projects": "Projects", "myTasks": "My Tasks", "peopleCapacity": "People & skills", "assignTask": "Assign task" },
     "sidebar": {
       "workspace": "Workspace",
       "account": "Account",
@@ -119,6 +119,28 @@
       "invalidField": "One or more fields are invalid."
     }
   },
+  "people": {
+    "eyebrow": "Organization",
+    "title": "People & skills",
+    "description": "Verified skills and provenance-linked work evidence.",
+    "loading": "Loading members…",
+    "empty": "There are no active members.",
+    "skills": "Verified skills",
+    "skillsLabel": "Skills for {name}",
+    "noSkills": "No verified skills yet.",
+    "workEvidence": "Work-outcome evidence",
+    "workEvidenceLabel": "Work evidence for {name}",
+    "noWorkEvidence": "No work-outcome evidence yet.",
+    "unknownSkill": "Unknown skill",
+    "unknownMember": "Unknown member",
+    "level": "Level {level}",
+    "verifiedBy": "Verified by {name}",
+    "role": { "ADMIN": "Administrator", "MANAGER": "Manager", "EMPLOYEE": "Employee" },
+    "saving": "Saving…",
+    "action": { "add": "Add skill", "edit": "Edit", "delete": "Delete", "save": "Save skill", "cancel": "Cancel", "reload": "Reload data" },
+    "editor": { "title": "Skill editor", "addTitle": "Add verified skill", "editTitle": "Edit verified skill", "member": "Member", "skill": "Skill", "selectSkill": "Select a skill", "level": "Level", "evidence": "Evidence", "evidenceHint": "Evidence is saved as a Manager note linked to the verifying member." },
+    "error": { "load": "We could not load people and skills.", "mutation": "We could not complete this skill change.", "stale": "This skill data changed. Reload it before trying again.", "required": "Select a member and a skill.", "level": "Level must be from 1 through 5.", "invalid": "One or more fields are invalid." }
+  },
   "ai": {
     "eyebrow": "Approval-gated planning",
     "title": "AI Assistant",
@@ -164,7 +186,7 @@
     "eyebrow": "Conversation workspace",
     "title": "AI Assistant",
     "loading": "Loading conversation…",
-    "navigation": { "label": "Primary navigation", "projects": "Projects", "myTasks": "My Tasks", "assignTask": "Assign task" },
+    "navigation": { "label": "Primary navigation", "projects": "Projects", "myTasks": "My Tasks", "peopleCapacity": "People & skills", "assignTask": "Assign task" },
     "conversations": { "label": "Conversation list", "new": "New conversation", "recent": "Recent", "toggle": "Show or hide conversation list", "empty": "No conversations yet.", "untitled": "New conversation" },
     "composer": { "label": "Message the AI Assistant", "placeholder": "Ask about work or request a project plan…", "mode": "Planning", "send": "Send" },
     "empty": { "title": "How can I help?", "description": "Ask about current work or describe a project you want to plan." },

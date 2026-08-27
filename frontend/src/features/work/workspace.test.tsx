@@ -253,6 +253,25 @@ describe("WorkWorkspace", () => {
     expect(document.documentElement.lang).toBe("en");
   });
 
+  it("opens the bilingual People and skills workspace without replacing the Assistant shell", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [] });
+      if (path === "/api/v1/members?is_active=true&page=1&page_size=100") return response(page([{ membership_id: managerActor.membership.id, display_name: "Demo Manager", role: "MANAGER", is_active: true }]));
+      if (path === "/api/v1/skills") return response([]);
+      if (path === `/api/v1/members/${managerActor.membership.id}/skills`) return response([]);
+      if (path === `/api/v1/members/${managerActor.membership.id}/work-evidence`) return response([]);
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    const { container } = renderWithAppProviders(<WorkWorkspace actor={managerActor} />, "en");
+    fireEvent.click(await screen.findByRole("button", { name: "People & skills" }));
+
+    expect(await screen.findByRole("heading", { name: "People & skills" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Demo Manager" })).toBeVisible();
+    expect(container.querySelectorAll("aside")).toHaveLength(1);
+  });
+
   it("reuses the status idempotency key after an uncertain network failure", async () => {
     const employeeActor = {
       ...managerActor,
