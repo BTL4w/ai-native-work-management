@@ -210,6 +210,7 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
   const [fieldErrors, setFieldErrors] = useState<EditorFieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const dialog = useRef<HTMLFormElement>(null);
   const memberField = useRef<HTMLSelectElement>(null);
   const levelField = useRef<HTMLSelectElement>(null);
   const isEditing = personSkill !== undefined;
@@ -217,6 +218,31 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
   useEffect(() => {
     (isEditing ? levelField.current : memberField.current)?.focus();
   }, [isEditing]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog.current) return;
+      const focusable = Array.from(dialog.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+      ));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   function messageForField(field: EditorField) {
     if (field === "level") return t("error.level");
@@ -273,7 +299,7 @@ function SkillEditor({ actorMembershipId, members, skills, state, onClose, onSav
     } finally { setSubmitting(false); }
   }
 
-  return <div className="work-dialog-backdrop" role="presentation"><form aria-labelledby="people-skill-editor-title" aria-modal="true" className="work-dialog people-skill-editor" onSubmit={submit} role="dialog">
+  return <div className="work-dialog-backdrop" role="presentation"><form ref={dialog} aria-labelledby="people-skill-editor-title" aria-modal="true" className="work-dialog people-skill-editor" onSubmit={submit} role="dialog">
     <h2 id="people-skill-editor-title">{isEditing ? t("editor.editTitle") : t("editor.addTitle")}</h2>
     <label>{t("editor.member")}<select aria-describedby={fieldErrors.member ? "people-skill-member-error" : undefined} aria-invalid={Boolean(fieldErrors.member)} aria-label={t("editor.member")} className="form-input" disabled={submitting || isEditing} ref={memberField} value={memberId} onChange={(event) => setMemberId(event.target.value)}>{members.map((member) => <option key={member.membership_id} value={member.membership_id}>{member.display_name}</option>)}</select></label>
     {fieldErrors.member ? <p id="people-skill-member-error" role="alert">{fieldErrors.member}</p> : null}

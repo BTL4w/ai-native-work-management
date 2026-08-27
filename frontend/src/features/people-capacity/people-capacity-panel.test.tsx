@@ -93,6 +93,38 @@ describe("PeopleCapacityPanel", () => {
     expect(screen.getByRole("button", { name: "Thêm skill" })).toHaveFocus();
   });
 
+  it("closes the skill editor with Escape and restores focus to its trigger", async () => {
+    stubPeopleApi();
+    renderPeopleCapacity();
+
+    await screen.findByText("Demo Employee");
+    const addButton = screen.getByRole("button", { name: "Thêm skill" });
+    fireEvent.click(addButton);
+    expect(await screen.findByRole("dialog", { name: "Thêm kỹ năng đã xác minh" })).toBeVisible();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(addButton).toHaveFocus();
+  });
+
+  it("wraps Tab and Shift+Tab focus within the skill editor", async () => {
+    stubPeopleApi();
+    renderPeopleCapacity();
+
+    await screen.findByText("Demo Employee");
+    fireEvent.click(screen.getByRole("button", { name: "Thêm skill" }));
+    await screen.findByRole("dialog", { name: "Thêm kỹ năng đã xác minh" });
+    const memberField = screen.getByLabelText("Thành viên");
+    const saveButton = screen.getByRole("button", { name: "Lưu skill" });
+    saveButton.focus();
+
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(memberField).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(saveButton).toHaveFocus();
+  });
+
   it("shows versioned work-outcome provenance without a global score", async () => {
     stubPeopleApi();
     renderPeopleCapacity();
