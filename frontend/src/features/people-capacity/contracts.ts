@@ -2,6 +2,8 @@ import { z } from "zod";
 
 const uuid = z.uuid();
 const timestamp = z.iso.datetime();
+const date = z.iso.date();
+const hours = z.number().int().min(0).max(168);
 
 export const skillEvidenceTypeSchema = z.enum([
   "MANAGER_NOTE",
@@ -76,8 +78,81 @@ export const personSkillUpsertSchema = z.object({
   }).strict()).max(20),
 }).strict();
 
+export const capacityKindSchema = z.enum(["DEFAULT", "OVERRIDE"]);
+
+export const capacityEntrySchema = z.object({
+  id: uuid,
+  organization_id: uuid,
+  membership_id: uuid,
+  kind: capacityKindSchema,
+  hours,
+  effective_from: date,
+  effective_to: date,
+  week_start: date.nullable(),
+  version: z.number().int().positive(),
+  created_at: timestamp,
+  updated_at: timestamp,
+}).strict();
+
+export const capacityUpsertSchema = z.object({
+  membership_id: uuid,
+  kind: capacityKindSchema,
+  week_start: date.nullish(),
+  hours,
+  effective_from: date.nullish(),
+  effective_to: date.nullish(),
+}).strict().superRefine((value, context) => {
+  if (value.kind === "DEFAULT" && value.week_start != null) {
+    context.addIssue({ code: "custom", path: ["week_start"], message: "Default capacity cannot target a week" });
+  }
+  if (value.kind === "OVERRIDE" && value.week_start == null) {
+    context.addIssue({ code: "custom", path: ["week_start"], message: "Override capacity requires a week" });
+  }
+});
+
+export const leaveEntrySchema = z.object({
+  id: uuid,
+  organization_id: uuid,
+  membership_id: uuid,
+  start_date: date,
+  end_date: date,
+  unavailable_hours: hours,
+  version: z.number().int().positive(),
+  created_at: timestamp,
+  updated_at: timestamp,
+}).strict();
+
+export const leaveCreateSchema = z.object({
+  membership_id: uuid,
+  start_date: date,
+  end_date: date,
+  unavailable_hours: hours,
+}).strict();
+
+export const leaveUpdateSchema = z.object({
+  start_date: date.nullish(),
+  end_date: date.nullish(),
+  unavailable_hours: hours.nullish(),
+}).strict();
+
+export const weeklyWorkloadSchema = z.object({
+  membership_id: uuid,
+  project_week_id: uuid,
+  effective_capacity_hours: z.number().int().nonnegative(),
+  allocated_effort_hours: z.number().int().nonnegative(),
+  residual_capacity_hours: z.number().int().nonnegative(),
+  workload_ratio: z.string().regex(/^\d+(?:\.\d+)?$/).nullable(),
+}).strict();
+
 export type Skill = z.infer<typeof skillSchema>;
 export type SkillEvidence = z.infer<typeof skillEvidenceSchema>;
 export type PersonSkill = z.infer<typeof personSkillSchema>;
 export type WorkOutcomeEvidence = z.infer<typeof workOutcomeEvidenceSchema>;
 export type PersonSkillUpsert = z.infer<typeof personSkillUpsertSchema>;
+export type CapacityKind = z.infer<typeof capacityKindSchema>;
+export type CapacityEntry = z.infer<typeof capacityEntrySchema>;
+export type CapacityUpsert = z.infer<typeof capacityUpsertSchema>;
+export type LeaveEntry = z.infer<typeof leaveEntrySchema>;
+export type LeaveCreate = z.infer<typeof leaveCreateSchema>;
+export type LeaveUpdate = z.infer<typeof leaveUpdateSchema>;
+export type WeeklyWorkload = z.infer<typeof weeklyWorkloadSchema>;

@@ -17,6 +17,7 @@ import {
   setPersonSkill,
 } from "./api";
 import type { PersonSkill, Skill, WorkOutcomeEvidence } from "./contracts";
+import { AvailabilityPanel } from "./availability-panel";
 
 export const peopleCapacityKeys = {
   scope: (organizationId: string, actorMembershipId: string) =>
@@ -143,6 +144,12 @@ export function PeopleCapacityPanel({
       {canManage ? <button className="primary-button" disabled={data.people.length === 0 || !data.skills.some((skill) => skill.active)} type="button" onClick={(event) => openEditor({ memberId: data.people[0]?.membership_id ?? actorMembershipId }, event.currentTarget)}>{t("action.add")}</button> : null}
     </div>
     {error ? <div className="people-safe-error" role="alert"><p>{error instanceof ApiError && error.code === "RESOURCE_VERSION_MISMATCH" ? t("error.stale") : t("error.mutation")}</p>{error instanceof ApiError && error.code === "RESOURCE_VERSION_MISMATCH" ? <button className="text-button" type="button" onClick={() => void people.refetch()}>{t("action.reload")}</button> : null}</div> : null}
+    {data.people.length > 0 ? <AvailabilityPanel
+      actorMembershipId={actorMembershipId}
+      canManage={canManage}
+      members={data.people}
+      organizationId={organizationId}
+    /> : null}
     {data.people.length === 0 ? <p className="people-empty">{t("empty")}</p> : <div className="people-list">{data.people.map((person) => <PersonCard
       canManage={canManage}
       key={person.membership_id}

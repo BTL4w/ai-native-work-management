@@ -2,7 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/shared/api/client";
 
-import { listPersonSkills, listSkills, setPersonSkill } from "./api";
+import {
+  createLeave,
+  listCapacity,
+  listLeave,
+  listPersonSkills,
+  listSkills,
+  listWeeklyWorkload,
+  setPersonSkill,
+  updateLeave,
+  upsertCapacity,
+} from "./api";
 
 const organizationId = "11111111-1111-4111-8111-111111111111";
 const membershipId = "22222222-2222-4222-8222-222222222222";
@@ -64,5 +74,68 @@ describe("people-capacity API", () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("queries availability and derived workload for an exact week", async () => {
+    const capacity = {
+      id: personSkillId, organization_id: organizationId, membership_id: membershipId,
+      kind: "DEFAULT", hours: 40, effective_from: "2000-01-01", effective_to: "2099-12-31",
+      week_start: null, version: 1, created_at: timestamp, updated_at: timestamp,
+    };
+    const leave = {
+      id: skillId, organization_id: organizationId, membership_id: membershipId,
+      start_date: "2026-08-24", end_date: "2026-08-24", unavailable_hours: 8,
+      version: 1, created_at: timestamp, updated_at: timestamp,
+    };
+    const workload = {
+      membership_id: membershipId, project_week_id: skillId, effective_capacity_hours: 32,
+      allocated_effort_hours: 24, residual_capacity_hours: 8, workload_ratio: "0.75",
+    };
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === `/api/v1/capacity?membership_id=${membershipId}`) return response([capacity]);
+      if (path === `/api/v1/leave?membership_id=${membershipId}&start_date=2026-08-24&end_date=2026-08-30`) return response([leave]);
+      if (path === `/api/v1/workload?week_start=2026-08-24&membership_id=${membershipId}`) return response([workload]);
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    await expect(listCapacity(membershipId)).resolves.toEqual([capacity]);
+    await expect(listLeave({ membershipId, startDate: "2026-08-24", endDate: "2026-08-30" })).resolves.toEqual([leave]);
+    await expect(listWeeklyWorkload("2026-08-24", membershipId)).resolves.toEqual([workload]);
+    expect(requested).toHaveLength(3);
+  });
+
+  it("sends idempotency and exact versions for availability mutations", async () => {
+    const capacity = {
+      id: personSkillId, organization_id: organizationId, membership_id: membershipId,
+      kind: "OVERRIDE", hours: 32, effective_from: "2026-08-24", effective_to: "2026-08-30",
+      week_start: "2026-08-24", version: 2, created_at: timestamp, updated_at: timestamp,
+    };
+    const leave = {
+      id: skillId, organization_id: organizationId, membership_id: membershipId,
+      start_date: "2026-08-24", end_date: "2026-08-24", unavailable_hours: 8,
+      version: 2, created_at: timestamp, updated_at: timestamp,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(capacity, 200, { ETag: '"2"' }))
+      .mockResolvedValueOnce(response(leave, 201, { ETag: '"1"' }))
+      .mockResolvedValueOnce(response(leave, 200, { ETag: '"2"' }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await upsertCapacity({ membership_id: membershipId, kind: "OVERRIDE", week_start: "2026-08-24", hours: 32 }, 1, "capacity-save-key");
+    await createLeave({ membership_id: membershipId, start_date: "2026-08-24", end_date: "2026-08-24", unavailable_hours: 8 }, "leave-create-key");
+    await updateLeave(skillId, { unavailable_hours: 8 }, 1, "leave-update-key");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/capacity", expect.objectContaining({
+      method: "POST", headers: expect.objectContaining({ "Idempotency-Key": "capacity-save-key", "If-Match": '"1"' }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/leave", expect.objectContaining({
+      method: "POST", headers: expect.objectContaining({ "Idempotency-Key": "leave-create-key" }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, `/api/v1/leave/${skillId}`, expect.objectContaining({
+      method: "PATCH", headers: expect.objectContaining({ "Idempotency-Key": "leave-update-key", "If-Match": '"1"' }),
+    }));
   });
 });

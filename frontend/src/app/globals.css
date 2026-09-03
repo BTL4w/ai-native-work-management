@@ -680,6 +680,53 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .people-skill-editor { display: grid; gap: 14px; width: min(500px, calc(100vw - 32px)); }
 .people-skill-editor > label { display: grid; gap: 6px; color: #565660; font-size: 12px; font-weight: 650; }
 .people-skill-editor textarea { min-height: 92px; resize: vertical; }
+.availability-panel {
+  margin-top: 30px;
+  border: 1px solid #dedfe2;
+  border-radius: 13px;
+  background: #fff;
+  padding: 20px;
+  box-shadow: 0 1px 2px rgb(24 24 27 / 3%);
+}
+.availability-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.availability-header h3 { color: #242429; font-size: 15px; font-weight: 680; }
+.availability-header p { margin-top: 4px; color: #85858e; font-size: 11px; }
+.availability-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.availability-week-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 22px; border-block: 1px solid #eeeff1; padding: 11px 0; }
+.availability-week-nav strong { color: #4b4b53; font-size: 12px; font-variant-numeric: tabular-nums; }
+.availability-week-nav .text-button { min-width: 28px; color: #5b5ce2; font-size: 16px; }
+.availability-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; margin-top: 16px; }
+.availability-card { border: 1px solid #e5e5e8; border-radius: 10px; background: #fafafb; padding: 14px; }
+.availability-card.is-overloaded { border-color: #e8b9c0; background: #fff8f8; }
+.availability-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.availability-card h4 { color: #2f2f35; font-size: 13px; font-weight: 680; }
+.availability-card header p, .availability-card > p { margin-top: 3px; color: #7b7b84; font-size: 10px; }
+.availability-workload-list { display: grid; gap: 12px; margin-top: 10px; }
+.availability-workload { min-width: 0; }
+.availability-workload > p, .availability-week-reference { display: block; margin-top: 4px; color: #7b7b84; font-size: 10px; }
+.availability-card .text-button { color: #5b5ce2; font-size: 10px; }
+.availability-allocation { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 18px; font-variant-numeric: tabular-nums; }
+.availability-allocation strong { color: #29292e; font-size: 18px; font-weight: 690; letter-spacing: -.025em; }
+.availability-allocation span { color: #62626b; font-size: 10px; font-weight: 650; }
+.is-overloaded .availability-allocation span { color: #a02f40; }
+.capacity-rail { height: 6px; overflow: hidden; margin-top: 10px; border-radius: 999px; background: #e6e6ea; }
+.capacity-rail span { display: block; height: 100%; border-radius: inherit; background: #5b5ce2; }
+.is-overloaded .capacity-rail span { background: #c54155; }
+.availability-entry-list { display: grid; gap: 5px; margin-top: 12px; border-top: 1px solid #e7e7ea; padding-top: 9px; }
+.availability-entry-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #686870; font-size: 10px; font-variant-numeric: tabular-nums; }
+.availability-editor { display: grid; gap: 14px; width: min(500px, calc(100vw - 32px)); padding: 20px; }
+.availability-editor h2 { color: #242429; font-size: 16px; font-weight: 680; }
+.availability-editor > label { display: grid; gap: 6px; color: #565660; font-size: 12px; font-weight: 650; }
+.availability-editor [role="alert"] { color: #9b2838; font-size: 11px; }
+.availability-editor .work-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 640px) {
+  .availability-panel { padding: 16px; }
+  .availability-header { display: grid; }
+  .availability-actions { justify-content: stretch; }
+  .availability-actions .secondary-button { flex: 1; }
+  .availability-grid { grid-template-columns: 1fr; }
+  .availability-allocation { align-items: flex-start; flex-direction: column; gap: 4px; }
+}
 .work-view {
   width: min(1040px, 100%);
   margin: 0 auto;

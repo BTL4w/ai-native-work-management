@@ -67,6 +67,16 @@ function stubPeopleApi() {
     if (path === `/api/v1/members/${employeeId}/skills`) return response([]);
     if (path === `/api/v1/members/${managerId}/work-evidence`) return response([]);
     if (path === `/api/v1/members/${employeeId}/work-evidence`) return response([workEvidence]);
+    if (path.startsWith("/api/v1/capacity")) return response([]);
+    if (path.startsWith("/api/v1/leave")) return response([]);
+    if (path.startsWith("/api/v1/workload")) return response([{
+      membership_id: managerId,
+      project_week_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      effective_capacity_hours: 40,
+      allocated_effort_hours: 12,
+      residual_capacity_hours: 28,
+      workload_ratio: "0.3",
+    }]);
     if (path === `/api/v1/members/${employeeId}/skills/${skillId}` && init?.method === "PUT") return response(savedPersonSkill, 200, { ETag: '"1"' });
     throw new Error(`Unexpected request: ${path}`);
   }));
@@ -91,6 +101,15 @@ describe("PeopleCapacityPanel", () => {
     expect(await screen.findByText("Level 5")).toBeVisible();
     expect(screen.getByText("Verified by Demo Manager")).toBeVisible();
     expect(screen.getByRole("button", { name: "Thêm skill" })).toHaveFocus();
+  });
+
+  it("includes weekly capacity and derived workload in the people workspace", async () => {
+    stubPeopleApi();
+    renderPeopleCapacity();
+
+    expect(await screen.findByRole("heading", { name: "Capacity & workload" })).toBeVisible();
+    expect(await screen.findByText("12 / 40 giờ")).toBeVisible();
+    expect(screen.getByText("30% capacity hiệu dụng đã được phân bổ.")).toBeVisible();
   });
 
   it("reuses frozen evidence and idempotency data when an upsert response is lost", async () => {
@@ -120,7 +139,7 @@ describe("PeopleCapacityPanel", () => {
     fireEvent.change(screen.getByLabelText("Skill"), { target: { value: skillId } });
     fireEvent.change(screen.getByLabelText("Evidence"), { target: { value: "Frozen evidence" } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
-    await screen.findByRole("alert");
+    await screen.findByText("Không thể hoàn tất thay đổi kỹ năng.");
     fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
 
     expect(await screen.findByText("Level 5")).toBeVisible();
@@ -150,7 +169,7 @@ describe("PeopleCapacityPanel", () => {
 
     await screen.findByText("Level 3");
     fireEvent.click(screen.getByRole("button", { name: "Xóa Product design của Demo Employee" }));
-    await screen.findByRole("alert");
+    await screen.findByText("Không thể hoàn tất thay đổi kỹ năng.");
     fireEvent.click(screen.getByRole("button", { name: "Xóa Product design của Demo Employee" }));
 
     await waitFor(() => expect(screen.queryByText("Level 3")).not.toBeInTheDocument());
@@ -352,7 +371,7 @@ describe("PeopleCapacityPanel", () => {
     fireEvent.change(screen.getByLabelText("Evidence"), { target: { value: "Retain this draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Dữ liệu kỹ năng đã thay đổi"));
+    await waitFor(() => expect(screen.getByText(/Dữ liệu kỹ năng đã thay đổi/)).toBeVisible());
     expect(screen.getByLabelText("Mức độ")).toHaveValue("5");
     expect(screen.getByLabelText("Evidence")).toHaveValue("Retain this draft");
     fireEvent.click(screen.getByRole("button", { name: "Lưu skill" }));

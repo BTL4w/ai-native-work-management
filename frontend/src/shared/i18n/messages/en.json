@@ -142,7 +142,32 @@
     "saving": "Saving…",
     "action": { "add": "Add skill", "edit": "Edit", "editSkill": "Edit {skill} for {name}", "delete": "Delete", "deleteSkill": "Delete {skill} for {name}", "save": "Save skill", "cancel": "Cancel", "reload": "Reload data" },
     "editor": { "title": "Skill editor", "addTitle": "Add verified skill", "editTitle": "Edit verified skill", "member": "Member", "skill": "Skill", "selectSkill": "Select a skill", "level": "Level", "evidence": "Evidence", "evidenceHint": "Evidence is saved as a Manager note linked to the verifying member." },
-    "error": { "load": "We could not load people and skills.", "mutation": "We could not complete this skill change.", "stale": "This skill data changed. Reload it before trying again.", "required": "Select a member and a skill.", "level": "Level must be from 1 through 5.", "invalid": "One or more fields are invalid." }
+    "error": { "load": "We could not load people and skills.", "mutation": "We could not complete this skill change.", "stale": "This skill data changed. Reload it before trying again.", "required": "Select a member and a skill.", "level": "Level must be from 1 through 5.", "invalid": "One or more fields are invalid." },
+    "availability": {
+      "title": "Capacity & workload",
+      "description": "Capacity, leave, and effort calculated for the selected week.",
+      "weekLabel": "Week of {range}",
+      "projectWeek": "Project Week {id}",
+      "previousWeek": "Previous week",
+      "nextWeek": "Next week",
+      "loading": "Calculating workload…",
+      "empty": "There is no workload for this week.",
+      "memberFallback": "Member {id}",
+      "capacity": "{hours} capacity hours",
+      "leave": "{hours} leave hours",
+      "allocation": "{allocated} / {capacity} hours",
+      "remaining": "{hours} hours remaining",
+      "overloaded": "Overloaded by {hours} hours",
+      "zeroCapacity": "No capacity available",
+      "ratio": "{percent}% of effective capacity is allocated.",
+      "ratioUnavailable": "The ratio is unavailable when effective capacity is zero.",
+      "entryDefault": "Default · {hours} hours",
+      "entryOverride": "This week · {hours} hours",
+      "leaveEntry": "{startDate} – {endDate} · {hours} hours",
+      "action": { "capacity": "Set capacity", "leave": "Add leave", "editCapacity": "Edit capacity for {name}", "editLeave": "Edit leave for {name}", "saveCapacity": "Save capacity", "saveLeave": "Save leave", "cancel": "Cancel", "reload": "Reload availability" },
+      "editor": { "addCapacity": "Set capacity", "editCapacity": "Edit capacity", "addLeave": "Add leave", "editLeave": "Edit leave", "member": "Member", "kind": "Capacity type", "defaultKind": "Default", "overrideKind": "Weekly override", "hours": "Hours", "startDate": "Start date", "endDate": "End date", "leaveHours": "Leave hours" },
+      "error": { "load": "We could not load availability and workload.", "mutation": "We could not save the availability change.", "stale": "Availability changed. The latest version has been reloaded.", "invalid": "The hours or date range is invalid." }
+    }
   },
   "ai": {
     "eyebrow": "Approval-gated planning",

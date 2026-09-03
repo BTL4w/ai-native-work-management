@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  capacityEntrySchema,
+  capacityUpsertSchema,
+  leaveCreateSchema,
+  leaveEntrySchema,
+  leaveUpdateSchema,
   personSkillSchema,
   skillSchema,
+  weeklyWorkloadSchema,
   workOutcomeEvidenceSchema,
 } from "./contracts";
 
@@ -80,5 +86,63 @@ describe("people-capacity contracts", () => {
     expect(workOutcomeEvidenceSchema.safeParse(workEvidence).success).toBe(true);
     expect(workOutcomeEvidenceSchema.safeParse({ ...workEvidence, source_resource_version: 0 }).success).toBe(false);
     expect(workOutcomeEvidenceSchema.safeParse({ ...workEvidence, score: 98 }).success).toBe(false);
+  });
+
+  it("parses strict capacity, leave, and derived workload contracts", () => {
+    const capacity = {
+      id: evidenceId,
+      organization_id: organizationId,
+      membership_id: membershipId,
+      kind: "DEFAULT",
+      hours: 40,
+      effective_from: "2000-01-01",
+      effective_to: "2099-12-31",
+      week_start: null,
+      version: 2,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    const leave = {
+      id: personSkillId,
+      organization_id: organizationId,
+      membership_id: membershipId,
+      start_date: "2026-08-24",
+      end_date: "2026-08-24",
+      unavailable_hours: 8,
+      version: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    const workload = {
+      membership_id: membershipId,
+      project_week_id: skillId,
+      effective_capacity_hours: 32,
+      allocated_effort_hours: 24,
+      residual_capacity_hours: 8,
+      workload_ratio: "0.75",
+    };
+
+    expect(capacityEntrySchema.parse(capacity)).toEqual(capacity);
+    expect(leaveEntrySchema.parse(leave)).toEqual(leave);
+    expect(weeklyWorkloadSchema.parse(workload)).toEqual(workload);
+    expect(capacityUpsertSchema.safeParse({ membership_id: membershipId, kind: "OVERRIDE", week_start: "2026-08-24", hours: 32 }).success).toBe(true);
+    expect(leaveCreateSchema.safeParse({ membership_id: membershipId, start_date: "2026-08-24", end_date: "2026-08-24", unavailable_hours: 8 }).success).toBe(true);
+    expect(leaveUpdateSchema.safeParse({ unavailable_hours: 4 }).success).toBe(true);
+  });
+
+  it("rejects persisted workload input and out-of-range availability hours", () => {
+    const workload = {
+      membership_id: membershipId,
+      project_week_id: skillId,
+      effective_capacity_hours: 32,
+      allocated_effort_hours: 24,
+      residual_capacity_hours: 8,
+      workload_ratio: "0.75",
+      manually_entered_workload: 24,
+    };
+
+    expect(weeklyWorkloadSchema.safeParse(workload).success).toBe(false);
+    expect(capacityUpsertSchema.safeParse({ membership_id: membershipId, kind: "DEFAULT", hours: 169 }).success).toBe(false);
+    expect(leaveCreateSchema.safeParse({ membership_id: membershipId, start_date: "2026-08-24", end_date: "2026-08-24", unavailable_hours: -1 }).success).toBe(false);
   });
 });

@@ -142,7 +142,32 @@
     "saving": "Đang lưu…",
     "action": { "add": "Thêm skill", "edit": "Sửa", "editSkill": "Sửa {skill} của {name}", "delete": "Xóa", "deleteSkill": "Xóa {skill} của {name}", "save": "Lưu skill", "cancel": "Hủy", "reload": "Tải lại dữ liệu" },
     "editor": { "title": "Trình sửa kỹ năng", "addTitle": "Thêm kỹ năng đã xác minh", "editTitle": "Sửa kỹ năng đã xác minh", "member": "Thành viên", "skill": "Skill", "selectSkill": "Chọn skill", "level": "Mức độ", "evidence": "Evidence", "evidenceHint": "Evidence được lưu là ghi chú của Manager, có liên kết với người xác minh." },
-    "error": { "load": "Chưa thể tải dữ liệu con người và kỹ năng.", "mutation": "Không thể hoàn tất thay đổi kỹ năng.", "stale": "Dữ liệu kỹ năng đã thay đổi. Hãy tải lại trước khi thử lại.", "required": "Chọn thành viên và skill.", "level": "Mức độ phải từ 1 đến 5.", "invalid": "Một hoặc nhiều trường không hợp lệ." }
+    "error": { "load": "Chưa thể tải dữ liệu con người và kỹ năng.", "mutation": "Không thể hoàn tất thay đổi kỹ năng.", "stale": "Dữ liệu kỹ năng đã thay đổi. Hãy tải lại trước khi thử lại.", "required": "Chọn thành viên và skill.", "level": "Mức độ phải từ 1 đến 5.", "invalid": "Một hoặc nhiều trường không hợp lệ." },
+    "availability": {
+      "title": "Capacity & workload",
+      "description": "Capacity, lịch nghỉ và effort được tính cho tuần đã chọn.",
+      "weekLabel": "Tuần {range}",
+      "projectWeek": "Tuần dự án {id}",
+      "previousWeek": "Tuần trước",
+      "nextWeek": "Tuần sau",
+      "loading": "Đang tính workload…",
+      "empty": "Chưa có workload cho tuần này.",
+      "memberFallback": "Thành viên {id}",
+      "capacity": "Capacity {hours} giờ",
+      "leave": "Nghỉ {hours} giờ",
+      "allocation": "{allocated} / {capacity} giờ",
+      "remaining": "Còn {hours} giờ",
+      "overloaded": "Quá tải {hours} giờ",
+      "zeroCapacity": "Không có capacity khả dụng",
+      "ratio": "{percent}% capacity hiệu dụng đã được phân bổ.",
+      "ratioUnavailable": "Không tính tỷ lệ khi capacity hiệu dụng bằng 0.",
+      "entryDefault": "Mặc định · {hours} giờ",
+      "entryOverride": "Tuần này · {hours} giờ",
+      "leaveEntry": "{startDate} – {endDate} · {hours} giờ",
+      "action": { "capacity": "Thiết lập capacity", "leave": "Thêm lịch nghỉ", "editCapacity": "Sửa capacity của {name}", "editLeave": "Sửa lịch nghỉ của {name}", "saveCapacity": "Lưu capacity", "saveLeave": "Lưu lịch nghỉ", "cancel": "Hủy", "reload": "Tải lại availability" },
+      "editor": { "addCapacity": "Thiết lập capacity", "editCapacity": "Sửa capacity", "addLeave": "Thêm lịch nghỉ", "editLeave": "Sửa lịch nghỉ", "member": "Thành viên", "kind": "Loại capacity", "defaultKind": "Mặc định", "overrideKind": "Theo tuần", "hours": "Số giờ", "startDate": "Ngày bắt đầu", "endDate": "Ngày kết thúc", "leaveHours": "Số giờ nghỉ" },
+      "error": { "load": "Chưa thể tải availability và workload.", "mutation": "Không thể lưu thay đổi availability.", "stale": "Dữ liệu availability đã thay đổi. Bản mới nhất đã được tải lại.", "invalid": "Giờ và khoảng ngày chưa hợp lệ." }
+    }
   },
   "ai": {
     "eyebrow": "Lập kế hoạch có phê duyệt",
