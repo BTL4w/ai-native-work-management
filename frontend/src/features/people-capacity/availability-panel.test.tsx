@@ -58,7 +58,6 @@ function renderAvailability(options: { canManage?: boolean; locale?: "vi" | "en"
 describe("AvailabilityPanel", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
   });
 
   it("uses the tenant-scoped workload query key", () => {
@@ -93,9 +92,12 @@ describe("AvailabilityPanel", () => {
     expect(screen.getByRole("progressbar", { name: "120% capacity hiệu dụng đã được phân bổ." })).toHaveAttribute("aria-valuetext", "120% capacity hiệu dụng đã được phân bổ.");
   });
 
-  it("uses the browser-local Monday at the UTC week boundary", () => {
-    vi.stubEnv("TZ", "Asia/Ho_Chi_Minh");
-    expect(localWeekStart(new Date("2026-08-30T18:00:00.000Z"))).toBe("2026-08-31");
+  it("uses browser-local calendar days at the Monday boundary", () => {
+    const localSunday = new Date(2026, 7, 30, 23, 30);
+    const localMonday = new Date(2026, 7, 31, 0, 30);
+
+    expect(localWeekStart(localSunday)).toBe("2026-08-24");
+    expect(localWeekStart(localMonday)).toBe("2026-08-31");
   });
 
   it("shows only capacity entries intersecting the selected week", async () => {
