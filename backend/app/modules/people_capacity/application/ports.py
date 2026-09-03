@@ -45,7 +45,11 @@ class PeopleCapacityRepository(Protocol):
     async def list_skills(self, *, actor: AuthenticatedActor) -> tuple[Skill, ...]: ...
 
     async def membership_is_active(
-        self, *, actor: AuthenticatedActor, membership_id: UUID
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        for_update: bool = False,
     ) -> bool: ...
 
     async def get_evidence_source(
@@ -62,7 +66,9 @@ class PeopleCapacityRepository(Protocol):
         request_fingerprint: str,
     ) -> PeopleMutationResult[Skill]: ...
 
-    async def get_skill(self, *, actor: AuthenticatedActor, skill_id: UUID) -> Skill | None: ...
+    async def get_skill(
+        self, *, actor: AuthenticatedActor, skill_id: UUID, for_update: bool = False
+    ) -> Skill | None: ...
 
     async def update_skill(
         self,
@@ -88,7 +94,11 @@ class PeopleCapacityRepository(Protocol):
     ) -> PeopleMutationResult[Skill]: ...
 
     async def list_person_skills(
-        self, *, actor: AuthenticatedActor, membership_id: UUID
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        include_inactive: bool,
     ) -> tuple[VerifiedPersonSkill, ...]: ...
 
     async def get_person_skill(

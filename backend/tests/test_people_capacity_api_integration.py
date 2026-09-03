@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -21,6 +22,7 @@ from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.domain.roles import MembershipRole
 from app.modules.people_capacity.application.ports import PeopleMutationResult
 from app.modules.people_capacity.domain.skills import (
+    PeopleSkillForbiddenError,
     PeopleSkillReferenceError,
     Skill,
     SkillLevel,
@@ -67,9 +69,17 @@ class StubPeopleCapacityService:
             updated_at=now,
         )
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.fail_transport_audit = False
 
     async def authorize_mutation(self, **values: Any) -> None:
         self.calls.append(("authorize_mutation", values))
+        if values["actor"].role is MembershipRole.EMPLOYEE:
+            raise PeopleSkillForbiddenError
+
+    async def audit_transport_rejection(self, **values: Any) -> None:
+        self.calls.append(("audit_transport_rejection", values))
+        if self.fail_transport_audit:
+            raise RuntimeError("audit unavailable")
 
     async def list_skills(self, **values: Any):  # type: ignore[no-untyped-def]
         self.calls.append(("list_skills", values))
@@ -148,6 +158,125 @@ async def test_skill_create_and_list_contracts() -> None:
     assert listed.json() == [created.json()]
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "body", "headers", "expected_status"),
+    [
+        (
+            "POST",
+            "/api/v1/skills",
+            {"name": "Facilitation", "unexpected": True},
+            {"Idempotency-Key": "invalid-body-key1"},
+            422,
+        ),
+        (
+            "POST",
+            "/api/v1/skills",
+            {"name": "Facilitation"},
+            {},
+            422,
+        ),
+        (
+            "PATCH",
+            "/api/v1/skills/{skill_id}",
+            {"description": "Updated"},
+            {"Idempotency-Key": "invalid-etag-key1", "If-Match": "invalid"},
+            400,
+        ),
+    ],
+)
+async def test_writer_transport_rejections_are_audited(
+    method: str,
+    path: str,
+    body: dict[str, object],
+    headers: dict[str, str],
+    expected_status: int,
+) -> None:
+    actor = _actor()
+    service = StubPeopleCapacityService(actor)
+    resolved_path = path.format(skill_id=service.skill.id)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(actor, service)), base_url="http://testserver"
+    ) as client:
+        response = await client.request(method, resolved_path, json=body, headers=headers)
+
+    assert response.status_code == expected_status
+    audit = next(
+        values for name, values in service.calls if name == "audit_transport_rejection"
+    )
+    assert audit["actor"] == actor
+    assert audit["reason_code"] in {"VALIDATION_FAILED", "INVALID_REQUEST"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("role", "expected_status", "expected_code"),
+    [
+        (MembershipRole.MANAGER, 422, "VALIDATION_FAILED"),
+        (MembershipRole.EMPLOYEE, 403, "FORBIDDEN"),
+    ],
+)
+async def test_malformed_json_is_authorized_before_validation_and_audited(
+    role: MembershipRole, expected_status: int, expected_code: str
+) -> None:
+    actor = _actor()
+    actor = replace(actor, role=role)
+    service = StubPeopleCapacityService(actor)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(actor, service)), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/skills",
+            content="{",
+            headers={"Content-Type": "application/json", "Idempotency-Key": "malformed-json-1"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json()["error"]["code"] == expected_code
+    assert any(name == "authorize_mutation" for name, _ in service.calls)
+    if role is MembershipRole.MANAGER:
+        assert any(name == "audit_transport_rejection" for name, _ in service.calls)
+
+
+@pytest.mark.asyncio
+async def test_oversized_idempotency_key_does_not_break_rejection_audit() -> None:
+    actor = _actor()
+    service = StubPeopleCapacityService(actor)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(actor, service)), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/skills",
+            json={"name": "Facilitation"},
+            headers={"Idempotency-Key": "x" * 129},
+        )
+
+    assert response.status_code == 422
+    audit = next(
+        values for name, values in service.calls if name == "audit_transport_rejection"
+    )
+    assert audit["idempotency_key"] is None
+
+
+@pytest.mark.asyncio
+async def test_transport_rejection_fails_closed_when_audit_is_unavailable() -> None:
+    actor = _actor()
+    service = StubPeopleCapacityService(actor)
+    service.fail_transport_audit = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(actor, service), raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/skills",
+            json={"name": "Facilitation", "unexpected": True},
+            headers={"Idempotency-Key": "audit-failure-key"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "AUDIT_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -255,6 +384,7 @@ def test_openapi_exposes_complete_people_skills_crud() -> None:
     assert set(schema["paths"][member_path]) == {"get", "put", "delete"}
     assert set(schema["paths"]["/api/v1/members/{membership_id}/skills"]) == {"get"}
     assert set(schema["paths"]["/api/v1/members/{membership_id}/work-evidence"]) == {"get", "post"}
+    assert "503" in schema["paths"]["/api/v1/skills"]["post"]["responses"]
 
 
 @pytest.mark.integration
@@ -410,6 +540,27 @@ async def test_postgres_people_skills_authorization_idempotency_and_stale_contra
             assert duplicate.status_code == 409
             skill_id = str(created.json()["id"])
 
+            invalid_transport_body = await client.post(
+                "/api/v1/skills",
+                json={"name": "Rejected", "unexpected": True},
+                headers={"Idempotency-Key": "people-invalid-body1"},
+            )
+            missing_transport_key = await client.post(
+                "/api/v1/skills",
+                json={"name": "Rejected without key"},
+            )
+            invalid_transport_etag = await client.patch(
+                f"/api/v1/skills/{skill_id}",
+                json={"description": "Rejected ETag"},
+                headers={
+                    "Idempotency-Key": "people-invalid-etag1",
+                    "If-Match": "invalid",
+                },
+            )
+            assert invalid_transport_body.status_code == 422
+            assert missing_transport_key.status_code == 422
+            assert invalid_transport_etag.status_code == 400
+
             updated = await client.patch(
                 f"/api/v1/skills/{skill_id}",
                 json={"description": "Updated"},
@@ -453,6 +604,8 @@ async def test_postgres_people_skills_authorization_idempotency_and_stale_contra
                 headers={"Idempotency-Key": "person-skill-foreign1"},
             )
             assert person_skill.status_code == 200
+            assert person_skill.json()["evidence"][0]["source_resource_type"] == "manager_note"
+            assert person_skill.json()["evidence"][0]["source_resource_id"] == str(manager_id)
             assert inactive.status_code == 422
             assert foreign.status_code == 422
             assert (
@@ -641,13 +794,6 @@ async def test_postgres_people_skills_authorization_idempotency_and_stale_contra
                     "If-Match": '"2"',
                 },
             )
-            deleted_skill = await client.delete(
-                f"/api/v1/skills/{skill_id}",
-                headers={
-                    "Idempotency-Key": "people-skill-delete-1",
-                    "If-Match": '"2"',
-                },
-            )
             assert deleted_person_skill.status_code == 200
             assert deleted_person_skill.json()["active"] is False
             assert deleted_person_skill.json()["version"] == 3
@@ -655,6 +801,31 @@ async def test_postgres_people_skills_authorization_idempotency_and_stale_contra
             assert tombstone.status_code == 200
             assert tombstone.headers["ETag"] == '"3"'
             assert tombstone.json()["active"] is False
+            tombstone_list = await client.get(
+                f"/api/v1/members/{employee_id}/skills"
+            )
+            listed_tombstone = next(
+                item for item in tombstone_list.json() if item["skill_id"] == skill_id
+            )
+            assert listed_tombstone["active"] is False
+            reactivated_person_skill = await client.put(
+                f"/api/v1/members/{employee_id}/skills/{skill_id}",
+                json={**person_body, "level": 5},
+                headers={
+                    "Idempotency-Key": "person-skill-reactivate-1",
+                    "If-Match": '"3"',
+                },
+            )
+            assert reactivated_person_skill.status_code == 200
+            assert reactivated_person_skill.json()["active"] is True
+            assert reactivated_person_skill.json()["version"] == 4
+            deleted_skill = await client.delete(
+                f"/api/v1/skills/{skill_id}",
+                headers={
+                    "Idempotency-Key": "people-skill-delete-1",
+                    "If-Match": '"2"',
+                },
+            )
             assert deleted_skill.status_code == 200
             assert deleted_skill.json()["active"] is False
             assert deleted_skill.json()["version"] == 3
@@ -677,7 +848,7 @@ async def test_postgres_people_skills_authorization_idempotency_and_stale_contra
                 ),
                 {"organization_id": organization_id},
             )
-            assert rejected == 17
+            assert rejected == 20
     finally:
         if app is not None:
             await app.state.database_engine.dispose()

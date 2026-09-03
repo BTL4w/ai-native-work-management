@@ -97,7 +97,7 @@ class PersonSkillModel(Base):
 
     __tablename__ = "person_skills"
     __table_args__ = (
-        CheckConstraint("level BETWEEN 1 AND 5", name="person_skills_level_range"),
+        CheckConstraint("level BETWEEN 1 AND 5", name="level_range"),
         ForeignKeyConstraint(
             ["organization_id", "membership_id"],
             ["memberships.organization_id", "memberships.id"],
@@ -145,7 +145,7 @@ class SkillEvidenceModel(Base):
         CheckConstraint(
             "(source_resource_type = 'task' AND source_task_id = source_resource_id) "
             "OR (source_resource_type <> 'task' AND source_task_id IS NULL)",
-            name="skill_evidence_task_source_consistency",
+            name="task_source_consistency",
         ),
         ForeignKeyConstraint(
             ["organization_id", "person_skill_id"],
@@ -201,16 +201,16 @@ class WorkOutcomeEvidenceModel(Base):
     __table_args__ = (
         CheckConstraint(
             "evidence_type IN ('COMPLETED_TASK', 'REVIEW_OUTCOME')",
-            name="work_outcome_evidence_type",
+            name="type",
         ),
         CheckConstraint(
             "(source_resource_type = 'task' AND source_task_id = source_resource_id) "
             "OR (source_resource_type <> 'task' AND source_task_id IS NULL)",
-            name="work_outcome_evidence_task_source_consistency",
+            name="task_source_consistency",
         ),
         CheckConstraint(
             "source_resource_version > 0",
-            name="work_outcome_evidence_source_version_positive",
+            name="source_version_positive",
         ),
         ForeignKeyConstraint(
             ["organization_id", "membership_id"],

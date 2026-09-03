@@ -104,6 +104,28 @@ def _http_error_code(status_code: int) -> tuple[str, str]:
     }.get(status_code, ("HTTP_ERROR", "common.error.http"))
 
 
+async def _audit_pending_mutation_rejection(request: Request, *, reason_code: str) -> bool:
+    hook = getattr(request.state, "mutation_rejection_audit", None)
+    if hook is None:
+        return True
+    request.state.mutation_rejection_audit = None
+    try:
+        await hook(reason_code=reason_code)
+    except Exception:
+        logger.exception("Failed to audit mutation rejection")
+        return False
+    return True
+
+
+def _audit_unavailable_response(request: Request) -> JSONResponse:
+    return _response(
+        request=request,
+        status_code=503,
+        code="AUDIT_UNAVAILABLE",
+        message_key="common.error.unexpected",
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     """Install the single public error contract for the FastAPI application."""
 
@@ -111,6 +133,8 @@ def register_error_handlers(app: FastAPI) -> None:
     async def handle_application_error(  # pyright: ignore[reportUnusedFunction]
         request: Request, exc: ApplicationError
     ) -> JSONResponse:
+        if not await _audit_pending_mutation_rejection(request, reason_code=exc.code):
+            return _audit_unavailable_response(request)
         return _response(
             request=request,
             status_code=exc.status_code,
@@ -124,6 +148,10 @@ def register_error_handlers(app: FastAPI) -> None:
     async def handle_validation_error(  # pyright: ignore[reportUnusedFunction]
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        if not await _audit_pending_mutation_rejection(
+            request, reason_code="VALIDATION_FAILED"
+        ):
+            return _audit_unavailable_response(request)
         field_errors = [
             FieldError(
                 field=_validation_field(error),

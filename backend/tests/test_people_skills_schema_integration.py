@@ -176,6 +176,18 @@ async def test_people_skill_tables_force_rls_and_evidence_is_append_only() -> No
                 "skill_evidence": {"INSERT", "SELECT"},
                 "work_outcome_evidence": {"INSERT", "SELECT"},
             }
+            function_grants = await connection.execute(
+                text(
+                    "SELECT grantee, privilege_type "
+                    "FROM information_schema.routine_privileges "
+                    "WHERE routine_schema = 'public' "
+                    "AND routine_name = 'lock_active_membership'"
+                )
+            )
+            assert {(row.grantee, row.privilege_type) for row in function_grants} == {
+                ("app_runtime", "EXECUTE"),
+                ("migration_owner", "EXECUTE"),
+            }
     finally:
         await engine.dispose()
 

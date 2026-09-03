@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
@@ -499,6 +500,74 @@ async def test_concurrent_person_skill_upsert_claims_key_before_stale_checks() -
                 )
                 == 1
             )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mutable_reference_reads_block_concurrent_deactivation() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    organization_id, manager_id, employee_id = uuid4(), uuid4(), uuid4()
+    actor = _actor(organization_id, manager_id)
+    factory = SqlAlchemyPeopleCapacityTransactionFactory(create_session_factory(engine))
+    references_locked = asyncio.Event()
+    release_references = asyncio.Event()
+
+    try:
+        await _seed_members(
+            engine,
+            organization_id=organization_id,
+            memberships=(
+                (manager_id, MembershipRole.MANAGER),
+                (employee_id, MembershipRole.EMPLOYEE),
+            ),
+        )
+        async with factory() as repository:
+            skill = (
+                await repository.create_skill(
+                    actor=actor,
+                    draft=SkillDraft.create(name="Locked Reference", description=None),
+                    request_id="locked-reference-seed",
+                    idempotency_key="locked-reference-seed-key",
+                    request_fingerprint="5" * 64,
+                )
+            ).resource
+
+        async def hold_reference_locks() -> None:
+            async with factory() as repository:
+                assert await repository.membership_is_active(
+                    actor=actor, membership_id=employee_id, for_update=True
+                )
+                assert await repository.get_skill(
+                    actor=actor,
+                    skill_id=skill.id,
+                    for_update=True,
+                ) == skill
+                references_locked.set()
+                await release_references.wait()
+
+        async def expect_lock_timeout(statement: str, values: dict[str, UUID]) -> None:
+            await references_locked.wait()
+            with pytest.raises(DBAPIError):
+                async with engine.begin() as connection:
+                    await connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                    await connection.execute(text(statement), values)
+
+        holder = asyncio.create_task(hold_reference_locks())
+        try:
+            await expect_lock_timeout(
+                "UPDATE memberships SET is_active = false "
+                "WHERE organization_id = :organization_id AND id = :resource_id",
+                {"organization_id": organization_id, "resource_id": employee_id},
+            )
+            await expect_lock_timeout(
+                "UPDATE skills SET active = false "
+                "WHERE organization_id = :organization_id AND id = :resource_id",
+                {"organization_id": organization_id, "resource_id": skill.id},
+            )
+        finally:
+            release_references.set()
+            await holder
     finally:
         await engine.dispose()
 

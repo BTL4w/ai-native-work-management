@@ -140,7 +140,7 @@ export function PeopleCapacityPanel({
   return <section className="people-capacity-panel work-view" aria-labelledby="people-capacity-title">
     <div className="work-view-heading flex flex-wrap items-center justify-between gap-4">
       <div><p className="eyebrow">{t("eyebrow")}</p><h2 className="page-title" id="people-capacity-title">{t("title")}</h2><p className="mt-3 text-slate-600">{t("description")}</p></div>
-      {canManage ? <button className="primary-button" disabled={data.people.length === 0} type="button" onClick={(event) => openEditor({ memberId: data.people[0]?.membership_id ?? actorMembershipId }, event.currentTarget)}>{t("action.add")}</button> : null}
+      {canManage ? <button className="primary-button" disabled={data.people.length === 0 || !data.skills.some((skill) => skill.active)} type="button" onClick={(event) => openEditor({ memberId: data.people[0]?.membership_id ?? actorMembershipId }, event.currentTarget)}>{t("action.add")}</button> : null}
     </div>
     {error ? <div className="people-safe-error" role="alert"><p>{error instanceof ApiError && error.code === "RESOURCE_VERSION_MISMATCH" ? t("error.stale") : t("error.mutation")}</p>{error instanceof ApiError && error.code === "RESOURCE_VERSION_MISMATCH" ? <button className="text-button" type="button" onClick={() => void people.refetch()}>{t("action.reload")}</button> : null}</div> : null}
     {data.people.length === 0 ? <p className="people-empty">{t("empty")}</p> : <div className="people-list">{data.people.map((person) => <PersonCard
@@ -148,7 +148,7 @@ export function PeopleCapacityPanel({
       key={person.membership_id}
       person={person}
       skills={data.skills}
-      verifierName={(id) => data.people.find((member) => member.membership_id === id)?.display_name ?? t("unknownMember")}
+      verifierName={(id) => data.people.find((member) => member.membership_id === id)?.display_name ?? t("memberReference", { id })}
       onEdit={(personSkill, trigger) => openEditor({ memberId: person.membership_id, personSkill }, trigger)}
       onDelete={(personSkill) => void removeSkill(person.membership_id, personSkill)}
     />)}</div>}
@@ -178,19 +178,20 @@ function PersonCard({ canManage, person, skills, verifierName, onEdit, onDelete 
 }) {
   const t = useTranslations("people");
   const skillName = (skillId: string) => skills.find((skill) => skill.id === skillId)?.name ?? t("unknownSkill");
+  const activePersonSkills = person.personSkills.filter((item) => item.active);
   return <article className="people-card">
     <header><div><h3>{person.display_name}</h3><p>{t(`role.${person.role}`)}</p></div></header>
     <section aria-label={t("skillsLabel", { name: person.display_name })}>
       <h4>{t("skills")}</h4>
-      {person.personSkills.length === 0 ? <p className="people-empty">{t("noSkills")}</p> : <ul className="people-skill-list">{person.personSkills.filter((item) => item.active).map((item) => <li key={item.id}>
+      {activePersonSkills.length === 0 ? <p className="people-empty">{t("noSkills")}</p> : <ul className="people-skill-list">{activePersonSkills.map((item) => <li key={item.id}>
         <div><strong>{skillName(item.skill_id)}</strong><span>{t("level", { level: item.level })}</span><span>{t("verifiedBy", { name: verifierName(item.verified_by_membership_id) })}</span></div>
-        <ul className="people-evidence-list">{item.evidence.map((evidence) => <li key={evidence.id}>{evidence.summary}</li>)}</ul>
-        {canManage ? <div className="people-skill-actions"><button className="text-button" type="button" onClick={(event) => onEdit(item, event.currentTarget)}>{t("action.edit")}</button><button className="text-button" type="button" onClick={() => onDelete(item)}>{t("action.delete")}</button></div> : null}
+        <ul className="people-evidence-list">{item.evidence.map((evidence) => <li key={evidence.id}><strong>{evidence.summary}</strong><span>{t("skillEvidenceProvenance", { type: evidence.source_resource_type, sourceId: evidence.source_resource_id, occurredAt: evidence.occurred_at, recorderId: evidence.created_by_membership_id })}</span></li>)}</ul>
+        {canManage ? <div className="people-skill-actions"><button aria-label={t("action.editSkill", { skill: skillName(item.skill_id), name: person.display_name })} className="text-button" type="button" onClick={(event) => onEdit(item, event.currentTarget)}>{t("action.edit")}</button><button aria-label={t("action.deleteSkill", { skill: skillName(item.skill_id), name: person.display_name })} className="text-button" type="button" onClick={() => onDelete(item)}>{t("action.delete")}</button></div> : null}
       </li>)}</ul>}
     </section>
     <section aria-label={t("workEvidenceLabel", { name: person.display_name })}>
       <h4>{t("workEvidence")}</h4>
-      {person.workEvidence.length === 0 ? <p className="people-empty">{t("noWorkEvidence")}</p> : <ul className="people-evidence-list">{person.workEvidence.map((evidence) => <li key={evidence.id}><strong>{evidence.summary}</strong><span>{evidence.source_resource_type} · v{evidence.source_resource_version}</span></li>)}</ul>}
+      {person.workEvidence.length === 0 ? <p className="people-empty">{t("noWorkEvidence")}</p> : <ul className="people-evidence-list">{person.workEvidence.map((evidence) => <li key={evidence.id}><strong>{evidence.summary}</strong><span>{t("workEvidenceProvenance", { type: evidence.source_resource_type, sourceId: evidence.source_resource_id, version: evidence.source_resource_version, observedAt: evidence.observed_at, recorderId: evidence.created_by_membership_id })}</span></li>)}</ul>}
     </section>
   </article>;
 }

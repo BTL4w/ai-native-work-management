@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Request, Response
 from fastapi import status as http_status
+from fastapi.routing import APIRoute
 
 from app.api.errors import ApplicationError, ErrorResponse, FieldError
 from app.modules.identity.api.dependencies import ActorDependency
 from app.modules.people_capacity.api.dependencies import (
     PeopleCapacityServiceDependency,
     PeopleMutationActorDependency,
+    prepare_people_mutation,
 )
 from app.modules.people_capacity.api.schemas import (
     PersonSkillResponse,
@@ -41,13 +44,29 @@ from app.modules.people_capacity.domain.skills import (
     WorkOutcomeEvidenceDraft,
 )
 
-router = APIRouter(tags=["people-capacity"])
+
+class PeopleCapacityRoute(APIRoute):
+    """Run mutation authorization before FastAPI attempts request-body decoding."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        route_handler = super().get_route_handler()
+        route_name = self.name
+
+        async def preflight_handler(request: Request) -> Response:
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                await prepare_people_mutation(request, route_name=route_name)
+            return await route_handler(request)
+
+        return preflight_handler
+
+
+router = APIRouter(tags=["people-capacity"], route_class=PeopleCapacityRoute)
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)]
 IfMatch = Annotated[str | None, Header(alias="If-Match")]
 RequiredIfMatch = Annotated[str, Header(alias="If-Match")]
 _ETAG = re.compile(r'^"([1-9][0-9]*)"$')
 _ERRORS: dict[int | str, dict[str, Any]] = {
-    code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 409, 412, 422, 428)
+    code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 409, 412, 422, 428, 503)
 }
 
 
@@ -134,6 +153,10 @@ def _headers(response: Response, *, version: int, replayed: bool = False) -> Non
         response.headers["Idempotency-Replayed"] = "true"
 
 
+def _transport_validated(request: Request) -> None:
+    request.state.mutation_rejection_audit = None
+
+
 @router.get("/skills", response_model=list[SkillResponse], responses=_ERRORS)
 async def list_skills(
     actor: ActorDependency,
@@ -156,6 +179,7 @@ async def create_skill(
     service: PeopleCapacityServiceDependency,
     idempotency_key: IdempotencyKey,
 ) -> SkillResponse:
+    _transport_validated(request)
     try:
         result = await service.create_skill(
             actor=actor,
@@ -197,6 +221,8 @@ async def update_skill(
     if_match: RequiredIfMatch,
 ) -> SkillResponse:
     supplied = payload.model_fields_set
+    expected_version = _required_version(if_match)
+    _transport_validated(request)
     try:
         result = await service.update_skill(
             actor=actor,
@@ -207,7 +233,7 @@ async def update_skill(
             description_supplied="description" in supplied,
             active=payload.active,
             active_supplied="active" in supplied,
-            expected_version=_required_version(if_match),
+            expected_version=expected_version,
             request_id=request.state.request_id,
             idempotency_key=idempotency_key,
         )
@@ -227,11 +253,13 @@ async def delete_skill(
     idempotency_key: IdempotencyKey,
     if_match: RequiredIfMatch,
 ) -> SkillResponse:
+    expected_version = _required_version(if_match)
+    _transport_validated(request)
     try:
         result = await service.delete_skill(
             actor=actor,
             skill_id=skill_id,
-            expected_version=_required_version(if_match),
+            expected_version=expected_version,
             request_id=request.state.request_id,
             idempotency_key=idempotency_key,
         )
@@ -313,13 +341,15 @@ async def set_person_skill(
         evidence = tuple(
             SkillEvidenceDraft.create(**item.model_dump()) for item in payload.evidence
         )
+        expected_version = _version(if_match)
+        _transport_validated(request)
         result = await service.set_person_skill(
             actor=actor,
             membership_id=membership_id,
             skill_id=skill_id,
             level=payload.level,
             evidence=evidence,
-            expected_version=_version(if_match),
+            expected_version=expected_version,
             request_id=request.state.request_id,
             idempotency_key=idempotency_key,
         )
@@ -347,12 +377,14 @@ async def delete_person_skill(
     idempotency_key: IdempotencyKey,
     if_match: RequiredIfMatch,
 ) -> PersonSkillResponse:
+    expected_version = _required_version(if_match)
+    _transport_validated(request)
     try:
         result = await service.delete_person_skill(
             actor=actor,
             membership_id=membership_id,
             skill_id=skill_id,
-            expected_version=_required_version(if_match),
+            expected_version=expected_version,
             request_id=request.state.request_id,
             idempotency_key=idempotency_key,
         )
@@ -406,6 +438,7 @@ async def record_work_outcome_evidence(
             source_resource_version=payload.source_resource_version,
             observed_at=payload.observed_at,
         )
+        _transport_validated(request)
         result = await service.record_work_outcome_evidence(
             actor=actor,
             membership_id=membership_id,

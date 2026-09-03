@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from uuid import UUID
 
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -64,7 +65,11 @@ class PeopleCapacityService:
         async with self._transactions() as repository:
             if not await repository.membership_is_active(actor=actor, membership_id=membership_id):
                 raise PeopleSkillNotFoundError
-            return await repository.list_person_skills(actor=actor, membership_id=membership_id)
+            return await repository.list_person_skills(
+                actor=actor,
+                membership_id=membership_id,
+                include_inactive=actor.role in _WRITERS,
+            )
 
     async def get_person_skill(
         self, *, actor: AuthenticatedActor, membership_id: UUID, skill_id: UUID
@@ -162,14 +167,37 @@ class PeopleCapacityService:
         )
         raise PeopleSkillForbiddenError
 
+    async def audit_transport_rejection(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        idempotency_key: str | None,
+        reason_code: str,
+    ) -> None:
+        """Persist a safe rejection raised before the application use case starts."""
+        await self._reject(
+            actor=actor,
+            action=action,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            reason_code=reason_code,
+        )
+
     async def _require_active_member(
         self,
         *,
         repository: PeopleCapacityRepository,
         actor: AuthenticatedActor,
         membership_id: UUID,
+        for_update: bool = False,
     ) -> None:
-        if not await repository.membership_is_active(actor=actor, membership_id=membership_id):
+        if not await repository.membership_is_active(
+            actor=actor,
+            membership_id=membership_id,
+            for_update=for_update,
+        ):
             raise PeopleSkillReferenceError("membership_id")
 
     async def _require_evidence_source(
@@ -375,6 +403,18 @@ class PeopleCapacityService:
                 resource_id=skill_id,
             )
             try:
+                if any(item.evidence_type is SkillEvidenceType.CERTIFICATE for item in evidence):
+                    raise PeopleSkillReferenceError("evidence_type")
+                evidence = tuple(
+                    replace(
+                        item,
+                        source_resource_type="manager_note",
+                        source_resource_id=actor.membership_id,
+                    )
+                    if item.evidence_type is SkillEvidenceType.MANAGER_NOTE
+                    else item
+                    for item in evidence
+                )
                 draft = PersonSkillDraft.create(
                     membership_id=membership_id,
                     skill_id=skill_id,
@@ -409,9 +449,14 @@ class PeopleCapacityService:
                 if replay is not None:
                     return replay
                 await self._require_active_member(
-                    repository=repository, actor=actor, membership_id=membership_id
+                    repository=repository,
+                    actor=actor,
+                    membership_id=membership_id,
+                    for_update=True,
                 )
-                skill = await repository.get_skill(actor=actor, skill_id=skill_id)
+                skill = await repository.get_skill(
+                    actor=actor, skill_id=skill_id, for_update=True
+                )
                 if skill is None or not skill.active:
                     raise PeopleSkillReferenceError("skill_id")
                 for item in sorted(
@@ -489,7 +534,10 @@ class PeopleCapacityService:
                 if replay is not None:
                     return replay
                 await self._require_active_member(
-                    repository=repository, actor=actor, membership_id=membership_id
+                    repository=repository,
+                    actor=actor,
+                    membership_id=membership_id,
+                    for_update=True,
                 )
                 await self._require_evidence_source(
                     repository=repository,
@@ -556,7 +604,10 @@ class PeopleCapacityService:
                 if replay is not None:
                     return replay
                 await self._require_active_member(
-                    repository=repository, actor=actor, membership_id=membership_id
+                    repository=repository,
+                    actor=actor,
+                    membership_id=membership_id,
+                    for_update=True,
                 )
                 return await repository.delete_person_skill(
                     actor=actor,

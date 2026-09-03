@@ -403,8 +403,27 @@ class SqlAlchemyPeopleCapacityRepository:
         )
         return tuple(_skill_to_domain(model) for model in models)
 
-    async def membership_is_active(self, *, actor: AuthenticatedActor, membership_id: UUID) -> bool:
+    async def membership_is_active(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        for_update: bool = False,
+    ) -> bool:
         await self._activate_actor(actor)
+        if for_update:
+            return bool(
+                await self._session.scalar(
+                    text(
+                        "SELECT public.lock_active_membership("
+                        ":organization_id, :membership_id)"
+                    ),
+                    {
+                        "organization_id": actor.organization_id,
+                        "membership_id": membership_id,
+                    },
+                )
+            )
         return bool(
             await self._session.scalar(
                 select(MembershipModel.is_active).where(
@@ -440,14 +459,21 @@ class SqlAlchemyPeopleCapacityRepository:
             subject_membership_id=row.assignee_membership_id,
         )
 
-    async def get_skill(self, *, actor: AuthenticatedActor, skill_id: UUID) -> Skill | None:
+    async def get_skill(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        skill_id: UUID,
+        for_update: bool = False,
+    ) -> Skill | None:
         await self._activate_actor(actor)
-        model = await self._session.scalar(
-            select(SkillModel).where(
-                SkillModel.organization_id == actor.organization_id,
-                SkillModel.id == skill_id,
-            )
+        query = select(SkillModel).where(
+            SkillModel.organization_id == actor.organization_id,
+            SkillModel.id == skill_id,
         )
+        if for_update:
+            query = query.with_for_update()
+        model = await self._session.scalar(query)
         return _skill_to_domain(model) if model is not None else None
 
     def _add_skill_version(self, *, actor: AuthenticatedActor, skill: Skill) -> None:
@@ -664,17 +690,21 @@ class SqlAlchemyPeopleCapacityRepository:
         )
 
     async def list_person_skills(
-        self, *, actor: AuthenticatedActor, membership_id: UUID
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        include_inactive: bool,
     ) -> tuple[VerifiedPersonSkill, ...]:
         await self._activate_actor(actor)
+        query = select(PersonSkillModel).where(
+            PersonSkillModel.organization_id == actor.organization_id,
+            PersonSkillModel.membership_id == membership_id,
+        )
+        if not include_inactive:
+            query = query.where(PersonSkillModel.active.is_(True))
         models = await self._session.scalars(
-            select(PersonSkillModel)
-            .where(
-                PersonSkillModel.organization_id == actor.organization_id,
-                PersonSkillModel.membership_id == membership_id,
-                PersonSkillModel.active.is_(True),
-            )
-            .order_by(PersonSkillModel.skill_id, PersonSkillModel.id)
+            query.order_by(PersonSkillModel.skill_id, PersonSkillModel.id)
         )
         return tuple(_person_skill_to_domain(model) for model in models)
 

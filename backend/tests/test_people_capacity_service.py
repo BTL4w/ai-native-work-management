@@ -404,6 +404,122 @@ async def test_person_skill_rejects_more_than_twenty_evidence_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_person_skill_derives_manager_note_provenance_from_the_writer() -> None:
+    actor = _actor()
+    repository = FakeRepository(actor)
+    member_id = uuid4()
+    repository.active_memberships.add(member_id)
+
+    await _service(repository).set_person_skill(
+        actor=actor,
+        membership_id=member_id,
+        skill_id=repository.skill.id,
+        level=4,
+        evidence=(SkillEvidenceDraft.create(
+            evidence_type="MANAGER_NOTE",
+            summary="Observed delivery",
+            source_resource_type="untrusted",
+            source_resource_id=uuid4(),
+            occurred_at=datetime(2026, 8, 26, tzinfo=UTC),
+        ),),
+        expected_version=None,
+        request_id="manager-note-derived",
+        idempotency_key="manager-note-derived-key",
+    )
+
+    draft = next(
+        values["draft"]
+        for name, values in repository.calls
+        if name == "upsert_person_skill"
+    )
+    assert draft.evidence[0].source_resource_type == "manager_note"
+    assert draft.evidence[0].source_resource_id == actor.membership_id
+
+
+@pytest.mark.asyncio
+async def test_person_skill_rejects_certificate_without_a_verified_source_adapter() -> None:
+    actor = _actor()
+    repository = FakeRepository(actor)
+    member_id = uuid4()
+    repository.active_memberships.add(member_id)
+
+    with pytest.raises(PeopleSkillReferenceError, match="evidence_type"):
+        await _service(repository).set_person_skill(
+            actor=actor,
+            membership_id=member_id,
+            skill_id=repository.skill.id,
+            level=4,
+            evidence=(
+                SkillEvidenceDraft.create(
+                    evidence_type="CERTIFICATE",
+                    summary="Unverified certificate",
+                    source_resource_type="certificate",
+                    source_resource_id=uuid4(),
+                    occurred_at=datetime(2026, 8, 26, tzinfo=UTC),
+                ),
+            ),
+            expected_version=None,
+            request_id="certificate-deferred",
+            idempotency_key="certificate-deferred-key",
+        )
+
+    assert not any(name == "upsert_person_skill" for name, _ in repository.calls)
+
+
+@pytest.mark.asyncio
+async def test_person_skill_mutation_locks_mutable_membership_and_skill_references() -> None:
+    actor = _actor()
+    repository = FakeRepository(actor)
+    member_id = uuid4()
+    repository.active_memberships.add(member_id)
+
+    await _service(repository).set_person_skill(
+        actor=actor,
+        membership_id=member_id,
+        skill_id=repository.skill.id,
+        level=4,
+        evidence=(),
+        expected_version=None,
+        request_id="locked-references",
+        idempotency_key="locked-references-key",
+    )
+
+    skill_call = next(values for name, values in repository.calls if name == "get_skill")
+    membership_call = next(
+        values for name, values in repository.calls if name == "membership_is_active"
+    )
+    assert membership_call["for_update"] is True
+    assert skill_call["for_update"] is True
+
+
+@pytest.mark.asyncio
+async def test_only_writers_list_inactive_person_skill_tombstones() -> None:
+    manager = _actor()
+    manager_repository = FakeRepository(manager)
+    member_id = uuid4()
+    manager_repository.active_memberships.add(member_id)
+
+    await _service(manager_repository).list_person_skills(
+        actor=manager, membership_id=member_id
+    )
+    manager_call = next(
+        values for name, values in manager_repository.calls if name == "list_person_skills"
+    )
+    assert manager_call["include_inactive"] is True
+
+    employee = _actor(MembershipRole.EMPLOYEE)
+    employee_repository = FakeRepository(employee)
+    employee_repository.active_memberships.add(member_id)
+    await _service(employee_repository).list_person_skills(
+        actor=employee, membership_id=member_id
+    )
+    employee_call = next(
+        values for name, values in employee_repository.calls if name == "list_person_skills"
+    )
+    assert employee_call["include_inactive"] is False
+
+
+@pytest.mark.asyncio
 async def test_person_skill_replay_precedes_mutable_reference_checks() -> None:
     actor = _actor()
     repository = FakeRepository(actor)

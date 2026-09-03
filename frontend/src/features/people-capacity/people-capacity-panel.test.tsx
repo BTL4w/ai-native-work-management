@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { managerActor, renderWithAppProviders } from "@/test/render";
@@ -149,9 +149,9 @@ describe("PeopleCapacityPanel", () => {
     renderPeopleCapacity();
 
     await screen.findByText("Level 3");
-    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa Product design của Demo Employee" }));
     await screen.findByRole("alert");
-    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa Product design của Demo Employee" }));
 
     await waitFor(() => expect(screen.queryByText("Level 3")).not.toBeInTheDocument());
     expect(deleteKeys).toHaveLength(2);
@@ -228,7 +228,8 @@ describe("PeopleCapacityPanel", () => {
     renderPeopleCapacity();
 
     expect(await screen.findByText("Completed onboarding task")).toBeVisible();
-    expect(screen.getByText("task · v3")).toBeVisible();
+    expect(screen.getByText(new RegExp(taskId))).toHaveTextContent(timestamp);
+    expect(screen.getByText(new RegExp(taskId))).toHaveTextContent(managerId);
     expect(screen.queryByText(/score/i)).not.toBeInTheDocument();
   });
 
@@ -255,7 +256,44 @@ describe("PeopleCapacityPanel", () => {
 
     expect(await screen.findByRole("heading", { name: "Demo Employee" })).toBeVisible();
     expect(screen.getByText("Completed onboarding task")).toBeVisible();
+    expect(screen.getByText(`Verified by Thành viên ${managerId}`)).toBeVisible();
+    expect(screen.getByText(new RegExp(taskId))).toHaveTextContent(managerId);
     expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain("/api/v1/members?is_active=true&page=1&page_size=100");
+  });
+
+  it("shows an empty verified-skill state when only a tombstone is returned", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/members?is_active=true&page=1&page_size=100") return response(memberPage);
+      if (path === "/api/v1/skills") return response([skill]);
+      if (path === `/api/v1/members/${managerId}/skills`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/skills`) return response([{ ...savedPersonSkill, active: false, version: 2 }]);
+      if (path === `/api/v1/members/${managerId}/work-evidence`) return response([]);
+      if (path === `/api/v1/members/${employeeId}/work-evidence`) return response([]);
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderPeopleCapacity();
+
+    const employeeCard = (await screen.findByRole("heading", { name: "Demo Employee" })).closest("article");
+    expect(employeeCard).not.toBeNull();
+    expect(within(employeeCard!).getByText("Chưa có kỹ năng đã xác minh.")).toBeVisible();
+    expect(within(employeeCard!).queryByRole("button", { name: "Sửa" })).not.toBeInTheDocument();
+  });
+
+  it("disables adding when the organization has no active skill catalog", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/members?is_active=true&page=1&page_size=100") return response(memberPage);
+      if (path === "/api/v1/skills") return response([{ ...skill, active: false }]);
+      if (path.endsWith("/skills") || path.endsWith("/work-evidence")) return response([]);
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderPeopleCapacity();
+
+    await screen.findByText("Demo Employee");
+    expect(screen.getByRole("button", { name: "Thêm skill" })).toBeDisabled();
   });
 
   it("disables adding a skill when there are no people to assign it to", async () => {
@@ -305,7 +343,7 @@ describe("PeopleCapacityPanel", () => {
 
     renderPeopleCapacity();
     await screen.findByText("Level 3");
-    fireEvent.click(screen.getByRole("button", { name: "Sửa" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sửa Product design của Demo Employee" }));
     expect(await screen.findByRole("dialog", { name: "Sửa kỹ năng đã xác minh" })).toBeVisible();
     const skillSelect = screen.getByLabelText("Skill");
     expect(skillSelect).toBeDisabled();
