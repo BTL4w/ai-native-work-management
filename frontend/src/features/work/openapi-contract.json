@@ -4,7 +4,8 @@
     "TaskStatus": ["TO_DO", "IN_PROGRESS", "DONE"],
     "ApprovalDecision": ["APPROVE", "REJECT"],
     "ProjectWeekStatus": ["PLANNED", "ACTIVE", "COMPLETED"],
-    "SkillEvidenceType": ["MANAGER_NOTE", "CERTIFICATE", "COMPLETED_TASK", "REVIEW_OUTCOME"]
+    "SkillEvidenceType": ["MANAGER_NOTE", "CERTIFICATE", "COMPLETED_TASK", "REVIEW_OUTCOME"],
+    "CapacityKind": ["DEFAULT", "OVERRIDE"]
   },
   "schemas": {
     "ProjectCreateRequest": { "required": ["name"], "properties": { "name": "string[1,160]", "description": "null|string[,5000]" } },
@@ -52,7 +53,13 @@
     "PersonSkillUpsertRequest": { "required": ["skill_id", "level"], "properties": { "skill_id": "string:uuid", "level": "integer", "evidence": "array:ref:SkillEvidenceCreateRequest" } },
     "PersonSkillResponse": { "required": ["id", "organization_id", "membership_id", "skill_id", "level", "verified_by_membership_id", "verified_at", "version", "created_at", "updated_at", "active", "evidence"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "skill_id": "string:uuid", "level": "integer", "verified_by_membership_id": "string:uuid", "verified_at": "string:date-time", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time", "active": "boolean", "evidence": "array:ref:SkillEvidenceResponse" } },
     "WorkOutcomeEvidenceCreateRequest": { "required": ["evidence_type", "summary", "source_resource_type", "source_resource_id", "source_resource_version", "observed_at"], "properties": { "evidence_type": "enum:SkillEvidenceType", "summary": "string[1,2000]", "source_resource_type": "string[1,100]", "source_resource_id": "string:uuid", "source_resource_version": "integer", "observed_at": "string:date-time" } },
-    "WorkOutcomeEvidenceResponse": { "required": ["id", "organization_id", "membership_id", "evidence_type", "summary", "source_resource_type", "source_resource_id", "source_resource_version", "observed_at", "created_by_membership_id", "created_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "evidence_type": "enum:SkillEvidenceType", "summary": "string", "source_resource_type": "string", "source_resource_id": "string:uuid", "source_resource_version": "integer", "observed_at": "string:date-time", "created_by_membership_id": "string:uuid", "created_at": "string:date-time" } }
+    "WorkOutcomeEvidenceResponse": { "required": ["id", "organization_id", "membership_id", "evidence_type", "summary", "source_resource_type", "source_resource_id", "source_resource_version", "observed_at", "created_by_membership_id", "created_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "evidence_type": "enum:SkillEvidenceType", "summary": "string", "source_resource_type": "string", "source_resource_id": "string:uuid", "source_resource_version": "integer", "observed_at": "string:date-time", "created_by_membership_id": "string:uuid", "created_at": "string:date-time" } },
+    "CapacityUpsertRequest": { "required": ["membership_id", "kind", "hours"], "properties": { "membership_id": "string:uuid", "kind": "literal:DEFAULT|OVERRIDE", "week_start": "null|string:date", "hours": "integer", "effective_from": "null|string:date", "effective_to": "null|string:date" } },
+    "CapacityResponse": { "required": ["id", "organization_id", "membership_id", "kind", "hours", "effective_from", "effective_to", "week_start", "version", "created_at", "updated_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "kind": "enum:CapacityKind", "hours": "integer", "effective_from": "string:date", "effective_to": "string:date", "week_start": "null|string:date", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time" } },
+    "LeaveCreateRequest": { "required": ["membership_id", "start_date", "end_date", "unavailable_hours"], "properties": { "membership_id": "string:uuid", "start_date": "string:date", "end_date": "string:date", "unavailable_hours": "integer" } },
+    "LeaveUpdateRequest": { "required": [], "properties": { "start_date": "null|string:date", "end_date": "null|string:date", "unavailable_hours": "integer|null" } },
+    "LeaveResponse": { "required": ["id", "organization_id", "membership_id", "start_date", "end_date", "unavailable_hours", "version", "created_at", "updated_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "membership_id": "string:uuid", "start_date": "string:date", "end_date": "string:date", "unavailable_hours": "integer", "version": "integer", "created_at": "string:date-time", "updated_at": "string:date-time" } },
+    "WorkloadResponse": { "required": ["membership_id", "project_week_id", "effective_capacity_hours", "allocated_effort_hours", "residual_capacity_hours", "workload_ratio"], "properties": { "membership_id": "string:uuid", "project_week_id": "string:uuid", "effective_capacity_hours": "integer", "allocated_effort_hours": "integer", "residual_capacity_hours": "integer", "workload_ratio": "null|string" } }
   },
   "people_capacity": {
     "paths": {
@@ -60,7 +67,12 @@
       "/api/v1/skills/{skill_id}": ["get", "patch", "delete"],
       "/api/v1/members/{membership_id}/skills": ["get"],
       "/api/v1/members/{membership_id}/skills/{skill_id}": ["get", "put", "delete"],
-      "/api/v1/members/{membership_id}/work-evidence": ["get", "post"]
+      "/api/v1/members/{membership_id}/work-evidence": ["get", "post"],
+      "/api/v1/capacity": ["get", "post"],
+      "/api/v1/capacity/{capacity_id}": ["get", "delete"],
+      "/api/v1/leave": ["get", "post"],
+      "/api/v1/leave/{leave_id}": ["get", "patch", "delete"],
+      "/api/v1/workload": ["get"]
     }
   },
   "assistant": {

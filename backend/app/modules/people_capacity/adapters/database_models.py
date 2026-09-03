@@ -1,11 +1,12 @@
 """SQLAlchemy models for tenant-owned People Skills persistence."""
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import Enum as SQLAlchemyEnum
 from sqlalchemy.orm import Mapped, mapped_column
@@ -20,6 +22,7 @@ from sqlalchemy.sql import func
 
 from app.core.database import Base
 from app.modules.organization.adapters import database_models as _organization_models
+from app.modules.people_capacity.domain.availability import CapacityKind
 from app.modules.people_capacity.domain.skills import SkillEvidenceType
 from app.modules.work.adapters import database_models as _work_models
 
@@ -265,3 +268,96 @@ class WorkOutcomeEvidenceModel(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_by_membership_id: Mapped[UUID]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CapacityEntryModel(Base):
+    """Current version of one tenant-owned capacity default or override."""
+
+    __tablename__ = "capacity_entries"
+    __table_args__ = (
+        CheckConstraint("hours BETWEEN 0 AND 168", name="hours"),
+        CheckConstraint("effective_to >= effective_from", name="dates"),
+        CheckConstraint(
+            "(kind = 'DEFAULT' AND week_start IS NULL) "
+            "OR (kind = 'OVERRIDE' AND week_start IS NOT NULL AND week_start = effective_from)",
+            name="kind_week",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "membership_id"],
+            ["memberships.organization_id", "memberships.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("organization_id", "id"),
+        Index(
+            "ix_capacity_entries_default_unique",
+            "organization_id",
+            "membership_id",
+            unique=True,
+            postgresql_where=text("kind = 'DEFAULT'"),
+        ),
+        Index(
+            "ix_capacity_entries_override_unique",
+            "organization_id",
+            "membership_id",
+            "week_start",
+            unique=True,
+            postgresql_where=text("kind = 'OVERRIDE'"),
+        ),
+        Index(
+            "ix_capacity_entries_lookup",
+            "organization_id",
+            "membership_id",
+            "kind",
+            "effective_from",
+            "effective_to",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID]
+    membership_id: Mapped[UUID]
+    kind: Mapped[CapacityKind] = mapped_column(
+        SQLAlchemyEnum(CapacityKind, name="capacity_kind", validate_strings=True)
+    )
+    hours: Mapped[int] = mapped_column(Integer)
+    effective_from: Mapped[date] = mapped_column(Date)
+    effective_to: Mapped[date] = mapped_column(Date)
+    week_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LeaveEntryModel(Base):
+    """Current version of one tenant-owned leave entry."""
+
+    __tablename__ = "leave_entries"
+    __table_args__ = (
+        CheckConstraint("unavailable_hours BETWEEN 0 AND 168", name="hours"),
+        CheckConstraint("end_date >= start_date", name="dates"),
+        ForeignKeyConstraint(
+            ["organization_id", "membership_id"],
+            ["memberships.organization_id", "memberships.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("organization_id", "id"),
+        Index(
+            "ix_leave_entries_timeline",
+            "organization_id",
+            "membership_id",
+            "start_date",
+            "end_date",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID]
+    membership_id: Mapped[UUID]
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    unavailable_hours: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -5,10 +5,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import date
 from typing import Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.people_capacity.domain.availability import (
+    CapacityEntry,
+    CapacityEntryDraft,
+    CapacityKind,
+    LeaveEntry,
+    LeaveEntryDraft,
+)
 from app.modules.people_capacity.domain.skills import (
     PersonSkillDraft,
     Skill,
@@ -19,6 +27,7 @@ from app.modules.people_capacity.domain.skills import (
     WorkOutcomeEvidence,
     WorkOutcomeEvidenceDraft,
 )
+from app.modules.people_capacity.domain.workload import WorkloadInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +195,140 @@ class PeopleCapacityRepository(Protocol):
         idempotency_key: str | None = None,
         resource_id: UUID | None = None,
     ) -> None: ...
+
+    async def list_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None = None,
+        kind: CapacityKind | None = None,
+    ) -> tuple[CapacityEntry, ...]: ...
+
+    async def get_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        capacity_id: UUID,
+    ) -> CapacityEntry | None: ...
+
+    async def get_capacity_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry] | None: ...
+
+    async def get_capacity_delete_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry] | None: ...
+
+    async def upsert_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        draft: CapacityEntryDraft,
+        expected_version: int | None,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry]: ...
+
+    async def delete_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        capacity_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry]: ...
+
+    async def list_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> tuple[LeaveEntry, ...]: ...
+
+    async def get_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+    ) -> LeaveEntry | None: ...
+
+    async def get_leave_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry] | None: ...
+
+    async def get_leave_delete_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry] | None: ...
+
+    async def get_leave_update_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry] | None: ...
+
+    async def create_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        draft: LeaveEntryDraft,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry]: ...
+
+    async def update_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+        draft: LeaveEntryDraft,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry]: ...
+
+    async def delete_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry]: ...
+
+    async def load_workload_inputs(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        week_start: date,
+        membership_id: UUID | None,
+    ) -> tuple[WorkloadInput, ...]: ...
 
 
 PeopleCapacityTransactionFactory = Callable[

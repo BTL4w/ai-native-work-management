@@ -1,13 +1,15 @@
-"""Strict public schemas for Skills and verified person Skills."""
-
-from __future__ import annotations
-
-from datetime import datetime
-from typing import Self
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.people_capacity.domain.availability import (
+    CapacityEntry,
+    CapacityKind,
+    LeaveEntry,
+)
 from app.modules.people_capacity.domain.skills import (
     Skill,
     SkillEvidence,
@@ -15,6 +17,7 @@ from app.modules.people_capacity.domain.skills import (
     VerifiedPersonSkill,
     WorkOutcomeEvidence,
 )
+from app.modules.people_capacity.domain.workload import WeeklyWorkload
 
 
 class SkillCreateRequest(BaseModel):
@@ -133,4 +136,79 @@ class WorkOutcomeEvidenceResponse(BaseModel):
 
     @classmethod
     def from_domain(cls, value: WorkOutcomeEvidence) -> Self:
+        return cls(**{field: getattr(value, field) for field in cls.model_fields})
+
+
+class CapacityUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    membership_id: UUID
+    kind: Literal["DEFAULT", "OVERRIDE"]
+    week_start: date | None = None
+    hours: int = Field(ge=0, le=168)
+    effective_from: date | None = None
+    effective_to: date | None = None
+
+
+class CapacityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    organization_id: UUID
+    membership_id: UUID
+    kind: CapacityKind
+    hours: int
+    effective_from: date
+    effective_to: date
+    week_start: date | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, value: CapacityEntry) -> Self:
+        return cls(**{field: getattr(value, field) for field in cls.model_fields})
+
+
+class LeaveCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    membership_id: UUID
+    start_date: date
+    end_date: date
+    unavailable_hours: int = Field(ge=0, le=168)
+
+
+class LeaveUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_date: date | None = None
+    end_date: date | None = None
+    unavailable_hours: int | None = Field(default=None, ge=0, le=168)
+
+
+class LeaveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    organization_id: UUID
+    membership_id: UUID
+    start_date: date
+    end_date: date
+    unavailable_hours: int
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, value: LeaveEntry) -> Self:
+        return cls(**{field: getattr(value, field) for field in cls.model_fields})
+
+
+class WorkloadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    membership_id: UUID
+    project_week_id: UUID
+    effective_capacity_hours: int
+    allocated_effort_hours: int
+    residual_capacity_hours: int
+    workload_ratio: Decimal | None
+
+    @classmethod
+    def from_domain(cls, value: WeeklyWorkload) -> Self:
         return cls(**{field: getattr(value, field) for field in cls.model_fields})

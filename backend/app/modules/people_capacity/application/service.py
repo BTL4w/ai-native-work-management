@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from datetime import date
 from uuid import UUID
 
 from app.modules.identity.domain.auth import AuthenticatedActor
@@ -13,6 +14,16 @@ from app.modules.people_capacity.application.ports import (
     PeopleCapacityRepository,
     PeopleCapacityTransactionFactory,
     PeopleMutationResult,
+)
+from app.modules.people_capacity.application.workload_service import WorkloadService
+from app.modules.people_capacity.domain.availability import (
+    AvailabilityError,
+    CapacityEntry,
+    CapacityEntryDraft,
+    CapacityKind,
+    InvalidLeaveEntryError,
+    LeaveEntry,
+    LeaveEntryDraft,
 )
 from app.modules.people_capacity.domain.skills import (
     PeopleSkillError,
@@ -30,6 +41,7 @@ from app.modules.people_capacity.domain.skills import (
     WorkOutcomeEvidence,
     WorkOutcomeEvidenceDraft,
 )
+from app.modules.people_capacity.domain.workload import WeeklyWorkload
 
 _WRITERS = frozenset({MembershipRole.ADMIN, MembershipRole.MANAGER})
 
@@ -42,6 +54,18 @@ def _fingerprint(operation: str, values: dict[str, object]) -> str:
         default=str,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _authorized_read_membership(
+    actor: AuthenticatedActor, membership_id: UUID | None
+) -> UUID | None:
+    """Limit Employee availability reads to their own membership."""
+
+    if actor.role is not MembershipRole.EMPLOYEE:
+        return membership_id
+    if membership_id is not None and membership_id != actor.membership_id:
+        raise PeopleSkillForbiddenError
+    return actor.membership_id
 
 
 class PeopleCapacityService:
@@ -454,9 +478,7 @@ class PeopleCapacityService:
                     membership_id=membership_id,
                     for_update=True,
                 )
-                skill = await repository.get_skill(
-                    actor=actor, skill_id=skill_id, for_update=True
-                )
+                skill = await repository.get_skill(actor=actor, skill_id=skill_id, for_update=True)
                 if skill is None or not skill.active:
                     raise PeopleSkillReferenceError("skill_id")
                 for item in sorted(
@@ -628,3 +650,445 @@ class PeopleCapacityService:
                     resource_id=skill_id,
                 )
                 raise
+
+    async def list_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None = None,
+        kind: CapacityKind | None = None,
+    ) -> tuple[CapacityEntry, ...]:
+        membership_id = _authorized_read_membership(actor, membership_id)
+        async with self._transactions() as repository:
+            return await repository.list_capacity(
+                actor=actor, membership_id=membership_id, kind=kind
+            )
+
+    async def get_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        capacity_id: UUID,
+    ) -> CapacityEntry:
+        async with self._transactions() as repository:
+            entry = await repository.get_capacity(actor=actor, capacity_id=capacity_id)
+        if entry is None:
+            raise PeopleSkillNotFoundError
+        _authorized_read_membership(actor, entry.membership_id)
+        return entry
+
+    async def upsert_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        kind: CapacityKind,
+        hours: int,
+        effective_from: date,
+        effective_to: date,
+        week_start: date | None = None,
+        expected_version: int | None = None,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PeopleMutationResult[CapacityEntry]:
+        action = "people.capacity.upserted"
+        async with self._transactions() as repository:
+            await self._require_writer(
+                repository=repository,
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=membership_id,
+            )
+            try:
+                draft = CapacityEntryDraft.create(
+                    membership_id=membership_id,
+                    kind=kind,
+                    hours=hours,
+                    effective_from=effective_from,
+                    effective_to=effective_to,
+                    week_start=week_start,
+                    project_week_end=effective_to if week_start is not None else None,
+                )
+                request_fingerprint = _fingerprint(
+                    "people.capacity.upsert",
+                    {
+                        "membership_id": membership_id,
+                        "kind": kind.value,
+                        "hours": hours,
+                        "effective_from": effective_from,
+                        "effective_to": effective_to,
+                        "week_start": week_start,
+                        "expected_version": expected_version,
+                    },
+                )
+                replay = await repository.get_capacity_replay(
+                    actor=actor,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    return replay
+                await self._require_active_member(
+                    repository=repository,
+                    actor=actor,
+                    membership_id=membership_id,
+                    for_update=True,
+                )
+                return await repository.upsert_capacity(
+                    actor=actor,
+                    draft=draft,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except PeopleSkillError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=membership_id,
+                )
+                raise
+            except AvailabilityError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=membership_id,
+                )
+                raise
+
+    async def delete_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        capacity_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PeopleMutationResult[CapacityEntry]:
+        action = "people.capacity.deleted"
+        async with self._transactions() as repository:
+            await self._require_writer(
+                repository=repository,
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=capacity_id,
+            )
+            try:
+                request_fingerprint = _fingerprint(
+                    "people.capacity.delete",
+                    {
+                        "capacity_id": capacity_id,
+                        "expected_version": expected_version,
+                    },
+                )
+                replay = await repository.get_capacity_delete_replay(
+                    actor=actor,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    return replay
+                return await repository.delete_capacity(
+                    actor=actor,
+                    capacity_id=capacity_id,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except PeopleSkillError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=capacity_id,
+                )
+                raise
+
+    async def update_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+        start_date: date | None,
+        start_date_supplied: bool,
+        end_date: date | None,
+        end_date_supplied: bool,
+        unavailable_hours: int | None,
+        unavailable_hours_supplied: bool,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PeopleMutationResult[LeaveEntry]:
+        action = "people.leave.updated"
+        async with self._transactions() as repository:
+            await self._require_writer(
+                repository=repository,
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=leave_id,
+            )
+            try:
+                if not any((start_date_supplied, end_date_supplied, unavailable_hours_supplied)):
+                    raise InvalidLeaveEntryError("body")
+                request_fingerprint = _fingerprint(
+                    "people.leave.update",
+                    {
+                        "leave_id": leave_id,
+                        "start_date": start_date if start_date_supplied else "__omitted__",
+                        "end_date": end_date if end_date_supplied else "__omitted__",
+                        "unavailable_hours": (
+                            unavailable_hours if unavailable_hours_supplied else "__omitted__"
+                        ),
+                        "expected_version": expected_version,
+                    },
+                )
+                replay = await repository.get_leave_update_replay(
+                    actor=actor,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    return replay
+                current = await repository.get_leave(actor=actor, leave_id=leave_id)
+                if current is None:
+                    raise PeopleSkillNotFoundError
+                if start_date_supplied and start_date is None:
+                    raise InvalidLeaveEntryError("start_date")
+                if end_date_supplied and end_date is None:
+                    raise InvalidLeaveEntryError("end_date")
+                if unavailable_hours_supplied and unavailable_hours is None:
+                    raise InvalidLeaveEntryError("unavailable_hours")
+                resolved_start_date = start_date or current.start_date
+                resolved_end_date = end_date or current.end_date
+                resolved_unavailable_hours = (
+                    unavailable_hours
+                    if unavailable_hours is not None
+                    else current.unavailable_hours
+                )
+                draft = LeaveEntryDraft.create(
+                    membership_id=current.membership_id,
+                    start_date=resolved_start_date,
+                    end_date=resolved_end_date,
+                    unavailable_hours=resolved_unavailable_hours,
+                )
+                return await repository.update_leave(
+                    actor=actor,
+                    leave_id=leave_id,
+                    draft=draft,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except PeopleSkillError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=leave_id,
+                )
+                raise
+            except AvailabilityError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=leave_id,
+                )
+                raise
+
+    async def list_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> tuple[LeaveEntry, ...]:
+        membership_id = _authorized_read_membership(actor, membership_id)
+        async with self._transactions() as repository:
+            return await repository.list_leave(
+                actor=actor,
+                membership_id=membership_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+    async def get_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+    ) -> LeaveEntry:
+        async with self._transactions() as repository:
+            entry = await repository.get_leave(actor=actor, leave_id=leave_id)
+        if entry is None:
+            raise PeopleSkillNotFoundError
+        _authorized_read_membership(actor, entry.membership_id)
+        return entry
+
+    async def create_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID,
+        start_date: date,
+        end_date: date,
+        unavailable_hours: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PeopleMutationResult[LeaveEntry]:
+        action = "people.leave.created"
+        async with self._transactions() as repository:
+            await self._require_writer(
+                repository=repository,
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=membership_id,
+            )
+            try:
+                draft = LeaveEntryDraft.create(
+                    membership_id=membership_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    unavailable_hours=unavailable_hours,
+                )
+                request_fingerprint = _fingerprint(
+                    "people.leave.create",
+                    {
+                        "membership_id": membership_id,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "unavailable_hours": unavailable_hours,
+                    },
+                )
+                replay = await repository.get_leave_replay(
+                    actor=actor,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    return replay
+                await self._require_active_member(
+                    repository=repository,
+                    actor=actor,
+                    membership_id=membership_id,
+                    for_update=True,
+                )
+                return await repository.create_leave(
+                    actor=actor,
+                    draft=draft,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except PeopleSkillError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=membership_id,
+                )
+                raise
+            except AvailabilityError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=membership_id,
+                )
+                raise
+
+    async def delete_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> PeopleMutationResult[LeaveEntry]:
+        action = "people.leave.deleted"
+        async with self._transactions() as repository:
+            await self._require_writer(
+                repository=repository,
+                actor=actor,
+                action=action,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                resource_id=leave_id,
+            )
+            try:
+                request_fingerprint = _fingerprint(
+                    "people.leave.delete",
+                    {
+                        "leave_id": leave_id,
+                        "expected_version": expected_version,
+                    },
+                )
+                replay = await repository.get_leave_delete_replay(
+                    actor=actor,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    return replay
+                return await repository.delete_leave(
+                    actor=actor,
+                    leave_id=leave_id,
+                    expected_version=expected_version,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except PeopleSkillError as error:
+                await self._reject(
+                    actor=actor,
+                    action=action,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                    reason_code=type(error).__name__,
+                    resource_id=leave_id,
+                )
+                raise
+
+    async def list_weekly_workload(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        week_start: date,
+        membership_id: UUID | None = None,
+    ) -> tuple[WeeklyWorkload, ...]:
+        membership_id = _authorized_read_membership(actor, membership_id)
+        async with self._transactions() as repository:
+            return await WorkloadService(repository).list_weekly_workload(
+                actor=actor,
+                week_start=week_start,
+                membership_id=membership_id,
+            )

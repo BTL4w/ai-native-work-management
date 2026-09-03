@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Coroutine
+from datetime import date, timedelta
 from typing import Annotated, Any, NoReturn
 from uuid import UUID
 
@@ -19,13 +20,25 @@ from app.modules.people_capacity.api.dependencies import (
     prepare_people_mutation,
 )
 from app.modules.people_capacity.api.schemas import (
+    CapacityResponse,
+    CapacityUpsertRequest,
+    LeaveCreateRequest,
+    LeaveResponse,
+    LeaveUpdateRequest,
     PersonSkillResponse,
     PersonSkillUpsertRequest,
     SkillCreateRequest,
     SkillResponse,
     SkillUpdateRequest,
+    WorkloadResponse,
     WorkOutcomeEvidenceCreateRequest,
     WorkOutcomeEvidenceResponse,
+)
+from app.modules.people_capacity.domain.availability import (
+    CapacityKind,
+    InvalidCapacityEntryError,
+    InvalidLeaveEntryError,
+    OverlappingCapacityEntriesError,
 )
 from app.modules.people_capacity.domain.skills import (
     EmptyPersonSkillPatchError,
@@ -92,7 +105,7 @@ def _required_version(value: str | None) -> int:
     return version
 
 
-def _raise(error: PeopleSkillError) -> NoReturn:
+def _raise(error: Exception) -> NoReturn:
     if isinstance(error, PeopleSkillForbiddenError):
         mapped = ApplicationError(
             status_code=403, code="FORBIDDEN", message_key="common.error.forbidden"
@@ -114,7 +127,7 @@ def _raise(error: PeopleSkillError) -> NoReturn:
             code="IDEMPOTENCY_KEY_REUSED",
             message_key="common.error.idempotencyKeyReused",
         )
-    elif isinstance(error, PeopleSkillConflictError):
+    elif isinstance(error, (PeopleSkillConflictError, OverlappingCapacityEntriesError)):
         mapped = ApplicationError(
             status_code=409, code="CONFLICT", message_key="common.error.conflict"
         )
@@ -124,6 +137,8 @@ def _raise(error: PeopleSkillError) -> NoReturn:
             InvalidEvidenceFieldError,
             InvalidSkillFieldError,
             InvalidSkillLevelError,
+            InvalidCapacityEntryError,
+            InvalidLeaveEntryError,
             EmptyPersonSkillPatchError,
             EmptySkillPatchError,
             PeopleSkillReferenceError,
@@ -451,3 +466,306 @@ async def record_work_outcome_evidence(
     if result.replayed:
         response.headers["Idempotency-Replayed"] = "true"
     return WorkOutcomeEvidenceResponse.from_domain(result.resource)
+
+
+@router.get(
+    "/capacity",
+    response_model=list[CapacityResponse],
+    responses=_ERRORS,
+)
+async def list_capacity(
+    actor: ActorDependency,
+    service: PeopleCapacityServiceDependency,
+    membership_id: UUID | None = None,
+    kind: CapacityKind | None = None,
+) -> list[CapacityResponse]:
+    try:
+        entries = await service.list_capacity(actor=actor, membership_id=membership_id, kind=kind)
+    except PeopleSkillError as error:
+        _raise(error)
+    return [CapacityResponse.from_domain(entry) for entry in entries]
+
+
+@router.post(
+    "/capacity",
+    response_model=CapacityResponse,
+    status_code=http_status.HTTP_201_CREATED,
+    responses=_ERRORS,
+)
+async def upsert_capacity(
+    payload: CapacityUpsertRequest,
+    request: Request,
+    response: Response,
+    actor: PeopleMutationActorDependency,
+    service: PeopleCapacityServiceDependency,
+    idempotency_key: IdempotencyKey,
+    if_match: IfMatch = None,
+) -> CapacityResponse:
+    if payload.kind == "DEFAULT":
+        if payload.week_start is not None:
+            raise ApplicationError(
+                status_code=422,
+                code="VALIDATION_FAILED",
+                message_key="common.error.validation",
+                field_errors=[
+                    FieldError(
+                        field="week_start",
+                        code="WEEK_START_NOT_ALLOWED",
+                        message_key="validation.invalid",
+                    )
+                ],
+            )
+        eff_from = payload.effective_from or date(2000, 1, 1)
+        eff_to = payload.effective_to or date(2099, 12, 31)
+    else:
+        if payload.week_start is None:
+            raise ApplicationError(
+                status_code=422,
+                code="VALIDATION_FAILED",
+                message_key="common.error.validation",
+                field_errors=[
+                    FieldError(
+                        field="week_start",
+                        code="WEEK_START_REQUIRED",
+                        message_key="validation.invalid",
+                    )
+                ],
+            )
+        eff_from = payload.effective_from or payload.week_start
+        eff_to = payload.effective_to or (payload.week_start + timedelta(days=6))
+
+    _transport_validated(request)
+    try:
+        expected_version = _version(if_match)
+        result = await service.upsert_capacity(
+            actor=actor,
+            membership_id=payload.membership_id,
+            kind=CapacityKind(payload.kind),
+            hours=payload.hours,
+            effective_from=eff_from,
+            effective_to=eff_to,
+            week_start=payload.week_start,
+            expected_version=expected_version,
+            request_id=request.state.request_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, version=result.resource.version, replayed=result.replayed)
+    if expected_version is not None:
+        response.status_code = http_status.HTTP_200_OK
+    return CapacityResponse.from_domain(result.resource)
+
+
+@router.get(
+    "/capacity/{capacity_id}",
+    response_model=CapacityResponse,
+    responses=_ERRORS,
+)
+async def get_capacity(
+    capacity_id: UUID,
+    response: Response,
+    actor: ActorDependency,
+    service: PeopleCapacityServiceDependency,
+) -> CapacityResponse:
+    try:
+        entry = await service.get_capacity(actor=actor, capacity_id=capacity_id)
+    except PeopleSkillError as error:
+        _raise(error)
+    _headers(response, version=entry.version)
+    return CapacityResponse.from_domain(entry)
+
+
+@router.delete(
+    "/capacity/{capacity_id}",
+    response_model=CapacityResponse,
+    responses=_ERRORS,
+)
+async def delete_capacity(
+    capacity_id: UUID,
+    request: Request,
+    response: Response,
+    actor: PeopleMutationActorDependency,
+    service: PeopleCapacityServiceDependency,
+    idempotency_key: IdempotencyKey,
+    if_match: RequiredIfMatch,
+) -> CapacityResponse:
+    _transport_validated(request)
+    try:
+        expected_version = _required_version(if_match)
+        result = await service.delete_capacity(
+            actor=actor,
+            capacity_id=capacity_id,
+            expected_version=expected_version,
+            request_id=request.state.request_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, version=result.resource.version, replayed=result.replayed)
+    return CapacityResponse.from_domain(result.resource)
+
+
+@router.get(
+    "/leave",
+    response_model=list[LeaveResponse],
+    responses=_ERRORS,
+)
+async def list_leave(
+    actor: ActorDependency,
+    service: PeopleCapacityServiceDependency,
+    membership_id: UUID | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[LeaveResponse]:
+    try:
+        entries = await service.list_leave(
+            actor=actor,
+            membership_id=membership_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except PeopleSkillError as error:
+        _raise(error)
+    return [LeaveResponse.from_domain(entry) for entry in entries]
+
+
+@router.post(
+    "/leave",
+    response_model=LeaveResponse,
+    status_code=http_status.HTTP_201_CREATED,
+    responses=_ERRORS,
+)
+async def create_leave(
+    payload: LeaveCreateRequest,
+    request: Request,
+    response: Response,
+    actor: PeopleMutationActorDependency,
+    service: PeopleCapacityServiceDependency,
+    idempotency_key: IdempotencyKey,
+) -> LeaveResponse:
+    _transport_validated(request)
+    try:
+        result = await service.create_leave(
+            actor=actor,
+            membership_id=payload.membership_id,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            unavailable_hours=payload.unavailable_hours,
+            request_id=request.state.request_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, version=result.resource.version, replayed=result.replayed)
+    if result.replayed:
+        response.status_code = http_status.HTTP_200_OK
+    return LeaveResponse.from_domain(result.resource)
+
+
+@router.get(
+    "/leave/{leave_id}",
+    response_model=LeaveResponse,
+    responses=_ERRORS,
+)
+async def get_leave(
+    leave_id: UUID,
+    response: Response,
+    actor: ActorDependency,
+    service: PeopleCapacityServiceDependency,
+) -> LeaveResponse:
+    try:
+        entry = await service.get_leave(actor=actor, leave_id=leave_id)
+    except PeopleSkillError as error:
+        _raise(error)
+    _headers(response, version=entry.version)
+    return LeaveResponse.from_domain(entry)
+
+
+@router.patch(
+    "/leave/{leave_id}",
+    response_model=LeaveResponse,
+    responses=_ERRORS,
+)
+async def update_leave(
+    leave_id: UUID,
+    payload: LeaveUpdateRequest,
+    request: Request,
+    response: Response,
+    actor: PeopleMutationActorDependency,
+    service: PeopleCapacityServiceDependency,
+    idempotency_key: IdempotencyKey,
+    if_match: RequiredIfMatch,
+) -> LeaveResponse:
+    _transport_validated(request)
+    supplied = payload.model_fields_set
+    try:
+        result = await service.update_leave(
+            actor=actor,
+            leave_id=leave_id,
+            start_date=payload.start_date,
+            start_date_supplied="start_date" in supplied,
+            end_date=payload.end_date,
+            end_date_supplied="end_date" in supplied,
+            unavailable_hours=payload.unavailable_hours,
+            unavailable_hours_supplied="unavailable_hours" in supplied,
+            expected_version=_required_version(if_match),
+            request_id=request.state.request_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, version=result.resource.version, replayed=result.replayed)
+    return LeaveResponse.from_domain(result.resource)
+
+
+@router.delete(
+    "/leave/{leave_id}",
+    response_model=LeaveResponse,
+    responses=_ERRORS,
+)
+async def delete_leave(
+    leave_id: UUID,
+    request: Request,
+    response: Response,
+    actor: PeopleMutationActorDependency,
+    service: PeopleCapacityServiceDependency,
+    idempotency_key: IdempotencyKey,
+    if_match: RequiredIfMatch,
+) -> LeaveResponse:
+    _transport_validated(request)
+    try:
+        expected_version = _required_version(if_match)
+        result = await service.delete_leave(
+            actor=actor,
+            leave_id=leave_id,
+            expected_version=expected_version,
+            request_id=request.state.request_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as error:
+        _raise(error)
+    _headers(response, version=result.resource.version, replayed=result.replayed)
+    return LeaveResponse.from_domain(result.resource)
+
+
+@router.get(
+    "/workload",
+    response_model=list[WorkloadResponse],
+    responses=_ERRORS,
+)
+async def list_weekly_workload(
+    week_start: date,
+    actor: ActorDependency,
+    service: PeopleCapacityServiceDependency,
+    membership_id: UUID | None = None,
+) -> list[WorkloadResponse]:
+    try:
+        workloads = await service.list_weekly_workload(
+            actor=actor,
+            week_start=week_start,
+            membership_id=membership_id,
+        )
+    except PeopleSkillError as error:
+        _raise(error)
+    return [WorkloadResponse.from_domain(item) for item in workloads]

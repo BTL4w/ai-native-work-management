@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +16,11 @@ from app.modules.people_capacity.application.ports import (
     PeopleMutationResult,
 )
 from app.modules.people_capacity.application.service import PeopleCapacityService
+from app.modules.people_capacity.domain.availability import (
+    CapacityKind,
+    InvalidCapacityEntryError,
+    InvalidLeaveEntryError,
+)
 from app.modules.people_capacity.domain.skills import (
     InvalidEvidenceFieldError,
     PeopleSkillForbiddenError,
@@ -106,6 +111,18 @@ class FakeRepository:
 
     async def list_work_outcome_evidence(self, **values: Any):  # type: ignore[no-untyped-def]
         self.calls.append(("list_work_outcome_evidence", values))
+        return ()
+
+    async def list_capacity(self, **values: Any):  # type: ignore[no-untyped-def]
+        self.calls.append(("list_capacity", values))
+        return ()
+
+    async def list_leave(self, **values: Any):  # type: ignore[no-untyped-def]
+        self.calls.append(("list_leave", values))
+        return ()
+
+    async def load_workload_inputs(self, **values: Any):  # type: ignore[no-untyped-def]
+        self.calls.append(("load_workload_inputs", values))
         return ()
 
     async def get_work_outcome_evidence_replay(self, **values: Any):  # type: ignore[no-untyped-def]
@@ -415,22 +432,22 @@ async def test_person_skill_derives_manager_note_provenance_from_the_writer() ->
         membership_id=member_id,
         skill_id=repository.skill.id,
         level=4,
-        evidence=(SkillEvidenceDraft.create(
-            evidence_type="MANAGER_NOTE",
-            summary="Observed delivery",
-            source_resource_type="untrusted",
-            source_resource_id=uuid4(),
-            occurred_at=datetime(2026, 8, 26, tzinfo=UTC),
-        ),),
+        evidence=(
+            SkillEvidenceDraft.create(
+                evidence_type="MANAGER_NOTE",
+                summary="Observed delivery",
+                source_resource_type="untrusted",
+                source_resource_id=uuid4(),
+                occurred_at=datetime(2026, 8, 26, tzinfo=UTC),
+            ),
+        ),
         expected_version=None,
         request_id="manager-note-derived",
         idempotency_key="manager-note-derived-key",
     )
 
     draft = next(
-        values["draft"]
-        for name, values in repository.calls
-        if name == "upsert_person_skill"
+        values["draft"] for name, values in repository.calls if name == "upsert_person_skill"
     )
     assert draft.evidence[0].source_resource_type == "manager_note"
     assert draft.evidence[0].source_resource_id == actor.membership_id
@@ -499,9 +516,7 @@ async def test_only_writers_list_inactive_person_skill_tombstones() -> None:
     member_id = uuid4()
     manager_repository.active_memberships.add(member_id)
 
-    await _service(manager_repository).list_person_skills(
-        actor=manager, membership_id=member_id
-    )
+    await _service(manager_repository).list_person_skills(actor=manager, membership_id=member_id)
     manager_call = next(
         values for name, values in manager_repository.calls if name == "list_person_skills"
     )
@@ -510,9 +525,7 @@ async def test_only_writers_list_inactive_person_skill_tombstones() -> None:
     employee = _actor(MembershipRole.EMPLOYEE)
     employee_repository = FakeRepository(employee)
     employee_repository.active_memberships.add(member_id)
-    await _service(employee_repository).list_person_skills(
-        actor=employee, membership_id=member_id
-    )
+    await _service(employee_repository).list_person_skills(actor=employee, membership_id=member_id)
     employee_call = next(
         values for name, values in employee_repository.calls if name == "list_person_skills"
     )
@@ -565,6 +578,75 @@ async def test_work_evidence_replay_precedes_mutable_reference_checks() -> None:
 
     assert result is replay
     assert not any(name == "membership_is_active" for name, _ in repository.calls)
+
+
+@pytest.mark.asyncio
+async def test_invalid_capacity_is_rejected_and_audited() -> None:
+    actor = _actor()
+    repository = FakeRepository(actor)
+
+    with pytest.raises(InvalidCapacityEntryError):
+        await _service(repository).upsert_capacity(
+            actor=actor,
+            membership_id=actor.membership_id,
+            kind=CapacityKind.DEFAULT,
+            hours=40,
+            effective_from=date(2026, 9, 1),
+            effective_to=date(2026, 12, 31),
+            week_start=date(2026, 9, 1),
+            request_id="invalid-capacity",
+            idempotency_key="invalid-capacity-key",
+        )
+
+    rejection = next(values for name, values in repository.calls if name == "audit_rejection")
+    assert rejection["action"] == "people.capacity.upserted"
+    assert rejection["reason_code"] == "InvalidCapacityEntryError"
+
+
+@pytest.mark.asyncio
+async def test_invalid_leave_is_rejected_and_audited() -> None:
+    actor = _actor()
+    repository = FakeRepository(actor)
+
+    with pytest.raises(InvalidLeaveEntryError):
+        await _service(repository).create_leave(
+            actor=actor,
+            membership_id=actor.membership_id,
+            start_date=date(2026, 9, 8),
+            end_date=date(2026, 9, 7),
+            unavailable_hours=8,
+            request_id="invalid-leave",
+            idempotency_key="invalid-leave-key",
+        )
+
+    rejection = next(values for name, values in repository.calls if name == "audit_rejection")
+    assert rejection["action"] == "people.leave.created"
+    assert rejection["reason_code"] == "InvalidLeaveEntryError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_method", ["list_capacity", "list_leave", "list_weekly_workload"])
+async def test_employee_availability_reads_are_self_only(read_method: str) -> None:
+    actor = _actor(MembershipRole.EMPLOYEE)
+    repository = FakeRepository(actor)
+    service = _service(repository)
+    kwargs: dict[str, object] = {"actor": actor, "membership_id": None}
+    if read_method == "list_weekly_workload":
+        kwargs["week_start"] = date(2026, 9, 7)
+
+    await getattr(service, read_method)(**kwargs)
+    repository_call = next(
+        values
+        for name, values in repository.calls
+        if name
+        == ("load_workload_inputs" if read_method == "list_weekly_workload" else read_method)
+    )
+    assert repository_call["membership_id"] == actor.membership_id
+
+    with pytest.raises(PeopleSkillForbiddenError):
+        await getattr(service, read_method)(
+            **{**kwargs, "membership_id": uuid4()},
+        )
 
 
 @pytest.mark.asyncio

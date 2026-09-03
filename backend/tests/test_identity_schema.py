@@ -64,6 +64,8 @@ def test_active_phase_tables_are_registered() -> None:
         "person_skills",
         "skill_evidence",
         "work_outcome_evidence",
+        "capacity_entries",
+        "leave_entries",
     }
 
 

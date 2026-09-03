@@ -30,6 +30,11 @@ _ACTIONS = {
     "set_person_skill": "people.person_skill.upserted",
     "delete_person_skill": "people.person_skill.deleted",
     "record_work_outcome_evidence": "people.work_outcome_evidence.created",
+    "upsert_capacity": "people.capacity.upserted",
+    "delete_capacity": "people.capacity.deleted",
+    "create_leave": "people.leave.created",
+    "update_leave": "people.leave.updated",
+    "delete_leave": "people.leave.deleted",
 }
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,7 +19,13 @@ from app.modules.organization.domain.roles import MembershipRole
 from app.modules.people_capacity.adapters.repository import (
     SqlAlchemyPeopleCapacityTransactionFactory,
 )
+from app.modules.people_capacity.domain.availability import (
+    CapacityEntryDraft,
+    CapacityKind,
+    LeaveEntryDraft,
+)
 from app.modules.people_capacity.domain.skills import (
+    PeopleSkillConflictError,
     PeopleSkillIdempotencyKeyReusedError,
     PeopleSkillVersionMismatchError,
     PersonSkillDraft,
@@ -170,6 +176,378 @@ async def test_skill_create_is_idempotent_versioned_and_audited() -> None:
                     idempotency_key="skill-create-key",
                     request_fingerprint="b" * 64,
                 )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_capacity_update_requires_exact_version_and_replays_once() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    organization_id, manager_id, employee_id = uuid4(), uuid4(), uuid4()
+    actor = _actor(organization_id, manager_id)
+    factory = SqlAlchemyPeopleCapacityTransactionFactory(create_session_factory(engine))
+
+    try:
+        await _seed_members(
+            engine,
+            organization_id=organization_id,
+            memberships=(
+                (manager_id, MembershipRole.MANAGER),
+                (employee_id, MembershipRole.EMPLOYEE),
+            ),
+        )
+        initial = CapacityEntryDraft.create(
+            membership_id=employee_id,
+            kind=CapacityKind.DEFAULT,
+            hours=40,
+            effective_from=date(2026, 9, 1),
+            effective_to=date(2026, 12, 31),
+            week_start=None,
+        )
+        async with factory() as repository:
+            created = await repository.upsert_capacity(
+                actor=actor,
+                draft=initial,
+                expected_version=None,
+                request_id="capacity-create",
+                idempotency_key="capacity-create-key",
+                request_fingerprint="1" * 64,
+            )
+
+        changed = CapacityEntryDraft.create(
+            membership_id=employee_id,
+            kind=CapacityKind.DEFAULT,
+            hours=32,
+            effective_from=date(2026, 9, 1),
+            effective_to=date(2027, 1, 31),
+            week_start=None,
+        )
+        async with factory() as repository:
+            with pytest.raises(PeopleSkillVersionMismatchError) as missing:
+                await repository.upsert_capacity(
+                    actor=actor,
+                    draft=changed,
+                    expected_version=None,
+                    request_id="capacity-missing-version",
+                    idempotency_key="capacity-missing-version-key",
+                    request_fingerprint="2" * 64,
+                )
+        assert missing.value.current_version == 1
+
+        async with factory() as repository:
+            updated = await repository.upsert_capacity(
+                actor=actor,
+                draft=changed,
+                expected_version=created.resource.version,
+                request_id="capacity-update",
+                idempotency_key="capacity-update-key",
+                request_fingerprint="3" * 64,
+            )
+        async with factory() as repository:
+            replayed = await repository.upsert_capacity(
+                actor=actor,
+                draft=changed,
+                expected_version=created.resource.version,
+                request_id="capacity-update-replay",
+                idempotency_key="capacity-update-key",
+                request_fingerprint="3" * 64,
+            )
+
+        assert updated.resource.version == 2
+        assert updated.resource.hours == 32
+        assert updated.resource.effective_to == date(2027, 1, 31)
+        assert replayed.replayed is True
+        assert replayed.resource == updated.resource
+
+        async with engine.connect() as connection:
+            audit = (
+                await connection.execute(
+                    text(
+                        "SELECT before_data, after_data FROM audit_events "
+                        "WHERE organization_id = :organization_id "
+                        "AND action = 'people.capacity.upserted' "
+                        "AND resource_id = :resource_id AND before_data <> '{}'::jsonb"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "resource_id": created.resource.id,
+                    },
+                )
+            ).one()
+        assert audit.before_data["effective_to"] == "2026-12-31"
+        assert audit.after_data["effective_to"] == "2027-01-31"
+        assert audit.after_data["membership_id"] == str(employee_id)
+        assert audit.after_data["kind"] == "DEFAULT"
+
+        async with factory() as repository:
+            with pytest.raises(PeopleSkillIdempotencyKeyReusedError):
+                await repository.upsert_capacity(
+                    actor=actor,
+                    draft=CapacityEntryDraft.create(
+                        membership_id=employee_id,
+                        kind=CapacityKind.DEFAULT,
+                        hours=24,
+                        effective_from=date(2026, 9, 1),
+                        effective_to=date(2026, 12, 31),
+                        week_start=None,
+                    ),
+                    expected_version=created.resource.version,
+                    request_id="capacity-update-conflict",
+                    idempotency_key="capacity-update-key",
+                    request_fingerprint="4" * 64,
+                )
+
+        first_override = CapacityEntryDraft.create(
+            membership_id=employee_id,
+            kind=CapacityKind.OVERRIDE,
+            hours=20,
+            effective_from=date(2026, 9, 7),
+            effective_to=date(2026, 9, 13),
+            week_start=date(2026, 9, 7),
+            project_week_end=date(2026, 9, 13),
+        )
+        second_override = CapacityEntryDraft.create(
+            membership_id=employee_id,
+            kind=CapacityKind.OVERRIDE,
+            hours=24,
+            effective_from=date(2026, 9, 14),
+            effective_to=date(2026, 9, 20),
+            week_start=date(2026, 9, 14),
+            project_week_end=date(2026, 9, 20),
+        )
+        async with factory() as repository:
+            first = await repository.upsert_capacity(
+                actor=actor,
+                draft=first_override,
+                expected_version=None,
+                request_id="first-override",
+                idempotency_key="first-override-key",
+                request_fingerprint="a" * 64,
+            )
+        async with factory() as repository:
+            await repository.upsert_capacity(
+                actor=actor,
+                draft=second_override,
+                expected_version=None,
+                request_id="second-override",
+                idempotency_key="second-override-key",
+                request_fingerprint="b" * 64,
+            )
+        overlapping_update = CapacityEntryDraft.create(
+            membership_id=employee_id,
+            kind=CapacityKind.OVERRIDE,
+            hours=20,
+            effective_from=date(2026, 9, 7),
+            effective_to=date(2026, 9, 20),
+            week_start=date(2026, 9, 7),
+            project_week_end=date(2026, 9, 20),
+        )
+        async with factory() as repository:
+            with pytest.raises(PeopleSkillConflictError):
+                await repository.upsert_capacity(
+                    actor=actor,
+                    draft=overlapping_update,
+                    expected_version=first.resource.version,
+                    request_id="overlapping-update",
+                    idempotency_key="overlapping-update-key",
+                    request_fingerprint="c" * 64,
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_leave_update_is_versioned_idempotent_and_audited() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    organization_id, manager_id, employee_id = uuid4(), uuid4(), uuid4()
+    actor = _actor(organization_id, manager_id)
+    factory = SqlAlchemyPeopleCapacityTransactionFactory(create_session_factory(engine))
+
+    try:
+        await _seed_members(
+            engine,
+            organization_id=organization_id,
+            memberships=(
+                (manager_id, MembershipRole.MANAGER),
+                (employee_id, MembershipRole.EMPLOYEE),
+            ),
+        )
+        async with factory() as repository:
+            created = await repository.create_leave(
+                actor=actor,
+                draft=LeaveEntryDraft.create(
+                    membership_id=employee_id,
+                    start_date=date(2026, 9, 8),
+                    end_date=date(2026, 9, 8),
+                    unavailable_hours=8,
+                ),
+                request_id="leave-create",
+                idempotency_key="leave-create-key",
+                request_fingerprint="5" * 64,
+            )
+
+        changed = LeaveEntryDraft.create(
+            membership_id=employee_id,
+            start_date=date(2026, 9, 8),
+            end_date=date(2026, 9, 9),
+            unavailable_hours=12,
+        )
+        async with factory() as repository:
+            updated = await repository.update_leave(
+                actor=actor,
+                leave_id=created.resource.id,
+                draft=changed,
+                expected_version=1,
+                request_id="leave-update",
+                idempotency_key="leave-update-key",
+                request_fingerprint="6" * 64,
+            )
+        async with factory() as repository:
+            replayed = await repository.update_leave(
+                actor=actor,
+                leave_id=created.resource.id,
+                draft=changed,
+                expected_version=1,
+                request_id="leave-update-replay",
+                idempotency_key="leave-update-key",
+                request_fingerprint="6" * 64,
+            )
+
+        assert updated.resource.version == 2
+        assert updated.resource.end_date == date(2026, 9, 9)
+        assert updated.resource.unavailable_hours == 12
+        assert replayed.replayed is True
+        assert replayed.resource == updated.resource
+
+        async with engine.connect() as connection:
+            audit = (
+                await connection.execute(
+                    text(
+                        "SELECT before_data, after_data FROM audit_events "
+                        "WHERE organization_id = :organization_id "
+                        "AND action = 'people.leave.updated' AND resource_id = :resource_id"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "resource_id": created.resource.id,
+                    },
+                )
+            ).one()
+        assert audit.before_data["unavailable_hours"] == 8
+        assert audit.before_data["version"] == 1
+        assert audit.after_data["unavailable_hours"] == 12
+        assert audit.after_data["version"] == 2
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_workload_aggregates_projects_and_allocates_cross_week_leave_once() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    organization_id, manager_id, employee_id = uuid4(), uuid4(), uuid4()
+    actor = _actor(organization_id, manager_id)
+    factory = SqlAlchemyPeopleCapacityTransactionFactory(create_session_factory(engine))
+    project_a, project_b, week_a, week_b = uuid4(), uuid4(), uuid4(), uuid4()
+
+    try:
+        await _seed_members(
+            engine,
+            organization_id=organization_id,
+            memberships=(
+                (manager_id, MembershipRole.MANAGER),
+                (employee_id, MembershipRole.EMPLOYEE),
+            ),
+        )
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO projects "
+                    "(id, organization_id, name, description, version, "
+                    "created_by_membership_id, updated_by_membership_id) VALUES "
+                    "(:project_a, :org, 'Project A', NULL, 1, :manager, :manager), "
+                    "(:project_b, :org, 'Project B', NULL, 1, :manager, :manager)"
+                ),
+                {
+                    "project_a": project_a,
+                    "project_b": project_b,
+                    "org": organization_id,
+                    "manager": manager_id,
+                },
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO project_weeks "
+                    "(id, organization_id, project_id, week_number, start_date, end_date, "
+                    "objective, status, version, created_by_membership_id, "
+                    "updated_by_membership_id) VALUES "
+                    "(:week_a, :org, :project_a, 1, '2026-09-07', '2026-09-13', "
+                    "'A', 'PLANNED', 1, :manager, :manager), "
+                    "(:week_b, :org, :project_b, 1, '2026-09-07', '2026-09-13', "
+                    "'B', 'PLANNED', 1, :manager, :manager)"
+                ),
+                {
+                    "week_a": week_a,
+                    "week_b": week_b,
+                    "org": organization_id,
+                    "project_a": project_a,
+                    "project_b": project_b,
+                    "manager": manager_id,
+                },
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO capacity_entries "
+                    "(id, organization_id, membership_id, kind, hours, effective_from, "
+                    "effective_to, week_start) VALUES "
+                    "(:id, :org, :employee, 'DEFAULT', 40, '2026-01-01', '2026-12-31', NULL)"
+                ),
+                {"id": uuid4(), "org": organization_id, "employee": employee_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO leave_entries "
+                    "(id, organization_id, membership_id, start_date, end_date, "
+                    "unavailable_hours) VALUES "
+                    "(:id, :org, :employee, '2026-09-13', '2026-09-14', 16)"
+                ),
+                {"id": uuid4(), "org": organization_id, "employee": employee_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO tasks "
+                    "(id, organization_id, project_id, project_week_id, title, description, "
+                    "assignee_membership_id, required_skill_labels, estimated_effort_hours, "
+                    "status, due_date, version, created_by_membership_id, "
+                    "updated_by_membership_id) VALUES "
+                    "(:task_a, :org, :project_a, :week_a, 'Task A', NULL, :employee, '[]', "
+                    "20, 'TO_DO', NULL, 1, :manager, :manager), "
+                    "(:task_b, :org, :project_b, :week_b, 'Task B', NULL, :employee, '[]', "
+                    "20, 'IN_PROGRESS', NULL, 1, :manager, :manager)"
+                ),
+                {
+                    "task_a": uuid4(),
+                    "task_b": uuid4(),
+                    "org": organization_id,
+                    "project_a": project_a,
+                    "project_b": project_b,
+                    "week_a": week_a,
+                    "week_b": week_b,
+                    "employee": employee_id,
+                    "manager": manager_id,
+                },
+            )
+
+        async with factory() as repository:
+            inputs = await repository.load_workload_inputs(
+                actor=actor,
+                week_start=date(2026, 9, 7),
+                membership_id=employee_id,
+            )
+
+        assert len(inputs) == 2
+        assert {item.project_week_id for item in inputs} == {week_a, week_b}
+        assert all(item.leave_hours == 8 for item in inputs)
+        assert all(sum(item.open_task_effort_hours) == 40 for item in inputs)
     finally:
         await engine.dispose()
 
@@ -538,11 +916,14 @@ async def test_mutable_reference_reads_block_concurrent_deactivation() -> None:
                 assert await repository.membership_is_active(
                     actor=actor, membership_id=employee_id, for_update=True
                 )
-                assert await repository.get_skill(
-                    actor=actor,
-                    skill_id=skill.id,
-                    for_update=True,
-                ) == skill
+                assert (
+                    await repository.get_skill(
+                        actor=actor,
+                        skill_id=skill.id,
+                        for_update=True,
+                    )
+                    == skill
+                )
                 references_locked.set()
                 await release_references.wait()
 

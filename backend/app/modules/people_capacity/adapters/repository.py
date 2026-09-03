@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,6 +18,8 @@ from app.modules.audit.domain.events import AuditOutcome
 from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.adapters.database_models import MembershipModel
 from app.modules.people_capacity.adapters.database_models import (
+    CapacityEntryModel,
+    LeaveEntryModel,
     PersonSkillModel,
     SkillEvidenceModel,
     SkillModel,
@@ -28,6 +30,15 @@ from app.modules.people_capacity.application.ports import (
     EvidenceSourceSnapshot,
     PeopleCapacityRepository,
     PeopleMutationResult,
+)
+from app.modules.people_capacity.domain.availability import (
+    CapacityEntry,
+    CapacityEntryDraft,
+    CapacityKind,
+    LeaveEntry,
+    LeaveEntryDraft,
+    OverlappingCapacityEntriesError,
+    ensure_capacity_entry_does_not_overlap,
 )
 from app.modules.people_capacity.domain.skills import (
     PeopleSkillConflictError,
@@ -46,12 +57,14 @@ from app.modules.people_capacity.domain.skills import (
     WorkOutcomeEvidence,
     WorkOutcomeEvidenceDraft,
 )
+from app.modules.people_capacity.domain.workload import WorkloadInput
 from app.modules.work.adapters.database_models import (
     IdempotencyRecordModel,
     IdempotencyState,
     TaskModel,
 )
 from app.modules.work.domain.tasks import TaskStatus
+from app.modules.work.planning.adapters.database_models import ProjectWeekModel
 
 _IDEMPOTENCY_TTL = timedelta(hours=24)
 
@@ -239,6 +252,127 @@ def _work_evidence_from_json(value: dict[str, Any]) -> WorkOutcomeEvidence:
     )
 
 
+def _capacity_to_domain(model: CapacityEntryModel) -> CapacityEntry:
+    return CapacityEntry(
+        id=model.id,
+        organization_id=model.organization_id,
+        membership_id=model.membership_id,
+        kind=model.kind,
+        hours=model.hours,
+        effective_from=model.effective_from,
+        effective_to=model.effective_to,
+        week_start=model.week_start,
+        version=model.version,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _capacity_to_json(entry: CapacityEntry) -> dict[str, Any]:
+    return {
+        "id": str(entry.id),
+        "organization_id": str(entry.organization_id),
+        "membership_id": str(entry.membership_id),
+        "kind": entry.kind.value,
+        "hours": entry.hours,
+        "effective_from": entry.effective_from.isoformat(),
+        "effective_to": entry.effective_to.isoformat(),
+        "week_start": entry.week_start.isoformat() if entry.week_start else None,
+        "version": entry.version,
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat(),
+    }
+
+
+def _capacity_from_json(value: dict[str, Any]) -> CapacityEntry:
+    return CapacityEntry(
+        id=UUID(str(value["id"])),
+        organization_id=UUID(str(value["organization_id"])),
+        membership_id=UUID(str(value["membership_id"])),
+        kind=CapacityKind(str(value["kind"])),
+        hours=int(value["hours"]),
+        effective_from=date.fromisoformat(str(value["effective_from"])),
+        effective_to=date.fromisoformat(str(value["effective_to"])),
+        week_start=(
+            date.fromisoformat(str(value["week_start"])) if value.get("week_start") else None
+        ),
+        version=int(value["version"]),
+        created_at=datetime.fromisoformat(str(value["created_at"])),
+        updated_at=datetime.fromisoformat(str(value["updated_at"])),
+    )
+
+
+def _capacity_audit_data(entry: CapacityEntry) -> dict[str, object]:
+    return {
+        "membership_id": str(entry.membership_id),
+        "kind": entry.kind.value,
+        "hours": entry.hours,
+        "effective_from": entry.effective_from.isoformat(),
+        "effective_to": entry.effective_to.isoformat(),
+        "week_start": entry.week_start.isoformat() if entry.week_start else None,
+        "version": entry.version,
+    }
+
+
+def _leave_hours_in_range(model: LeaveEntryModel, start: date, end: date) -> int:
+    """Allocate total leave hours evenly by inclusive day, preserving the total."""
+
+    overlap_start = max(model.start_date, start)
+    overlap_end = min(model.end_date, end)
+    if overlap_end < overlap_start:
+        return 0
+    total_days = (model.end_date - model.start_date).days + 1
+    overlap_days = (overlap_end - overlap_start).days + 1
+    hours_per_day, remainder = divmod(model.unavailable_hours, total_days)
+    remainder_end = model.start_date + timedelta(days=remainder - 1)
+    remainder_days = 0
+    if remainder and overlap_start <= remainder_end:
+        remainder_days = (min(overlap_end, remainder_end) - overlap_start).days + 1
+    return hours_per_day * overlap_days + remainder_days
+
+
+def _leave_to_domain(model: LeaveEntryModel) -> LeaveEntry:
+    return LeaveEntry(
+        id=model.id,
+        organization_id=model.organization_id,
+        membership_id=model.membership_id,
+        start_date=model.start_date,
+        end_date=model.end_date,
+        unavailable_hours=model.unavailable_hours,
+        version=model.version,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _leave_to_json(entry: LeaveEntry) -> dict[str, Any]:
+    return {
+        "id": str(entry.id),
+        "organization_id": str(entry.organization_id),
+        "membership_id": str(entry.membership_id),
+        "start_date": entry.start_date.isoformat(),
+        "end_date": entry.end_date.isoformat(),
+        "unavailable_hours": entry.unavailable_hours,
+        "version": entry.version,
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat(),
+    }
+
+
+def _leave_from_json(value: dict[str, Any]) -> LeaveEntry:
+    return LeaveEntry(
+        id=UUID(str(value["id"])),
+        organization_id=UUID(str(value["organization_id"])),
+        membership_id=UUID(str(value["membership_id"])),
+        start_date=date.fromisoformat(str(value["start_date"])),
+        end_date=date.fromisoformat(str(value["end_date"])),
+        unavailable_hours=int(value["unavailable_hours"]),
+        version=int(value["version"]),
+        created_at=datetime.fromisoformat(str(value["created_at"])),
+        updated_at=datetime.fromisoformat(str(value["updated_at"])),
+    )
+
+
 class SqlAlchemyPeopleCapacityRepository:
     """Implement People Skills operations inside one transaction-scoped session."""
 
@@ -414,10 +548,7 @@ class SqlAlchemyPeopleCapacityRepository:
         if for_update:
             return bool(
                 await self._session.scalar(
-                    text(
-                        "SELECT public.lock_active_membership("
-                        ":organization_id, :membership_id)"
-                    ),
+                    text("SELECT public.lock_active_membership(:organization_id, :membership_id)"),
                     {
                         "organization_id": actor.organization_id,
                         "membership_id": membership_id,
@@ -1116,6 +1247,679 @@ class SqlAlchemyPeopleCapacityRepository:
                 reason_data={"code": reason_code},
             )
         )
+
+    async def list_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None = None,
+        kind: CapacityKind | None = None,
+    ) -> tuple[CapacityEntry, ...]:
+        await self._activate_actor(actor)
+        query = select(CapacityEntryModel).where(
+            CapacityEntryModel.organization_id == actor.organization_id
+        )
+        if membership_id is not None:
+            query = query.where(CapacityEntryModel.membership_id == membership_id)
+        if kind is not None:
+            query = query.where(CapacityEntryModel.kind == kind)
+        query = query.order_by(
+            CapacityEntryModel.kind, CapacityEntryModel.effective_from, CapacityEntryModel.id
+        )
+        models = (await self._session.scalars(query)).all()
+        return tuple(_capacity_to_domain(m) for m in models)
+
+    async def get_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        capacity_id: UUID,
+    ) -> CapacityEntry | None:
+        await self._activate_actor(actor)
+        model = await self._session.scalar(
+            select(CapacityEntryModel).where(
+                CapacityEntryModel.organization_id == actor.organization_id,
+                CapacityEntryModel.id == capacity_id,
+            )
+        )
+        return _capacity_to_domain(model) if model is not None else None
+
+    async def get_capacity_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.capacity.upsert",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_capacity_from_json,
+        )
+
+    async def get_capacity_delete_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.capacity.delete",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_capacity_from_json,
+        )
+
+    async def upsert_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        draft: CapacityEntryDraft,
+        expected_version: int | None,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry]:
+        await self._activate_actor(actor)
+        operation = "people.capacity.upsert"
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_capacity_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+
+        if not await self.membership_is_active(
+            actor=actor, membership_id=draft.membership_id, for_update=True
+        ):
+            raise PeopleSkillNotFoundError
+
+        existing_models = (
+            await self._session.scalars(
+                select(CapacityEntryModel)
+                .where(
+                    CapacityEntryModel.organization_id == actor.organization_id,
+                    CapacityEntryModel.membership_id == draft.membership_id,
+                )
+                .with_for_update()
+            )
+        ).all()
+        existing_domain = [_capacity_to_domain(m) for m in existing_models]
+
+        matching_model = None
+        if draft.kind == CapacityKind.OVERRIDE:
+            matching_model = next(
+                (
+                    m
+                    for m in existing_models
+                    if m.kind == CapacityKind.OVERRIDE and m.week_start == draft.week_start
+                ),
+                None,
+            )
+        else:
+            matching_model = next(
+                (m for m in existing_models if m.kind == CapacityKind.DEFAULT),
+                None,
+            )
+
+        now = datetime.now(UTC)
+        if matching_model is not None:
+            if expected_version is None or matching_model.version != expected_version:
+                raise PeopleSkillVersionMismatchError(matching_model.version)
+
+            try:
+                ensure_capacity_entry_does_not_overlap(
+                    draft,
+                    (entry for entry in existing_domain if entry.id != matching_model.id),
+                )
+            except OverlappingCapacityEntriesError as err:
+                raise PeopleSkillConflictError from err
+
+            before_data = _capacity_audit_data(_capacity_to_domain(matching_model))
+            matching_model.hours = draft.hours
+            matching_model.effective_from = draft.effective_from
+            matching_model.effective_to = draft.effective_to
+            matching_model.version += 1
+            matching_model.updated_at = now
+            await self._flush_or_conflict()
+            entry = _capacity_to_domain(matching_model)
+            self._audit_success(
+                actor=actor,
+                action="people.capacity.upserted",
+                resource_type="capacity_entry",
+                resource_id=entry.id,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                before_data=before_data,
+                after_data=_capacity_audit_data(entry),
+            )
+            record.state = IdempotencyState.COMPLETED
+            record.response_status = 200
+            record.response_body = _capacity_to_json(entry)
+            return PeopleMutationResult(resource=entry, replayed=False)
+
+        try:
+            ensure_capacity_entry_does_not_overlap(draft, existing_domain)
+        except OverlappingCapacityEntriesError as err:
+            raise PeopleSkillConflictError from err
+
+        model = CapacityEntryModel(
+            id=uuid4(),
+            organization_id=actor.organization_id,
+            membership_id=draft.membership_id,
+            kind=draft.kind,
+            hours=draft.hours,
+            effective_from=draft.effective_from,
+            effective_to=draft.effective_to,
+            week_start=draft.week_start,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(model)
+        await self._flush_or_conflict()
+        entry = _capacity_to_domain(model)
+        self._audit_success(
+            actor=actor,
+            action="people.capacity.upserted",
+            resource_type="capacity_entry",
+            resource_id=entry.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data={},
+            after_data=_capacity_audit_data(entry),
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 201
+        record.response_body = _capacity_to_json(entry)
+        return PeopleMutationResult(resource=entry, replayed=False)
+
+    async def delete_capacity(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        capacity_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[CapacityEntry]:
+        await self._activate_actor(actor)
+        operation = "people.capacity.delete"
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_capacity_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+
+        model = await self._session.scalar(
+            select(CapacityEntryModel)
+            .where(
+                CapacityEntryModel.organization_id == actor.organization_id,
+                CapacityEntryModel.id == capacity_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PeopleSkillNotFoundError
+        if model.version != expected_version:
+            raise PeopleSkillVersionMismatchError(model.version)
+
+        entry = _capacity_to_domain(model)
+        await self._session.delete(model)
+        await self._flush_or_conflict()
+        self._audit_success(
+            actor=actor,
+            action="people.capacity.deleted",
+            resource_type="capacity_entry",
+            resource_id=entry.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data=_capacity_audit_data(entry),
+            after_data={},
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = _capacity_to_json(entry)
+        return PeopleMutationResult(resource=entry, replayed=False)
+
+    async def list_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> tuple[LeaveEntry, ...]:
+        await self._activate_actor(actor)
+        query = select(LeaveEntryModel).where(
+            LeaveEntryModel.organization_id == actor.organization_id
+        )
+        if membership_id is not None:
+            query = query.where(LeaveEntryModel.membership_id == membership_id)
+        if start_date is not None:
+            query = query.where(LeaveEntryModel.end_date >= start_date)
+        if end_date is not None:
+            query = query.where(LeaveEntryModel.start_date <= end_date)
+        query = query.order_by(LeaveEntryModel.start_date, LeaveEntryModel.id)
+        models = (await self._session.scalars(query)).all()
+        return tuple(_leave_to_domain(m) for m in models)
+
+    async def get_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+    ) -> LeaveEntry | None:
+        await self._activate_actor(actor)
+        model = await self._session.scalar(
+            select(LeaveEntryModel).where(
+                LeaveEntryModel.organization_id == actor.organization_id,
+                LeaveEntryModel.id == leave_id,
+            )
+        )
+        return _leave_to_domain(model) if model is not None else None
+
+    async def get_leave_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.leave.create",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_leave_from_json,
+        )
+
+    async def get_leave_delete_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.leave.delete",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_leave_from_json,
+        )
+
+    async def get_leave_update_replay(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry] | None:
+        await self._activate_actor(actor)
+        return await self._get_idempotency_replay(
+            actor=actor,
+            operation="people.leave.update",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_leave_from_json,
+        )
+
+    async def create_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        draft: LeaveEntryDraft,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry]:
+        await self._activate_actor(actor)
+        operation = "people.leave.create"
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_leave_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+
+        if not await self.membership_is_active(
+            actor=actor, membership_id=draft.membership_id, for_update=True
+        ):
+            raise PeopleSkillNotFoundError
+
+        now = datetime.now(UTC)
+        model = LeaveEntryModel(
+            id=uuid4(),
+            organization_id=actor.organization_id,
+            membership_id=draft.membership_id,
+            start_date=draft.start_date,
+            end_date=draft.end_date,
+            unavailable_hours=draft.unavailable_hours,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(model)
+        await self._flush_or_conflict()
+        entry = _leave_to_domain(model)
+        self._audit_success(
+            actor=actor,
+            action="people.leave.created",
+            resource_type="leave_entry",
+            resource_id=entry.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data={},
+            after_data={
+                "membership_id": str(entry.membership_id),
+                "unavailable_hours": entry.unavailable_hours,
+                "start_date": entry.start_date.isoformat(),
+                "end_date": entry.end_date.isoformat(),
+            },
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 201
+        record.response_body = _leave_to_json(entry)
+        return PeopleMutationResult(resource=entry, replayed=False)
+
+    async def update_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+        draft: LeaveEntryDraft,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry]:
+        await self._activate_actor(actor)
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation="people.leave.update",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_leave_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+
+        model = await self._session.scalar(
+            select(LeaveEntryModel)
+            .where(
+                LeaveEntryModel.organization_id == actor.organization_id,
+                LeaveEntryModel.id == leave_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PeopleSkillNotFoundError
+        if model.version != expected_version:
+            raise PeopleSkillVersionMismatchError(model.version)
+
+        before_data: dict[str, object] = {
+            "start_date": model.start_date.isoformat(),
+            "end_date": model.end_date.isoformat(),
+            "unavailable_hours": model.unavailable_hours,
+            "version": model.version,
+        }
+        model.start_date = draft.start_date
+        model.end_date = draft.end_date
+        model.unavailable_hours = draft.unavailable_hours
+        model.version += 1
+        model.updated_at = datetime.now(UTC)
+        await self._flush_or_conflict()
+        entry = _leave_to_domain(model)
+        after_data: dict[str, object] = {
+            "start_date": entry.start_date.isoformat(),
+            "end_date": entry.end_date.isoformat(),
+            "unavailable_hours": entry.unavailable_hours,
+            "version": entry.version,
+        }
+        self._audit_success(
+            actor=actor,
+            action="people.leave.updated",
+            resource_type="leave_entry",
+            resource_id=entry.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data=before_data,
+            after_data=after_data,
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = _leave_to_json(entry)
+        return PeopleMutationResult(resource=entry, replayed=False)
+
+    async def delete_leave(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        leave_id: UUID,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> PeopleMutationResult[LeaveEntry]:
+        await self._activate_actor(actor)
+        operation = "people.leave.delete"
+        record, replay = await self._claim_idempotency(
+            actor=actor,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            loader=_leave_from_json,
+        )
+        if replay is not None:
+            return replay
+        if record is None:
+            raise RuntimeError("idempotency claim did not return a record")
+
+        model = await self._session.scalar(
+            select(LeaveEntryModel)
+            .where(
+                LeaveEntryModel.organization_id == actor.organization_id,
+                LeaveEntryModel.id == leave_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise PeopleSkillNotFoundError
+        if model.version != expected_version:
+            raise PeopleSkillVersionMismatchError(model.version)
+
+        entry = _leave_to_domain(model)
+        await self._session.delete(model)
+        await self._flush_or_conflict()
+        self._audit_success(
+            actor=actor,
+            action="people.leave.deleted",
+            resource_type="leave_entry",
+            resource_id=entry.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            before_data={"unavailable_hours": entry.unavailable_hours, "version": entry.version},
+            after_data={},
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = _leave_to_json(entry)
+        return PeopleMutationResult(resource=entry, replayed=False)
+
+    async def load_workload_inputs(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        week_start: date,
+        membership_id: UUID | None,
+    ) -> tuple[WorkloadInput, ...]:
+        await self._activate_actor(actor)
+
+        # 1. Query project weeks starting on week_start
+        project_weeks = (
+            await self._session.scalars(
+                select(ProjectWeekModel)
+                .where(
+                    ProjectWeekModel.organization_id == actor.organization_id,
+                    ProjectWeekModel.start_date == week_start,
+                )
+                .order_by(ProjectWeekModel.project_id, ProjectWeekModel.week_number)
+            )
+        ).all()
+        if not project_weeks:
+            return ()
+
+        # 2. Resolve target memberships
+        if membership_id is not None:
+            active = await self.membership_is_active(actor=actor, membership_id=membership_id)
+            if not active:
+                raise PeopleSkillNotFoundError
+            target_ids = [membership_id]
+        else:
+            memberships = (
+                await self._session.scalars(
+                    select(MembershipModel)
+                    .where(
+                        MembershipModel.organization_id == actor.organization_id,
+                        MembershipModel.is_active.is_(True),
+                    )
+                    .order_by(MembershipModel.created_at)
+                )
+            ).all()
+            target_ids = [m.id for m in memberships]
+
+        if not target_ids:
+            return ()
+
+        # 3. Load capacity entries
+        capacity_models = (
+            await self._session.scalars(
+                select(CapacityEntryModel).where(
+                    CapacityEntryModel.organization_id == actor.organization_id,
+                    CapacityEntryModel.membership_id.in_(target_ids),
+                )
+            )
+        ).all()
+
+        # 4. Load leave entries overlapping any project week
+        min_start = min(pw.start_date for pw in project_weeks)
+        max_end = max(pw.end_date for pw in project_weeks)
+        leave_models = (
+            await self._session.scalars(
+                select(LeaveEntryModel).where(
+                    LeaveEntryModel.organization_id == actor.organization_id,
+                    LeaveEntryModel.membership_id.in_(target_ids),
+                    LeaveEntryModel.start_date <= max_end,
+                    LeaveEntryModel.end_date >= min_start,
+                )
+            )
+        ).all()
+
+        # 5. Load open tasks
+        pw_ids = [pw.id for pw in project_weeks]
+        task_models = (
+            await self._session.scalars(
+                select(TaskModel).where(
+                    TaskModel.organization_id == actor.organization_id,
+                    TaskModel.assignee_membership_id.in_(target_ids),
+                    TaskModel.project_week_id.in_(pw_ids),
+                    TaskModel.status.in_([TaskStatus.TO_DO, TaskStatus.IN_PROGRESS]),
+                )
+            )
+        ).all()
+
+        # 6. Build WorkloadInput
+        inputs: list[WorkloadInput] = []
+        for pw in project_weeks:
+            for mid in target_ids:
+                default_entry = next(
+                    (
+                        c
+                        for c in capacity_models
+                        if c.membership_id == mid
+                        and c.kind == CapacityKind.DEFAULT
+                        and c.effective_from <= pw.end_date
+                        and c.effective_to >= pw.start_date
+                    ),
+                    None,
+                )
+                default_hours = default_entry.hours if default_entry is not None else 0
+
+                override_entry = next(
+                    (
+                        c
+                        for c in capacity_models
+                        if c.membership_id == mid
+                        and c.kind == CapacityKind.OVERRIDE
+                        and c.week_start == pw.start_date
+                    ),
+                    None,
+                )
+                override_hours = override_entry.hours if override_entry is not None else None
+
+                member_leaves = [
+                    leave
+                    for leave in leave_models
+                    if leave.membership_id == mid
+                    and leave.start_date <= pw.end_date
+                    and leave.end_date >= pw.start_date
+                ]
+                leave_hours = min(
+                    sum(
+                        _leave_hours_in_range(leave, pw.start_date, pw.end_date)
+                        for leave in member_leaves
+                    ),
+                    168,
+                )
+
+                member_tasks = [t for t in task_models if t.assignee_membership_id == mid]
+                efforts = tuple(
+                    t.estimated_effort_hours
+                    for t in member_tasks
+                    if t.estimated_effort_hours is not None
+                    and 1 <= t.estimated_effort_hours <= 10_000
+                )
+
+                inputs.append(
+                    WorkloadInput(
+                        membership_id=mid,
+                        project_week_id=pw.id,
+                        default_capacity_hours=default_hours,
+                        override_capacity_hours=override_hours,
+                        leave_hours=leave_hours,
+                        open_task_effort_hours=efforts,
+                    )
+                )
+
+        return tuple(inputs)
 
 
 class SqlAlchemyPeopleCapacityTransactionFactory:
