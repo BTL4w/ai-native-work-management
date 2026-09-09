@@ -19,6 +19,7 @@ from app.modules.people_capacity.adapters import database_models as people_capac
 from app.modules.planning_runs.adapters import database_models as planning_runs_models
 from app.modules.work.adapters import database_models as work_models
 from app.modules.work.planning.adapters import database_models as planning_models
+from app.modules.work.planning.assignment.adapters import database_models as team_requirement_models
 
 _MODEL_MODULES = (
     audit_models,
@@ -29,6 +30,7 @@ _MODEL_MODULES = (
     planning_models,
     planning_runs_models,
     people_capacity_models,
+    team_requirement_models,
 )
 
 config = context.config

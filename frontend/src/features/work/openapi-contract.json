@@ -101,5 +101,18 @@
       "AssistantTurnAcceptedResponse": { "required": ["conversation_id", "message_id", "turn_id", "orchestration_run_id", "status"], "properties": { "conversation_id": "string:uuid", "message_id": "string:uuid", "turn_id": "string:uuid", "orchestration_run_id": "string:uuid", "status": "literal:QUEUED" } },
       "ConversationSnapshotResponse": { "required": ["conversation", "messages"], "properties": { "conversation": "ref:ConversationResponse", "messages": "array:ref:MessageResponse" } }
     }
+  },
+  "team_requirements": {
+    "paths": {
+      "/api/v1/projects/{project_id}/team-requirements": ["get", "post", "patch"]
+    },
+    "schemas": {
+      "RequirementItemInput": { "required": ["skill_id", "minimum_level", "project_week_id", "effort_hours", "source_task_ids"], "properties": { "skill_id": "string:uuid", "minimum_level": "integer", "project_week_id": "string:uuid", "effort_hours": "integer", "source_task_ids": "array:string:uuid" } },
+      "RequirementItemResponse": { "required": ["skill_id", "minimum_level", "project_week_id", "effort_hours", "source_task_ids", "id"], "properties": { "skill_id": "string:uuid", "minimum_level": "integer", "project_week_id": "string:uuid", "effort_hours": "integer", "source_task_ids": "array:string:uuid", "id": "string:uuid" } },
+      "IncompleteRequirementResponse": { "required": ["task_id", "reason"], "properties": { "task_id": "string:uuid", "reason": "string" } },
+      "ReviseTeamRequirementsRequest": { "required": ["action", "items"], "properties": { "action": "literal:revise", "items": "array:ref:RequirementItemInput", "incomplete_items": "array:ref:IncompleteRequirementResponse" } },
+      "ConfirmTeamRequirementsRequest": { "required": ["action"], "properties": { "action": "literal:confirm" } },
+      "TeamRequirementSetResponse": { "required": ["id", "organization_id", "project_id", "version", "status", "items", "incomplete_items", "created_at", "updated_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "project_id": "string:uuid", "version": "integer", "status": "literal:DRAFT|CONFIRMED|STALE", "items": "array:ref:RequirementItemResponse", "incomplete_items": "array:ref:IncompleteRequirementResponse", "created_at": "string:date-time", "updated_at": "string:date-time" } }
+    }
   }
 }

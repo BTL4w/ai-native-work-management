@@ -50,6 +50,13 @@ from app.modules.work.planning.adapters.manual_repository import (
 )
 from app.modules.work.planning.api.routes import router as planning_router
 from app.modules.work.planning.application.manual_service import ManualPlanningService
+from app.modules.work.planning.assignment.adapters.repository import (
+    SqlAlchemyTeamRequirementTransactionFactory,
+)
+from app.modules.work.planning.assignment.api.routes import router as team_requirement_router
+from app.modules.work.planning.assignment.application.requirement_service import (
+    TeamRequirementService,
+)
 from work_management_ai.runtime.manifests import (
     AgentManifest,
     canonical_manifest_fingerprint,
@@ -80,6 +87,7 @@ def create_app(
     assistant_service: AssistantService | None = None,
     assistant_event_service: AssistantEventService | None = None,
     people_capacity_service: PeopleCapacityService | None = None,
+    team_requirement_service: TeamRequirementService | None = None,
 ) -> FastAPI:
     """Build an isolated application instance for runtime or tests."""
 
@@ -115,6 +123,13 @@ def create_app(
             database_engine = create_database_engine(resolved_settings)
         resolved_people_capacity_service = PeopleCapacityService(
             SqlAlchemyPeopleCapacityTransactionFactory(create_session_factory(database_engine))
+        )
+    resolved_team_requirement_service = team_requirement_service
+    if resolved_team_requirement_service is None:
+        if database_engine is None:
+            database_engine = create_database_engine(resolved_settings)
+        resolved_team_requirement_service = TeamRequirementService(
+            SqlAlchemyTeamRequirementTransactionFactory(create_session_factory(database_engine))
         )
     resolved_manual_planning_service = manual_planning_service
     if resolved_manual_planning_service is None:
@@ -204,6 +219,7 @@ def create_app(
     app.state.task_service = resolved_task_service
     app.state.member_service = resolved_member_service
     app.state.people_capacity_service = resolved_people_capacity_service
+    app.state.team_requirement_service = resolved_team_requirement_service
     app.state.manual_planning_service = resolved_manual_planning_service
     app.state.planning_run_service = resolved_planning_run_service
     app.state.proposal_service = resolved_proposal_service
@@ -237,6 +253,7 @@ def create_app(
     app.include_router(task_router, prefix="/api/v1")
     app.include_router(member_router, prefix="/api/v1")
     app.include_router(people_capacity_router, prefix="/api/v1")
+    app.include_router(team_requirement_router, prefix="/api/v1")
     app.include_router(planning_router, prefix="/api/v1")
     app.include_router(planning_run_router, prefix="/api/v1")
     app.include_router(assistant_router, prefix="/api/v1")

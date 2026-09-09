@@ -66,6 +66,10 @@ def test_active_phase_tables_are_registered() -> None:
         "work_outcome_evidence",
         "capacity_entries",
         "leave_entries",
+        "team_requirement_sets",
+        "team_requirement_versions",
+        "team_requirement_items",
+        "team_requirement_task_sources",
     }
 
 
