@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.organization.domain.roles import MembershipRole
 from app.modules.people_capacity.domain.skills import SkillLevel
+from app.modules.work.planning.assignment.application.ranking_preview import RankingPreview
 
 
 class TeamRequirementError(Exception):
@@ -135,8 +136,21 @@ class ConfirmRequirementsCommand:
     idempotency_key: str
 
 
+@dataclass(frozen=True, slots=True)
+class RefreshRequirementsCommand:
+    actor: AuthenticatedActor
+    project_id: UUID
+    requirement_set_id: UUID
+    expected_version: int
+    request_id: str
+    idempotency_key: str
+
+
 RequirementCommand = (
-    DeriveRequirementsCommand | ReviseRequirementsCommand | ConfirmRequirementsCommand
+    DeriveRequirementsCommand
+    | ReviseRequirementsCommand
+    | ConfirmRequirementsCommand
+    | RefreshRequirementsCommand
 )
 type TaskProvenance = tuple[tuple[UUID, int], ...]
 
@@ -163,7 +177,9 @@ def canonical_requirement_command(command: RequirementCommand) -> str:
         "kind": type(command).__name__,
         "project_id": str(command.project_id),
     }
-    if isinstance(command, (ReviseRequirementsCommand, ConfirmRequirementsCommand)):
+    if isinstance(
+        command, (ReviseRequirementsCommand, ConfirmRequirementsCommand, RefreshRequirementsCommand)
+    ):
         values["requirement_set_id"] = str(command.requirement_set_id)
         values["expected_version"] = command.expected_version
     if isinstance(command, (DeriveRequirementsCommand, ReviseRequirementsCommand)):
@@ -190,13 +206,23 @@ class GetRequirementsQuery:
     project_id: UUID
 
 
+@dataclass(frozen=True, slots=True)
+class GetRankingPreviewQuery:
+    actor: AuthenticatedActor
+    project_id: UUID
+
+
 class _Repository(Protocol):
     async def derive(self, command: DeriveRequirementsCommand) -> RequirementSet: ...
     async def revise(self, command: ReviseRequirementsCommand) -> RequirementSet: ...
     async def confirm(self, command: ConfirmRequirementsCommand) -> RequirementSet: ...
+    async def refresh(self, command: RefreshRequirementsCommand) -> RequirementSet: ...
     async def get_for_project(
         self, *, actor: AuthenticatedActor, project_id: UUID
     ) -> RequirementSet | None: ...
+    async def get_ranking_preview(
+        self, *, actor: AuthenticatedActor, project_id: UUID
+    ) -> RankingPreview | None: ...
     async def audit_rejection(
         self,
         *,
@@ -301,6 +327,23 @@ class TeamRequirementService:
             )
             raise
 
+    async def refresh(self, command: RefreshRequirementsCommand) -> RequirementSet:
+        if command.actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
+            await self._reject(
+                command, action="team_requirement.refresh.rejected", reason_code="FORBIDDEN"
+            )
+            raise TeamRequirementForbiddenError
+        try:
+            async with self._transactions() as repository:
+                return await repository.refresh(command)
+        except TeamRequirementError as error:
+            await self._reject(
+                command,
+                action="team_requirement.refresh.rejected",
+                reason_code=type(error).__name__,
+            )
+            raise
+
     async def get_for_project(self, query: GetRequirementsQuery) -> RequirementSet:
         async with self._transactions() as repository:
             result = await repository.get_for_project(
@@ -308,6 +351,29 @@ class TeamRequirementService:
             )
         if result is None:
             raise TeamRequirementNotFoundError
+        return result
+
+    async def get_ranking_preview(self, query: GetRankingPreviewQuery) -> RankingPreview:
+        async with self._transactions() as repository:
+            result = await repository.get_ranking_preview(
+                actor=query.actor, project_id=query.project_id
+            )
+        if result is None:
+            raise TeamRequirementNotFoundError
+        if query.actor.role is MembershipRole.EMPLOYEE:
+            result = replace(
+                result,
+                candidates=tuple(
+                    item
+                    for item in result.candidates
+                    if item.membership_id == query.actor.membership_id
+                ),
+                allocations=tuple(
+                    item
+                    for item in result.allocations
+                    if item.membership_id == query.actor.membership_id
+                ),
+            )
         return result
 
 
@@ -318,9 +384,11 @@ class InMemoryTeamRequirementRepository:
         self,
         *,
         project_managers: set[UUID],
+        project_readers: set[UUID] | None = None,
         project_task_versions: dict[UUID, dict[UUID, int]] | None = None,
     ) -> None:
         self.project_managers = project_managers
+        self.project_readers = project_readers or set()
         self._sets: dict[UUID, RequirementSet] = {}
         self._project_sets: dict[UUID, UUID] = {}
         self._versions: dict[UUID, list[RequirementSet]] = {}
@@ -329,6 +397,9 @@ class InMemoryTeamRequirementRepository:
             project_id: dict(versions)
             for project_id, versions in (project_task_versions or {}).items()
         }
+        self._derived_requirements: dict[
+            UUID, tuple[tuple[RequirementItemInput, ...], tuple[tuple[UUID, str], ...]]
+        ] = {}
         self._replays: dict[tuple[UUID, str, str], tuple[str, RequirementSet]] = {}
         self.audit_actions: list[str] = []
 
@@ -343,6 +414,14 @@ class InMemoryTeamRequirementRepository:
 
     def set_project_task_versions(self, project_id: UUID, versions: dict[UUID, int]) -> None:
         self._project_task_versions[project_id] = dict(versions)
+
+    def set_derived_requirements(
+        self,
+        project_id: UUID,
+        items: tuple[RequirementItemInput, ...],
+        incomplete_items: tuple[tuple[UUID, str], ...],
+    ) -> None:
+        self._derived_requirements[project_id] = (items, incomplete_items)
 
     def _current_task_provenance(
         self,
@@ -364,6 +443,14 @@ class InMemoryTeamRequirementRepository:
         if (
             actor.role is not MembershipRole.ADMIN
             and actor.membership_id not in self.project_managers
+        ):
+            raise TeamRequirementForbiddenError
+
+    def _authorize_read(self, actor: AuthenticatedActor) -> None:
+        if (
+            actor.role is not MembershipRole.ADMIN
+            and actor.membership_id not in self.project_managers
+            and actor.membership_id not in self.project_readers
         ):
             raise TeamRequirementForbiddenError
 
@@ -538,11 +625,67 @@ class InMemoryTeamRequirementRepository:
         )
         return value
 
+    async def refresh(self, command: RefreshRequirementsCommand) -> RequirementSet:
+        self._authorize(command.actor)
+        replay = self._replay(command, "refresh")
+        if replay:
+            return replay
+        current = self._sets.get(command.requirement_set_id)
+        if current is None or current.project_id != command.project_id:
+            raise TeamRequirementNotFoundError
+        if current.version != command.expected_version:
+            raise TeamRequirementVersionMismatchError(current.version)
+        items, incomplete = self._derived_requirements.get(
+            command.project_id,
+            (
+                tuple(
+                    RequirementItemInput(
+                        item.skill_id,
+                        item.minimum_level,
+                        item.project_week_id,
+                        item.effort_hours,
+                        item.source_task_ids,
+                    )
+                    for item in current.items
+                ),
+                tuple((item.task_id, item.reason) for item in current.incomplete_items),
+            ),
+        )
+        value = self._snapshot(
+            set_id=current.id,
+            actor=command.actor,
+            project_id=current.project_id,
+            version=current.version + 1,
+            status=TeamRequirementStatus.DRAFT,
+            items=items,
+            incomplete_items=incomplete,
+            now=datetime.now(UTC),
+        )
+        self._sets[current.id] = value
+        self._versions[current.id].append(value)
+        self._version_provenance[current.id].append(
+            self._current_task_provenance(project_id=current.project_id)
+        )
+        self._save_replay(command, "refresh", value)
+        self.audit_actions.append("team_requirement.refreshed")
+        return value
+
     async def get_for_project(
         self, *, actor: AuthenticatedActor, project_id: UUID
     ) -> RequirementSet | None:
+        self._authorize_read(actor)
         set_id = self._project_sets.get(project_id)
         return self._sets.get(set_id) if set_id else None
+
+    async def get_ranking_preview(
+        self, *, actor: AuthenticatedActor, project_id: UUID
+    ) -> RankingPreview | None:
+        self._authorize_read(actor)
+        set_id = self._project_sets.get(project_id)
+        value = self._sets.get(set_id) if set_id else None
+        if value is None:
+            return None
+        return RankingPreview(value.id, value.version, "ranking-v1", "DETERMINISTIC", (), (), ())
 
     async def audit_rejection(
         self,

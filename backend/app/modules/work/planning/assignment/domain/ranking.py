@@ -73,6 +73,19 @@ class CandidateSkill:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateEvidenceRatio:
+    skill_label: str
+    ratio: Decimal
+
+    def __post_init__(self) -> None:
+        normalized = canonical_skill_label(self.skill_label)
+        if not normalized:
+            raise InvalidRankingInputError("evidence_skill_label")
+        object.__setattr__(self, "skill_label", normalized)
+        _bounded_ratio(self.ratio, field="evidence_ratio")
+
+
+@dataclass(frozen=True, slots=True)
 class Candidate:
     """Narrow, auditable ranking inputs; no protected or model-derived values."""
 
@@ -84,12 +97,30 @@ class Candidate:
     workloads: tuple[WeeklyWorkload, ...]
     evidence_ratio: Decimal
     familiarity_ratio: Decimal
+    evidence_by_skill: tuple[CandidateEvidenceRatio, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "skills", tuple(self.skills))
         object.__setattr__(self, "workloads", tuple(self.workloads))
+        object.__setattr__(self, "evidence_by_skill", tuple(self.evidence_by_skill))
         _bounded_ratio(self.evidence_ratio, field="evidence_ratio")
         _bounded_ratio(self.familiarity_ratio, field="familiarity_ratio")
+        labels = tuple(item.skill_label for item in self.evidence_by_skill)
+        if len(labels) != len(set(labels)):
+            raise InvalidRankingInputError("evidence_skill_label")
+
+
+def _evidence_ratio(candidate: Candidate, requirement: TeamRequirement) -> Decimal:
+    if not candidate.evidence_by_skill:
+        return candidate.evidence_ratio
+    return next(
+        (
+            item.ratio
+            for item in candidate.evidence_by_skill
+            if item.skill_label == requirement.skill_label
+        ),
+        _ZERO,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +253,7 @@ def _score_candidate(
         _ONE,
     )
     capacity_points = _score(policy.capacity_weight * capacity_ratio)
-    evidence_points = _score(policy.evidence_weight * candidate.evidence_ratio)
+    evidence_points = _score(policy.evidence_weight * _evidence_ratio(candidate, requirement))
     familiarity_points = _score(policy.familiarity_weight * candidate.familiarity_ratio)
     return CandidateScore(
         membership_id=candidate.membership_id,

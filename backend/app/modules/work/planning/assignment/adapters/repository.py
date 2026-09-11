@@ -6,6 +6,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
@@ -14,10 +16,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.audit.adapters.database_models import AuditEventModel
 from app.modules.audit.domain.events import AuditOutcome
+from app.modules.identity.adapters.database_models import UserModel
 from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.organization.adapters.database_models import MembershipModel
 from app.modules.organization.domain.roles import MembershipRole
-from app.modules.people_capacity.adapters.database_models import SkillModel
-from app.modules.people_capacity.domain.skills import SkillLevel
+from app.modules.people_capacity.adapters.database_models import (
+    CapacityEntryModel,
+    PersonSkillModel,
+    SkillEvidenceModel,
+    SkillModel,
+)
+from app.modules.people_capacity.adapters.repository import SqlAlchemyPeopleCapacityRepository
+from app.modules.people_capacity.domain.skills import (
+    SkillEvidenceType,
+    SkillLevel,
+    VerifiedPersonSkill,
+)
+from app.modules.people_capacity.domain.workload import WeeklyWorkload, calculate_weekly_workload
 from app.modules.planning_runs.adapters.database_models import OutboxEventModel
 from app.modules.work.adapters.database_models import (
     IdempotencyRecordModel,
@@ -33,10 +48,18 @@ from app.modules.work.planning.assignment.adapters.database_models import (
     TeamRequirementTaskSourceModel,
     TeamRequirementVersionModel,
 )
+from app.modules.work.planning.assignment.application.ranking_preview import (
+    CandidateRankingPreview,
+    RankingAllocationPreview,
+    RankingEvidence,
+    RankingPreview,
+    RankingUncoveredPreview,
+)
 from app.modules.work.planning.assignment.application.requirement_service import (
     ConfirmRequirementsCommand,
     DeriveRequirementsCommand,
     IncompleteRequirementItem,
+    RefreshRequirementsCommand,
     RequirementCommand,
     RequirementItem,
     RequirementItemInput,
@@ -53,7 +76,16 @@ from app.modules.work.planning.assignment.application.requirement_service import
     canonical_requirement_command,
     canonical_task_provenance,
 )
+from app.modules.work.planning.assignment.domain.ranking import (
+    Candidate,
+    CandidateEvidenceRatio,
+    CandidateSkill,
+    RankingPolicy,
+    rank_candidates,
+    select_team,
+)
 from app.modules.work.planning.assignment.domain.requirements import (
+    TeamRequirement,
     canonical_skill_label,
     derive_requirement_draft,
 )
@@ -83,7 +115,12 @@ class SqlAlchemyTeamRequirementRepository:
         )
 
     async def _project(
-        self, actor: AuthenticatedActor, project_id: UUID, *, lock: bool = False
+        self,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        *,
+        lock: bool = False,
+        require_manage: bool = True,
     ) -> ProjectModel:
         query = select(ProjectModel).where(
             ProjectModel.organization_id == actor.organization_id, ProjectModel.id == project_id
@@ -93,10 +130,27 @@ class SqlAlchemyTeamRequirementRepository:
         model = await self._session.scalar(query)
         if model is None:
             raise TeamRequirementNotFoundError
+        if actor.role is MembershipRole.ADMIN:
+            return model
+        if require_manage:
+            if model.created_by_membership_id != actor.membership_id:
+                raise TeamRequirementForbiddenError
+            return model
         if (
-            actor.role is not MembershipRole.ADMIN
-            and model.created_by_membership_id != actor.membership_id
+            actor.role is MembershipRole.MANAGER
+            or model.created_by_membership_id == actor.membership_id
         ):
+            return model
+        assigned = await self._session.scalar(
+            select(TaskModel.id)
+            .where(
+                TaskModel.organization_id == actor.organization_id,
+                TaskModel.project_id == project_id,
+                TaskModel.assignee_membership_id == actor.membership_id,
+            )
+            .limit(1)
+        )
+        if assigned is None:
             raise TeamRequirementForbiddenError
         return model
 
@@ -760,11 +814,54 @@ class SqlAlchemyTeamRequirementRepository:
         )
         return result
 
+    async def refresh(self, command: RefreshRequirementsCommand) -> RequirementSet:
+        await self._activate(command.actor)
+        await self._project(command.actor, command.project_id, lock=True)
+        record, replay = await self._claim(command, "team_requirement.refresh")
+        if replay:
+            return replay
+        root = await self._session.scalar(
+            select(TeamRequirementSetModel)
+            .where(
+                TeamRequirementSetModel.organization_id == command.actor.organization_id,
+                TeamRequirementSetModel.id == command.requirement_set_id,
+                TeamRequirementSetModel.project_id == command.project_id,
+            )
+            .with_for_update()
+        )
+        if root is None:
+            raise TeamRequirementNotFoundError
+        if root.version != command.expected_version:
+            raise TeamRequirementVersionMismatchError(root.version)
+        items, incomplete, provenance = await self._derive_inputs(command.actor, command.project_id)
+        result = await self._write_version(
+            actor=command.actor,
+            set_model=root,
+            version=root.version + 1,
+            status=TeamRequirementStatus.DRAFT,
+            items=items,
+            incomplete=incomplete,
+            task_provenance=provenance,
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = {"id": str(result.id), "version": result.version}
+        self._audit(
+            actor=command.actor,
+            action="team_requirement.refreshed",
+            outcome=AuditOutcome.SUCCEEDED,
+            request_id=command.request_id,
+            idempotency_key=command.idempotency_key,
+            resource_id=result.id,
+            after={"version": result.version},
+        )
+        return result
+
     async def get_for_project(
         self, *, actor: AuthenticatedActor, project_id: UUID
     ) -> RequirementSet | None:
         await self._activate(actor)
-        await self._project(actor, project_id)
+        await self._project(actor, project_id, require_manage=False)
         set_id = await self._session.scalar(
             select(TeamRequirementSetModel.id).where(
                 TeamRequirementSetModel.organization_id == actor.organization_id,
@@ -772,6 +869,263 @@ class SqlAlchemyTeamRequirementRepository:
             )
         )
         return await self._get_by_set(actor, set_id) if set_id else None
+
+    async def get_ranking_preview(
+        self, *, actor: AuthenticatedActor, project_id: UUID
+    ) -> RankingPreview | None:
+        requirements = await self.get_for_project(actor=actor, project_id=project_id)
+        if requirements is None:
+            return None
+        if not requirements.items:
+            return RankingPreview(
+                requirements.id,
+                requirements.version,
+                "ranking-v1",
+                "DETERMINISTIC",
+                (),
+                (),
+                (),
+            )
+
+        skill_ids = {item.skill_id for item in requirements.items}
+        skill_models = (
+            await self._session.scalars(
+                select(SkillModel).where(
+                    SkillModel.organization_id == actor.organization_id,
+                    SkillModel.id.in_(skill_ids),
+                )
+            )
+        ).all()
+        skill_labels = {item.id: item.normalized_name for item in skill_models}
+        domain_requirements = tuple(
+            TeamRequirement(
+                id=item.id,
+                organization_id=actor.organization_id,
+                project_week_id=item.project_week_id,
+                skill_label=skill_labels[item.skill_id],
+                minimum_level=item.minimum_level,
+                required_effort_hours=Decimal(item.effort_hours),
+            )
+            for item in requirements.items
+            if item.skill_id in skill_labels
+        )
+
+        membership_rows = (
+            await self._session.execute(
+                select(MembershipModel, UserModel)
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .where(MembershipModel.organization_id == actor.organization_id)
+                .order_by(MembershipModel.id)
+            )
+        ).all()
+        membership_ids = [membership.id for membership, _user in membership_rows]
+        person_skills = (
+            await self._session.scalars(
+                select(PersonSkillModel).where(
+                    PersonSkillModel.organization_id == actor.organization_id,
+                    PersonSkillModel.membership_id.in_(membership_ids),
+                    PersonSkillModel.skill_id.in_(skill_ids),
+                )
+            )
+        ).all()
+        skill_by_id = {item.id: item for item in skill_models}
+        candidate_skills: dict[UUID, list[CandidateSkill]] = {value: [] for value in membership_ids}
+        for item in person_skills:
+            skill_model = skill_by_id.get(item.skill_id)
+            if skill_model is None:
+                continue
+            candidate_skills[item.membership_id].append(
+                CandidateSkill(
+                    skill_label=skill_model.normalized_name,
+                    verified_skill=VerifiedPersonSkill(
+                        id=item.id,
+                        organization_id=item.organization_id,
+                        membership_id=item.membership_id,
+                        skill_id=item.skill_id,
+                        level=SkillLevel(item.level),
+                        verified_by_membership_id=item.verified_by_membership_id,
+                        verified_at=item.verified_at,
+                        version=item.version,
+                        created_at=item.created_at,
+                        updated_at=item.updated_at,
+                        active=item.active,
+                    ),
+                )
+            )
+
+        evidence_rows = (
+            await self._session.scalars(
+                select(SkillEvidenceModel).where(
+                    SkillEvidenceModel.organization_id == actor.organization_id,
+                    SkillEvidenceModel.person_skill_id.in_([item.id for item in person_skills]),
+                )
+            )
+        ).all()
+        person_skill_by_id = {item.id: item for item in person_skills}
+        evidence_by_member_skill: dict[tuple[UUID, UUID], list[SkillEvidenceModel]] = {}
+        for evidence in evidence_rows:
+            person_skill = person_skill_by_id.get(evidence.person_skill_id)
+            if person_skill is not None:
+                evidence_by_member_skill.setdefault(
+                    (person_skill.membership_id, person_skill.skill_id), []
+                ).append(evidence)
+
+        week_models = (
+            await self._session.scalars(
+                select(ProjectWeekModel).where(
+                    ProjectWeekModel.organization_id == actor.organization_id,
+                    ProjectWeekModel.id.in_({item.project_week_id for item in requirements.items}),
+                )
+            )
+        ).all()
+        people_source = SqlAlchemyPeopleCapacityRepository(self._session)
+        workloads: list[WeeklyWorkload] = []
+        for week_start in sorted({week.start_date for week in week_models}):
+            workloads.extend(
+                calculate_weekly_workload(item)
+                for item in await people_source.load_workload_inputs(
+                    actor=actor, week_start=week_start, membership_id=None
+                )
+            )
+        workloads_by_member = {
+            membership_id: tuple(item for item in workloads if item.membership_id == membership_id)
+            for membership_id in membership_ids
+        }
+        capacity_entries = (
+            await self._session.scalars(
+                select(CapacityEntryModel).where(
+                    CapacityEntryModel.organization_id == actor.organization_id,
+                    CapacityEntryModel.membership_id.in_(membership_ids),
+                )
+            )
+        ).all()
+        capacity_known_keys = {
+            (entry.membership_id, week.id)
+            for entry in capacity_entries
+            for week in week_models
+            if (
+                entry.week_start == week.start_date
+                if entry.week_start is not None
+                else entry.effective_from <= week.end_date and entry.effective_to >= week.start_date
+            )
+        }
+        familiar_members = set(
+            (
+                await self._session.scalars(
+                    select(TaskModel.assignee_membership_id).where(
+                        TaskModel.organization_id == actor.organization_id,
+                        TaskModel.project_id == project_id,
+                        TaskModel.status == TaskStatus.DONE,
+                        TaskModel.assignee_membership_id.is_not(None),
+                    )
+                )
+            ).all()
+        )
+
+        def has_completed_evidence(membership_id: UUID, skill_id: UUID) -> bool:
+            return any(
+                evidence.evidence_type == SkillEvidenceType.COMPLETED_TASK
+                for evidence in evidence_by_member_skill.get((membership_id, skill_id), [])
+            )
+
+        candidates = tuple(
+            Candidate(
+                membership_id=membership.id,
+                organization_id=membership.organization_id,
+                active=membership.is_active,
+                policy_allowed=True,
+                skills=tuple(candidate_skills[membership.id]),
+                workloads=workloads_by_member[membership.id],
+                evidence_ratio=Decimal("0"),
+                familiarity_ratio=Decimal("1")
+                if membership.id in familiar_members
+                else Decimal("0"),
+                evidence_by_skill=tuple(
+                    CandidateEvidenceRatio(
+                        skill.normalized_name,
+                        Decimal("1")
+                        if has_completed_evidence(cast(UUID, membership.id), skill.id)
+                        else Decimal("0"),
+                    )
+                    for skill in skill_models
+                ),
+            )
+            for membership, _user in membership_rows
+        )
+        names = {membership.id: user.display_name for membership, user in membership_rows}
+        workloads_by_key = {(item.membership_id, item.project_week_id): item for item in workloads}
+        requirement_weeks = {item.id: item.project_week_id for item in domain_requirements}
+        requirement_skills = {item.id: item.skill_id for item in requirements.items}
+        scores = tuple(
+            score
+            for requirement in domain_requirements
+            for score in rank_candidates(RankingPolicy(), requirement, candidates)
+        )
+        candidate_projection_values: list[CandidateRankingPreview] = []
+        for score in scores:
+            workload = workloads_by_key.get(
+                (score.membership_id, requirement_weeks[score.requirement_id])
+            )
+            capacity_known = (
+                score.membership_id,
+                requirement_weeks[score.requirement_id],
+            ) in capacity_known_keys and workload is not None
+            candidate_projection_values.append(
+                CandidateRankingPreview(
+                    requirement_id=score.requirement_id,
+                    membership_id=score.membership_id,
+                    display_name=names[score.membership_id],
+                    eligible=score.eligible,
+                    hard_failure_codes=score.hard_failure_codes,
+                    skill_points=score.skill_points,
+                    capacity_points=score.capacity_points,
+                    evidence_points=score.evidence_points,
+                    familiarity_points=score.familiarity_points,
+                    total_points=score.total_points,
+                    effective_capacity_hours=workload.effective_capacity_hours
+                    if capacity_known and workload is not None
+                    else None,
+                    residual_capacity_hours=workload.residual_capacity_hours
+                    if capacity_known and workload is not None
+                    else None,
+                    evidence=tuple(
+                        RankingEvidence(
+                            evidence.id,
+                            evidence.summary,
+                            evidence.source_resource_type,
+                            evidence.source_resource_id,
+                        )
+                        for evidence in evidence_by_member_skill.get(
+                            (
+                                score.membership_id,
+                                requirement_skills[score.requirement_id],
+                            ),
+                            [],
+                        )
+                    ),
+                )
+            )
+        candidate_projection = tuple(candidate_projection_values)
+        selection = select_team(
+            RankingPolicy(), requirements=domain_requirements, candidates=candidates
+        )
+        return RankingPreview(
+            requirements.id,
+            requirements.version,
+            "ranking-v1",
+            "DETERMINISTIC",
+            candidate_projection,
+            tuple(
+                RankingAllocationPreview(
+                    item.requirement_id, item.membership_id, item.allocated_effort_hours
+                )
+                for item in selection.allocations
+            ),
+            tuple(
+                RankingUncoveredPreview(item.requirement_id, item.uncovered_effort_hours)
+                for item in selection.uncovered
+            ),
+        )
 
 
 class SqlAlchemyTeamRequirementTransactionFactory:

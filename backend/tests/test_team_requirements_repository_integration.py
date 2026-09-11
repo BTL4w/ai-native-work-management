@@ -215,6 +215,106 @@ async def test_postgres_lifecycle_preserves_edits_exact_replay_and_one_outbox() 
 
 
 @pytest.mark.asyncio
+async def test_postgres_ranking_preview_is_reproducible_and_employee_project_scoped() -> None:
+    async with (
+        database_case() as case,
+        AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test") as client,
+    ):
+        employee_member, employee_user, person_skill, capacity, other_member, other_user = (
+            uuid4() for _ in range(6)
+        )
+        values = {
+            "org": case.actor.organization_id,
+            "manager": case.actor.membership_id,
+            "member": employee_member,
+            "user": employee_user,
+            "person_skill": person_skill,
+            "capacity": capacity,
+            "skill": case.skill_id,
+            "task": case.task_id,
+            "email": f"{employee_user}@example.test",
+            "other_member": other_member,
+            "other_user": other_user,
+            "other_email": f"{other_user}@example.test",
+        }
+        for statement in (
+            "INSERT INTO users (id,email_normalized,email_display,display_name,password_hash) "
+            "VALUES (:user,:email,:email,'Lan','unused')",
+            "INSERT INTO memberships (id,organization_id,user_id,role) "
+            "VALUES (:member,:org,:user,'EMPLOYEE')",
+            "INSERT INTO users (id,email_normalized,email_display,display_name,password_hash) "
+            "VALUES (:other_user,:other_email,:other_email,'Minh','unused')",
+            "INSERT INTO memberships (id,organization_id,user_id,role) "
+            "VALUES (:other_member,:org,:other_user,'EMPLOYEE')",
+            "INSERT INTO person_skills (id,organization_id,membership_id,skill_id,level,"
+            "verified_by_membership_id,verified_at) VALUES "
+            "(:person_skill,:org,:member,:skill,5,:manager,now())",
+            "INSERT INTO capacity_entries (id,organization_id,membership_id,kind,hours,"
+            "effective_from,effective_to) VALUES "
+            "(:capacity,:org,:member,'DEFAULT',16,'2026-01-01','2026-12-31')",
+            "UPDATE tasks SET assignee_membership_id=:member WHERE id=:task",
+        ):
+            await case.connection.execute(text(statement), values)
+
+        created = await client.post(case.url, headers=headers())
+        assert created.status_code == 201, created.text
+        employee = replace(
+            case.actor,
+            membership_id=employee_member,
+            user_id=employee_user,
+            email=values["email"],
+            display_name="Lan",
+            role=MembershipRole.EMPLOYEE,
+        )
+        case.app.dependency_overrides[get_authenticated_actor] = lambda: employee
+        first = await client.get(f"{case.url}/ranking-preview")
+        second = await client.get(f"{case.url}/ranking-preview")
+
+        assert first.status_code == 200, first.text
+        assert first.json() == second.json()
+        lan = next(row for row in first.json()["candidates"] if row["display_name"] == "Lan")
+        assert {row["membership_id"] for row in first.json()["candidates"]} == {
+            str(employee_member)
+        }
+        assert all(
+            row["membership_id"] == str(employee_member) for row in first.json()["allocations"]
+        )
+        assert lan["eligible"] is True
+        assert lan["skill_points"] == "0.5000"
+        assert lan["capacity_points"] == "0.3000"
+        assert lan["residual_capacity_hours"] == 8
+
+
+@pytest.mark.asyncio
+async def test_postgres_refresh_rederives_changed_task_facts() -> None:
+    async with (
+        database_case() as case,
+        AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test") as client,
+    ):
+        created = await client.post(case.url, headers=headers())
+        assert created.status_code == 201
+        await case.connection.execute(
+            text("UPDATE tasks SET estimated_effort_hours=13, version=2 WHERE id=:task"),
+            {"task": case.task_id},
+        )
+        stale = await client.patch(case.url, headers=headers(1), json={"action": "confirm"})
+        assert stale.json()["status"] == "STALE"
+
+        refresh_headers = headers(2)
+        refreshed = await client.patch(
+            case.url, headers=refresh_headers, json={"action": "refresh"}
+        )
+        replay = await client.patch(case.url, headers=refresh_headers, json={"action": "refresh"})
+
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json()["status"] == "DRAFT"
+        assert refreshed.json()["version"] == 3
+        assert refreshed.json()["items"][0]["effort_hours"] == 13
+        assert replay.json() == refreshed.json()
+        assert replay.headers["Idempotency-Replayed"] == "true"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kind", ["duplicate", "overflow", "foreign_skill", "foreign_week", "foreign_task", "incomplete"]
 )

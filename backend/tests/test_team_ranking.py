@@ -10,6 +10,7 @@ from app.modules.people_capacity.domain.skills import SkillLevel, VerifiedPerson
 from app.modules.people_capacity.domain.workload import WeeklyWorkload
 from app.modules.work.planning.assignment.domain.ranking import (
     Candidate,
+    CandidateEvidenceRatio,
     CandidateSkill,
     InvalidRankingInputError,
     RankingPolicy,
@@ -146,6 +147,25 @@ def test_zero_evidence_is_eligible_but_contributes_no_points() -> None:
     assert result.evidence_points == Decimal("0.0000")
     assert result.familiarity_points == Decimal("0.0000")
     assert result.total_points == Decimal("0.8000")
+
+
+def test_evidence_ratio_is_scoped_to_the_requirement_skill() -> None:
+    value = candidate(MEMBER_A, evidence_ratio=Decimal("0"))
+    value = Candidate(
+        membership_id=value.membership_id,
+        organization_id=value.organization_id,
+        active=value.active,
+        policy_allowed=value.policy_allowed,
+        skills=value.skills,
+        workloads=value.workloads,
+        evidence_ratio=value.evidence_ratio,
+        familiarity_ratio=value.familiarity_ratio,
+        evidence_by_skill=(CandidateEvidenceRatio("writing", Decimal("1")),),
+    )
+
+    score = rank_candidates(POLICY_V1, REQ, (value,))[0]
+
+    assert score.evidence_points == Decimal("0.0000")
 
 
 def test_weighted_components_are_reproducible_and_quantized() -> None:

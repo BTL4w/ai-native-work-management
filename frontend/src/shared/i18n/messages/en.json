@@ -74,7 +74,8 @@
       "save": "Save project",
       "sections": "Project sections",
       "tasksTab": "Tasks",
-      "planTab": "Plan"
+      "planTab": "Plan",
+      "teamTab": "Team"
     },
     "task": {
       "sectionTitle": "Tasks",
@@ -241,5 +242,16 @@
     "delete": { "title": "Delete planning item", "description": "This action cannot be undone.", "confirm": "Confirm delete" },
     "action": { "edit": "Edit", "delete": "Delete", "cancel": "Cancel", "close": "Close", "retry": "Try again", "reload": "Reload plan" },
     "error": { "load": "The project plan is unavailable.", "required": "Complete the required fields.", "mutation": "We could not complete this planning change.", "dependency": "The dependency is invalid or would create a cycle.", "stale": "This planning data changed. Reload it before trying again." }
+  },
+  "projectTeam": {
+    "eyebrow": "Project Team · Algorithmic ranking",
+    "loading": "Loading team requirements…",
+    "requirements": { "title": "Team requirements", "notDerived": "Requirements have not been derived from project tasks.", "row": "Requirement {number}", "week": "Week {number}", "summary": "{count} requirements · {hours} hours", "levelEffort": "Level {level} · {hours} hours", "incomplete": "Tasks requiring more data before confirmation" },
+    "fields": { "skill": "Skill", "week": "Project week", "level": "Minimum level", "effort": "Required hours", "sourceTasks": "Source tasks" },
+    "actions": { "derive": "Derive from tasks", "edit": "Edit requirements", "save": "Save requirements", "cancel": "Cancel", "add": "Add requirement", "remove": "Remove requirement", "confirm": "Confirm requirements", "refresh": "Refresh from current data" },
+    "status": { "DRAFT": "Draft v{version}", "CONFIRMED": "Confirmed v{version}", "STALE": "Stale v{version}" },
+    "validation": { "duplicate": "A skill can appear only once in the same week.", "required": "Complete the skill, week and required hours.", "references": "At least one skill and project week is required." },
+    "ranking": { "title": "Candidate ranking", "origin": "Deterministic calculation · no AI", "loading": "Calculating ranking…", "unavailable": "The deterministic ranking is unavailable.", "empty": "There are no candidates to rank.", "skill": "Skill", "capacity": "Residual capacity", "evidence": "Evidence", "familiarity": "Familiarity", "unknownCapacity": "Capacity data unavailable", "capacityValue": "{hours} hours remaining", "uncovered": "Uncovered demand", "uncoveredHours": "{hours} hours uncovered", "unknownFailure": "A mandatory condition was not met", "failures": { "INACTIVE_MEMBER": "Inactive member", "CROSS_TENANT": "Outside the current organization", "POLICY_DENIED": "Disallowed by policy", "SKILL_MISSING": "Verified skill missing", "SKILL_BELOW_MINIMUM": "Skill level below requirement", "WEEKLY_WORKLOAD_MISSING": "Weekly workload unavailable", "NO_RESIDUAL_CAPACITY": "No residual capacity" } },
+    "errors": { "load": "Team requirements are unavailable.", "mutation": "The requirement change could not be completed.", "stale": "Requirements changed. Reload the newest data." }
   }
 }

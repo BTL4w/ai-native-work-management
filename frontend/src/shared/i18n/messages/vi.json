@@ -74,7 +74,8 @@
       "save": "Lưu project",
       "sections": "Các phần của project",
       "tasksTab": "Tasks",
-      "planTab": "Kế hoạch"
+      "planTab": "Kế hoạch",
+      "teamTab": "Đội ngũ"
     },
     "task": {
       "sectionTitle": "Tasks",
@@ -241,5 +242,16 @@
     "delete": { "title": "Xóa nội dung kế hoạch", "description": "Không thể hoàn tác hành động này.", "confirm": "Xác nhận xóa" },
     "action": { "edit": "Sửa", "delete": "Xóa", "cancel": "Hủy", "close": "Đóng", "retry": "Thử lại", "reload": "Tải lại kế hoạch" },
     "error": { "load": "Chưa thể tải kế hoạch project.", "required": "Hãy điền các trường bắt buộc.", "mutation": "Không thể hoàn tất thay đổi kế hoạch.", "dependency": "Dependency không hợp lệ hoặc tạo chu trình.", "stale": "Dữ liệu kế hoạch đã thay đổi. Hãy tải lại trước khi thử lại." }
+  },
+  "projectTeam": {
+    "eyebrow": "Project Team · Xếp hạng theo thuật toán",
+    "loading": "Đang tải yêu cầu đội ngũ…",
+    "requirements": { "title": "Yêu cầu đội ngũ", "notDerived": "Chưa tạo yêu cầu từ các task của project.", "row": "Yêu cầu {number}", "week": "Tuần {number}", "summary": "{count} yêu cầu · {hours} giờ", "levelEffort": "Mức {level} · {hours} giờ", "incomplete": "Task chưa đủ dữ liệu để xác nhận" },
+    "fields": { "skill": "Kỹ năng", "week": "Tuần dự án", "level": "Mức tối thiểu", "effort": "Số giờ cần", "sourceTasks": "Task nguồn" },
+    "actions": { "derive": "Tạo yêu cầu từ task", "edit": "Chỉnh sửa yêu cầu", "save": "Lưu yêu cầu", "cancel": "Hủy", "add": "Thêm yêu cầu", "remove": "Xóa yêu cầu", "confirm": "Xác nhận yêu cầu", "refresh": "Làm mới từ dữ liệu hiện tại" },
+    "status": { "DRAFT": "Bản nháp v{version}", "CONFIRMED": "Đã xác nhận v{version}", "STALE": "Đã lỗi thời v{version}" },
+    "validation": { "duplicate": "Mỗi kỹ năng chỉ được xuất hiện một lần trong cùng tuần.", "required": "Hãy hoàn tất kỹ năng, tuần và số giờ.", "references": "Cần có ít nhất một kỹ năng và một tuần dự án." },
+    "ranking": { "title": "Xếp hạng ứng viên", "origin": "Tính toán xác định · không dùng AI", "loading": "Đang tính xếp hạng…", "unavailable": "Chưa thể tải xếp hạng xác định.", "empty": "Không có ứng viên để xếp hạng.", "skill": "Kỹ năng", "capacity": "Năng lực còn lại", "evidence": "Minh chứng", "familiarity": "Mức độ quen thuộc", "unknownCapacity": "Chưa có dữ liệu năng lực", "capacityValue": "Còn lại {hours} giờ", "uncovered": "Nhu cầu chưa được đáp ứng", "uncoveredHours": "{hours} giờ chưa được đáp ứng", "unknownFailure": "Không đáp ứng một điều kiện bắt buộc", "failures": { "INACTIVE_MEMBER": "Thành viên không hoạt động", "CROSS_TENANT": "Ngoài organization hiện tại", "POLICY_DENIED": "Không được chính sách cho phép", "SKILL_MISSING": "Thiếu kỹ năng đã xác minh", "SKILL_BELOW_MINIMUM": "Mức kỹ năng dưới yêu cầu", "WEEKLY_WORKLOAD_MISSING": "Chưa có dữ liệu khối lượng tuần", "NO_RESIDUAL_CAPACITY": "Không còn năng lực khả dụng" } },
+    "errors": { "load": "Chưa thể tải yêu cầu đội ngũ.", "mutation": "Không thể hoàn tất thay đổi yêu cầu.", "stale": "Yêu cầu đã thay đổi. Hãy tải lại dữ liệu mới nhất." }
   }
 }

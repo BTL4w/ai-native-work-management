@@ -104,7 +104,8 @@
   },
   "team_requirements": {
     "paths": {
-      "/api/v1/projects/{project_id}/team-requirements": ["get", "post", "patch"]
+      "/api/v1/projects/{project_id}/team-requirements": ["get", "post", "patch"],
+      "/api/v1/projects/{project_id}/team-requirements/ranking-preview": ["get"]
     },
     "schemas": {
       "RequirementItemInput": { "required": ["skill_id", "minimum_level", "project_week_id", "effort_hours", "source_task_ids"], "properties": { "skill_id": "string:uuid", "minimum_level": "integer", "project_week_id": "string:uuid", "effort_hours": "integer", "source_task_ids": "array:string:uuid" } },
@@ -112,7 +113,13 @@
       "IncompleteRequirementResponse": { "required": ["task_id", "reason"], "properties": { "task_id": "string:uuid", "reason": "string" } },
       "ReviseTeamRequirementsRequest": { "required": ["action", "items"], "properties": { "action": "literal:revise", "items": "array:ref:RequirementItemInput", "incomplete_items": "array:ref:IncompleteRequirementResponse" } },
       "ConfirmTeamRequirementsRequest": { "required": ["action"], "properties": { "action": "literal:confirm" } },
-      "TeamRequirementSetResponse": { "required": ["id", "organization_id", "project_id", "version", "status", "items", "incomplete_items", "created_at", "updated_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "project_id": "string:uuid", "version": "integer", "status": "literal:DRAFT|CONFIRMED|STALE", "items": "array:ref:RequirementItemResponse", "incomplete_items": "array:ref:IncompleteRequirementResponse", "created_at": "string:date-time", "updated_at": "string:date-time" } }
+      "RefreshTeamRequirementsRequest": { "required": ["action"], "properties": { "action": "literal:refresh" } },
+      "TeamRequirementSetResponse": { "required": ["id", "organization_id", "project_id", "version", "status", "items", "incomplete_items", "created_at", "updated_at"], "properties": { "id": "string:uuid", "organization_id": "string:uuid", "project_id": "string:uuid", "version": "integer", "status": "literal:DRAFT|CONFIRMED|STALE", "items": "array:ref:RequirementItemResponse", "incomplete_items": "array:ref:IncompleteRequirementResponse", "created_at": "string:date-time", "updated_at": "string:date-time" } },
+      "RankingEvidenceResponse": { "required": ["id", "summary", "source_resource_type", "source_resource_id"], "properties": { "id": "string:uuid", "summary": "string", "source_resource_type": "string", "source_resource_id": "string:uuid" } },
+      "CandidateRankingResponse": { "required": ["requirement_id", "membership_id", "display_name", "eligible", "hard_failure_codes", "skill_points", "capacity_points", "evidence_points", "familiarity_points", "total_points", "effective_capacity_hours", "residual_capacity_hours", "evidence"], "properties": { "requirement_id": "string:uuid", "membership_id": "string:uuid", "display_name": "string", "eligible": "boolean", "hard_failure_codes": "array:string", "skill_points": "string", "capacity_points": "string", "evidence_points": "string", "familiarity_points": "string", "total_points": "string", "effective_capacity_hours": "integer|null", "residual_capacity_hours": "integer|null", "evidence": "array:ref:RankingEvidenceResponse" } },
+      "RankingAllocationResponse": { "required": ["requirement_id", "membership_id", "allocated_effort_hours"], "properties": { "requirement_id": "string:uuid", "membership_id": "string:uuid", "allocated_effort_hours": "string" } },
+      "RankingUncoveredResponse": { "required": ["requirement_id", "uncovered_effort_hours"], "properties": { "requirement_id": "string:uuid", "uncovered_effort_hours": "string" } },
+      "RankingPreviewResponse": { "required": ["requirement_set_id", "requirement_version", "policy_version", "origin", "candidates", "allocations", "uncovered"], "properties": { "requirement_set_id": "string:uuid", "requirement_version": "integer", "policy_version": "literal:ranking-v1", "origin": "literal:DETERMINISTIC", "candidates": "array:ref:CandidateRankingResponse", "allocations": "array:ref:RankingAllocationResponse", "uncovered": "array:ref:RankingUncoveredResponse" } }
     }
   }
 }

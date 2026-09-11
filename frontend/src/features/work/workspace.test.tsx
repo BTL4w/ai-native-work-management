@@ -463,6 +463,33 @@ describe("WorkWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tiêu chí chấp nhận" }));
     expect(await screen.findByRole("heading", { name: "Tiêu chí chấp nhận" })).toBeVisible();
   });
+
+  it("opens Project Team for the exact selected project without replacing Assistant", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requests.push(path);
+      if (path === "/api/v1/projects") return response(page([project]));
+      if (path === `/api/v1/tasks?project_id=${project.id}&page=1&page_size=20`) return response(page([]));
+      if (path === `/api/v1/tasks?project_id=${project.id}&page=1&page_size=100`) return response({ ...page([]), page_size: 100 });
+      if (path === `/api/v1/projects/${project.id}/team-requirements`) return response({ error: {
+        code: "RESOURCE_NOT_FOUND", message_key: "common.error.notFound", request_id: "test",
+        field_errors: [], details: {},
+      } }, 404);
+      if (path === "/api/v1/skills") return response([]);
+      if (path === `/api/v1/projects/${project.id}/weeks?page=1&page_size=100`) return response({ ...page([]), page_size: 100 });
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    const { container } = renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(project.name) }));
+    fireEvent.click(screen.getByRole("tab", { name: "Đội ngũ" }));
+
+    expect(await screen.findByRole("heading", { name: "Yêu cầu đội ngũ" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Tạo yêu cầu từ task" })).toBeEnabled();
+    expect(requests).toContain(`/api/v1/projects/${project.id}/team-requirements`);
+    expect(container.querySelectorAll("aside")).toHaveLength(1);
+  });
 });
 
 function response(body: unknown, status = 200, headers: Record<string, string> = {}) {

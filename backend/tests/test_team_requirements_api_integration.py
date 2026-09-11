@@ -75,6 +75,42 @@ async def test_post_patch_and_get_requirement_snapshot_enforce_preconditions() -
 
 
 @pytest.mark.asyncio
+async def test_ranking_preview_is_read_only_deterministic_and_available_to_employee() -> None:
+    manager = _actor()
+    employee = replace(manager, membership_id=uuid4(), role=MembershipRole.EMPLOYEE)
+    repository = InMemoryTeamRequirementRepository(
+        project_managers={manager.membership_id}, project_readers={employee.membership_id}
+    )
+    project_id = uuid4()
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(manager, repository)), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            f"/api/v1/projects/{project_id}/team-requirements",
+            headers={"Idempotency-Key": "a" * 16},
+        )
+        assert created.status_code == 201
+
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(employee, repository)), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/projects/{project_id}/team-requirements/ranking-preview"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "requirement_set_id": created.json()["id"],
+        "requirement_version": 1,
+        "policy_version": "ranking-v1",
+        "origin": "DETERMINISTIC",
+        "candidates": [],
+        "allocations": [],
+        "uncovered": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_malformed_if_match_is_audited_before_returning() -> None:
     actor = _actor()
     repository = InMemoryTeamRequirementRepository(project_managers={actor.membership_id})

@@ -20,13 +20,16 @@ from app.modules.work.planning.assignment.api.dependencies import (
     prepare_requirement_mutation,
 )
 from app.modules.work.planning.assignment.api.schemas import (
+    RankingPreviewResponse,
     TeamRequirementSetResponse,
     TeamRequirementsPatchRequest,
 )
 from app.modules.work.planning.assignment.application.requirement_service import (
     ConfirmRequirementsCommand,
     DeriveRequirementsCommand,
+    GetRankingPreviewQuery,
     GetRequirementsQuery,
+    RefreshRequirementsCommand,
     RequirementItemInput,
     ReviseRequirementsCommand,
     TeamRequirementError,
@@ -122,6 +125,23 @@ def _headers(response: Response, version: int, replayed: bool) -> None:
 
 
 @router.get(
+    "/projects/{project_id}/team-requirements/ranking-preview",
+    response_model=RankingPreviewResponse,
+    responses=_ERRORS,
+)
+async def get_team_ranking_preview(
+    project_id: UUID,
+    actor: ActorDependency,
+    service: TeamRequirementServiceDependency,
+) -> RankingPreviewResponse:
+    try:
+        result = await service.get_ranking_preview(GetRankingPreviewQuery(actor, project_id))
+    except Exception as error:
+        _raise(error)
+    return RankingPreviewResponse.from_domain(result)
+
+
+@router.get(
     "/projects/{project_id}/team-requirements",
     response_model=TeamRequirementSetResponse,
     responses=_ERRORS,
@@ -198,6 +218,17 @@ async def patch_team_requirements(
         if payload.action == "confirm":
             result = await service.confirm(
                 ConfirmRequirementsCommand(
+                    actor,
+                    project_id,
+                    current.id,
+                    expected,
+                    str(request.state.request_id),
+                    idempotency_key,
+                )
+            )
+        elif payload.action == "refresh":
+            result = await service.refresh(
+                RefreshRequirementsCommand(
                     actor,
                     project_id,
                     current.id,

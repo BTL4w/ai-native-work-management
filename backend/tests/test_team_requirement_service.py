@@ -1,5 +1,6 @@
 """Service behavior for append-only project team requirement snapshots."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from app.modules.work.planning.assignment.application.requirement_service import
     ConfirmRequirementsCommand,
     DeriveRequirementsCommand,
     InMemoryTeamRequirementRepository,
+    RefreshRequirementsCommand,
     RequirementItem,
     RequirementItemInput,
     RequirementSet,
@@ -91,6 +93,29 @@ async def test_manager_revises_by_appending_a_new_immutable_version() -> None:
     assert revised.version == 2
     assert repository.version_count(draft.id) == 2
     assert repository.audit_actions[-1] == "team_requirement.revised"
+
+
+@pytest.mark.asyncio
+async def test_refresh_rederives_current_task_facts_instead_of_reusing_stale_items() -> None:
+    actor = _actor()
+    project_id = uuid4()
+    repository = InMemoryTeamRequirementRepository(project_managers={actor.membership_id})
+    service = TeamRequirementService(lambda: repository)
+    original = _item(actor)
+    draft = await service.derive(
+        DeriveRequirementsCommand(actor, project_id, "derive", "a" * 16, (original,), ())
+    )
+    replacement = replace(original, effort_hours=21)
+    repository.set_derived_requirements(project_id, (replacement,), ())
+
+    refreshed = await service.refresh(
+        RefreshRequirementsCommand(actor, project_id, draft.id, draft.version, "refresh", "b" * 16)
+    )
+
+    assert refreshed.version == 2
+    assert refreshed.status is TeamRequirementStatus.DRAFT
+    assert refreshed.items[0].effort_hours == 21
+    assert repository.audit_actions[-1] == "team_requirement.refreshed"
 
 
 @pytest.mark.asyncio
