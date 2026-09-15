@@ -121,5 +121,25 @@
       "RankingUncoveredResponse": { "required": ["requirement_id", "uncovered_effort_hours"], "properties": { "requirement_id": "string:uuid", "uncovered_effort_hours": "string" } },
       "RankingPreviewResponse": { "required": ["requirement_set_id", "requirement_version", "policy_version", "origin", "candidates", "allocations", "uncovered"], "properties": { "requirement_set_id": "string:uuid", "requirement_version": "integer", "policy_version": "literal:ranking-v1", "origin": "literal:DETERMINISTIC", "candidates": "array:ref:CandidateRankingResponse", "allocations": "array:ref:RankingAllocationResponse", "uncovered": "array:ref:RankingUncoveredResponse" } }
     }
+  },
+  "team_recommendations": {
+    "paths": {
+      "/api/v1/projects/{project_id}/team": ["get"],
+      "/api/v1/projects/{project_id}/team-recommendations": ["post"],
+      "/api/v1/recommendations/{recommendation_id}": ["get", "patch"],
+      "/api/v1/recommendations/{recommendation_id}/versions/{version}": ["get"],
+      "/api/v1/recommendations/{recommendation_id}/approve": ["post"],
+      "/api/v1/recommendations/{recommendation_id}/feedback": ["post"]
+    },
+    "schemas": {
+      "CreateRecommendationRequest": { "required": ["requirement_set_id", "requirement_version"], "properties": { "requirement_set_id": "string:uuid", "requirement_version": "integer", "policy_version": "string[1,64]" } },
+      "CandidateOverrideInput": { "required": ["requirement_id", "selected_membership_id"], "properties": { "requirement_id": "string:uuid", "selected_membership_id": "string:uuid", "override_reason": "null|string[,500]", "allocated_effort_hours": "null|number|string" } },
+      "ReviseRecommendationRequest": { "required": ["overrides"], "properties": { "overrides": "array:ref:CandidateOverrideInput" } },
+      "DecideRecommendationRequest": { "required": ["action"], "properties": { "action": "literal:approve|reject", "reason": "null|string[,500]" } },
+      "RecommendationFeedbackRequest": { "required": ["version", "kind"], "properties": { "version": "integer", "kind": "literal:accept|override|reject", "comment": "string[,2000]" } },
+      "RecommendationFeedbackResponse": { "required": ["id", "recommendation_id", "version", "kind", "comment"], "properties": { "id": "string:uuid", "recommendation_id": "string:uuid", "version": "integer", "kind": "literal:accept|override|reject", "comment": "string" } },
+      "ProjectTeamMembershipResponse": { "required": ["id", "project_id", "membership_id", "decision_id", "active", "created_at"], "properties": { "id": "string:uuid", "project_id": "string:uuid", "membership_id": "string:uuid", "decision_id": "string:uuid", "active": "boolean", "created_at": "string:date-time" } },
+      "ProjectTeamResponse": { "required": ["memberships"], "properties": { "memberships": "array:ref:ProjectTeamMembershipResponse" } }
+    }
   }
 }

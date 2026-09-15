@@ -114,6 +114,20 @@ class SqlAlchemyTeamRequirementRepository:
             {"value": str(actor.membership_id)},
         )
 
+    async def activate_tenant(self, actor: AuthenticatedActor) -> None:
+        """Establish tenant context for an adapter composed in the same transaction."""
+        await self._activate(actor)
+
+    async def authorize_project(
+        self,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        *,
+        lock: bool = False,
+        require_manage: bool = True,
+    ) -> ProjectModel:
+        return await self._project(actor, project_id, lock=lock, require_manage=require_manage)
+
     async def _project(
         self,
         actor: AuthenticatedActor,
@@ -335,6 +349,11 @@ class SqlAlchemyTeamRequirementRepository:
         models = await self._project_task_models(actor, project_id, lock=lock)
         return canonical_task_provenance(tuple((model.id, model.version) for model in models))
 
+    async def project_task_provenance(
+        self, actor: AuthenticatedActor, project_id: UUID
+    ) -> TaskProvenance:
+        return await self._project_task_provenance(actor, project_id)
+
     async def _derive_inputs(
         self, actor: AuthenticatedActor, project_id: UUID
     ) -> tuple[
@@ -422,6 +441,11 @@ class SqlAlchemyTeamRequirementRepository:
                 for value in snapshot.task_provenance
             )
         )
+
+    async def stored_task_provenance(
+        self, actor: AuthenticatedActor, requirement_set_id: UUID, version: int
+    ) -> TaskProvenance:
+        return await self._stored_task_provenance(actor, requirement_set_id, version)
 
     async def _validate_incomplete_items(
         self,
@@ -1032,7 +1056,7 @@ class SqlAlchemyTeamRequirementRepository:
             Candidate(
                 membership_id=membership.id,
                 organization_id=membership.organization_id,
-                active=membership.is_active,
+                active=membership.is_active and user.is_active,
                 policy_allowed=True,
                 skills=tuple(candidate_skills[membership.id]),
                 workloads=workloads_by_member[membership.id],
@@ -1050,7 +1074,7 @@ class SqlAlchemyTeamRequirementRepository:
                     for skill in skill_models
                 ),
             )
-            for membership, _user in membership_rows
+            for membership, user in membership_rows
         )
         names = {membership.id: user.display_name for membership, user in membership_rows}
         workloads_by_key = {(item.membership_id, item.project_week_id): item for item in workloads}

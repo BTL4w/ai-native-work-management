@@ -70,6 +70,13 @@ def test_active_phase_tables_are_registered() -> None:
         "team_requirement_versions",
         "team_requirement_items",
         "team_requirement_task_sources",
+        "recommendations",
+        "recommendation_versions",
+        "candidate_scores",
+        "recommendation_selections",
+        "recommendation_feedback",
+        "recommendation_decisions",
+        "project_team_memberships",
     }
 
 
