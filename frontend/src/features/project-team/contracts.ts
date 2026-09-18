@@ -35,7 +35,7 @@ export const reviseRequirementsSchema = z.object({
   }
 });
 
-const evidenceSchema = z.object({
+export const evidenceSchema = z.object({
   id: uuid,
   summary: z.string(),
   source_resource_type: z.string(),
@@ -75,8 +75,82 @@ export const rankingPreviewSchema = z.object({
   }).strict()),
 }).strict();
 
+export const recommendationSelectionSchema = z.object({
+  requirement_id: uuid,
+  membership_id: uuid,
+  allocated_effort_hours: decimal,
+  warning_codes: z.array(z.string()),
+  override_reason: z.string().nullable(),
+}).strict();
+
+const uncoveredRequirementSchema = z.object({
+  requirement_id: uuid,
+  uncovered_effort_hours: decimal,
+}).strict();
+
+const requirementDemandSchema = z.object({
+  requirement_id: uuid,
+  project_week_id: uuid,
+  effort_hours: decimal,
+}).strict();
+
+const recommendationDiffSchema = z.object({
+  added_membership_ids: z.array(uuid),
+  removed_membership_ids: z.array(uuid),
+  before: z.array(recommendationSelectionSchema),
+  after: z.array(recommendationSelectionSchema),
+}).strict();
+
+export const recommendationVersionSchema = z.object({
+  recommendation_id: uuid,
+  version: z.number().int().positive(),
+  requirement_set_id: uuid,
+  requirement_version: z.number().int().positive(),
+  policy_version: z.string().min(1),
+  status: z.enum(["PROPOSED", "APPROVED", "REJECTED", "STALE"]),
+  selections: z.array(recommendationSelectionSchema),
+  alternatives: z.array(candidateRankingSchema),
+  uncovered: z.array(uncoveredRequirementSchema),
+  demands: z.array(requirementDemandSchema),
+  diff: recommendationDiffSchema.nullable(),
+  explanation_status: z.enum(["NOT_REQUESTED", "AVAILABLE", "UNAVAILABLE"]),
+}).strict();
+
+export const candidateOverrideInputSchema = z.object({
+  requirement_id: uuid,
+  selected_membership_id: uuid,
+  override_reason: z.string().max(500).nullable(),
+  allocated_effort_hours: decimal.nullable(),
+}).strict();
+
+export const reviseRecommendationSchema = z.object({
+  overrides: z.array(candidateOverrideInputSchema),
+}).strict();
+
+export const projectTeamMembershipSchema = z.object({
+  id: uuid,
+  project_id: uuid,
+  membership_id: uuid,
+  decision_id: uuid,
+  active: z.boolean(),
+  created_at: timestamp,
+}).strict();
+
+export const projectTeamSchema = z.object({ memberships: z.array(projectTeamMembershipSchema) }).strict();
+
+export const recommendationFeedbackSchema = z.object({
+  id: uuid,
+  recommendation_id: uuid,
+  version: z.number().int().positive(),
+  kind: z.enum(["accept", "override", "reject"]),
+  comment: z.string(),
+}).strict();
+
 export type TeamRequirementSet = z.infer<typeof teamRequirementSetSchema>;
 export type RequirementItemInput = z.infer<typeof requirementItemInputSchema>;
 export type ReviseRequirements = z.infer<typeof reviseRequirementsSchema>;
 export type RankingPreview = z.infer<typeof rankingPreviewSchema>;
 export type CandidateRanking = z.infer<typeof candidateRankingSchema>;
+export type RecommendationVersion = z.infer<typeof recommendationVersionSchema>;
+export type CandidateOverrideInput = z.infer<typeof candidateOverrideInputSchema>;
+export type ProjectTeam = z.infer<typeof projectTeamSchema>;

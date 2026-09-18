@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { confirmRequirements, deriveRequirements, getRankingPreview, getRequirements, listAllProjectTasks, refreshRequirements, reviseRequirements } from "./api";
+import { confirmRequirements, deriveRequirements, getRankingPreview, getRecommendation, getRecommendationVersion, getRequirements, listAllProjectTasks, refreshRequirements, reviseRequirements } from "./api";
 
 const projectId = "00000000-0000-4000-8000-000000000003";
 const setId = "00000000-0000-4000-8000-000000000001";
@@ -43,5 +43,23 @@ describe("project team api", () => {
       { headers: { "Content-Type": "application/json" } })));
     await getRankingPreview(projectId);
     expect(fetch).toHaveBeenCalledWith(`/api/v1/projects/${projectId}/team-requirements/ranking-preview`, expect.anything());
+  });
+
+  it("loads the current and an immutable recommendation version through their exact routes", async () => {
+    const recommendationId = "00000000-0000-4000-8000-000000000010";
+    const recommendation = { recommendation_id: recommendationId, version: 2, requirement_set_id: setId,
+      requirement_version: 1, policy_version: "ranking-v1", status: "PROPOSED", selections: [], alternatives: [],
+      uncovered: [], demands: [], diff: null, explanation_status: "NOT_REQUESTED" };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(recommendation), { headers: { "Content-Type": "application/json", ETag: '"2"' } }));
+    vi.stubGlobal("fetch", fetch);
+
+    await getRecommendation(recommendationId);
+    await getRecommendationVersion(recommendationId, 1);
+
+    const calls = fetch.mock.calls as unknown as Array<[RequestInfo | URL]>;
+    expect(calls.map(([requestPath]) => requestPath)).toEqual([
+      `/api/v1/recommendations/${recommendationId}`,
+      `/api/v1/recommendations/${recommendationId}/versions/1`,
+    ]);
   });
 });

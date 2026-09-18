@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   rankingPreviewSchema,
+  recommendationVersionSchema,
   teamRequirementSetSchema,
   reviseRequirementsSchema,
 } from "./contracts";
@@ -34,5 +35,13 @@ describe("project team contracts", () => {
       uncovered: [{ requirement_id: id("4"), uncovered_effort_hours: "8" }],
     });
     expect(value.candidates[0].residual_capacity_hours).toBeNull();
+  });
+
+  it("accepts only the strict versioned recommendation projection", () => {
+    const recommendation = { recommendation_id: id("10"), version: 2, requirement_set_id: id("1"),
+      requirement_version: 1, policy_version: "ranking-v1", status: "PROPOSED", selections: [],
+      alternatives: [], uncovered: [], demands: [], diff: null, explanation_status: "NOT_REQUESTED" };
+    expect(recommendationVersionSchema.parse(recommendation).version).toBe(2);
+    expect(recommendationVersionSchema.safeParse({ ...recommendation, hidden_internal_score: 9 }).success).toBe(false);
   });
 });
