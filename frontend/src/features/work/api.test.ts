@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/shared/api/client";
 
-import { createProject, transitionTask } from "./api";
+import { assignTask, createProject, listAllMembers, transitionTask } from "./api";
 
 const project = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -85,6 +85,42 @@ describe("work API", () => {
         }),
       }),
     );
+  });
+
+  it("assigns one exact Task version to one exact Project Team member", async () => {
+    const assignment = {
+      task,
+      warnings: [{ code: "ASSIGNEE_OVER_CAPACITY" }],
+      effective_capacity_hours: 40,
+      workload_before_hours: 35,
+      workload_after_hours: 43,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(assignment), {
+      headers: { "Content-Type": "application/json", ETag: '"2"' },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await assignTask(task.id, task.assignee.membership_id, 1, "assignment-key")).data).toEqual(assignment);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/tasks/${task.id}/assign`, expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "Idempotency-Key": "assignment-key" }),
+      body: JSON.stringify({ assignee_membership_id: task.assignee.membership_id, expected_task_version: 1 }),
+    }));
+  });
+
+  it("loads every active member page for Project Team resolution", async () => {
+    const first = { membership_id: "00000000-0000-4000-8000-000000000041", display_name: "First", role: "EMPLOYEE", is_active: true };
+    const second = { membership_id: "00000000-0000-4000-8000-000000000042", display_name: "Second", role: "EMPLOYEE", is_active: true };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify({
+      items: String(input).includes("page=1") ? [first] : [second],
+      page: String(input).includes("page=1") ? 1 : 2,
+      page_size: 100,
+      total: 2,
+    }), { headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await listAllMembers()).toEqual([first, second]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("preserves structured backend field errors", async () => {

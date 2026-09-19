@@ -10,7 +10,10 @@ import {
 
 import manifest from "./openapi-contract.json";
 import {
+  assignmentWarningSchema,
   assigneeSchema,
+  explicitAssignmentRequestSchema,
+  explicitAssignmentResponseSchema,
   memberPageSchema,
   memberSchema,
   projectCreateSchema,
@@ -93,9 +96,18 @@ const runtimeJsonSchemas = Object.fromEntries(
   Object.entries(runtimeSchemas).map(([name, schema]) => [name, z.toJSONSchema(schema, { io: "input" }) as JsonSchema]),
 ) as Record<string, JsonSchema>;
 
+const explicitAssignmentRuntimeSchemas: Record<string, ZodType> = {
+  ExplicitAssignmentRequest: explicitAssignmentRequestSchema,
+  AssignmentWarningResponse: assignmentWarningSchema,
+  ExplicitAssignmentResponse: explicitAssignmentResponseSchema,
+};
+const explicitAssignmentJsonSchemas = Object.fromEntries(
+  Object.entries(explicitAssignmentRuntimeSchemas).map(([name, schema]) => [name, z.toJSONSchema(schema, { io: "input" }) as JsonSchema]),
+) as Record<string, JsonSchema>;
+
 function referencedSchema(fragment: JsonSchema): string | null {
   const normalized = JSON.stringify(withoutSchemaMarker(fragment));
-  return Object.entries(runtimeJsonSchemas).find(([, candidate]) =>
+  return Object.entries({ ...runtimeJsonSchemas, ...explicitAssignmentJsonSchemas }).find(([, candidate]) =>
     JSON.stringify(withoutSchemaMarker(candidate)) === normalized,
   )?.[0] ?? null;
 }
@@ -162,6 +174,14 @@ describe("deep work OpenAPI compatibility manifest", () => {
     }
   });
 
+  it("mechanically aligns the explicit assignment request and response contracts", () => {
+    expect(Object.keys(manifest.explicit_assignment.schemas)).toEqual(Object.keys(explicitAssignmentRuntimeSchemas));
+    for (const name of Object.keys(explicitAssignmentRuntimeSchemas)) {
+      const expected = manifest.explicit_assignment.schemas[name as keyof typeof manifest.explicit_assignment.schemas];
+      expect(describeSchema(explicitAssignmentJsonSchemas[name]), name).toEqual(expected);
+    }
+  });
+
   it.each([
     [projectSchema, project, "id"],
     [projectPageSchema, page(project), "items"],
@@ -197,6 +217,21 @@ describe("deep work OpenAPI compatibility manifest", () => {
     expect(taskUpdateSchema.safeParse({ due_date: "2026-08-12" }).success).toBe(true);
     expect(taskUpdateSchema.safeParse({ milestone_id: null }).success).toBe(true);
     expect(taskStatusRequestSchema.safeParse({ to_status: "BLOCKED" }).success).toBe(false);
+    expect(explicitAssignmentRequestSchema.safeParse({ assignee_membership_id: uuid, expected_task_version: 1 }).success).toBe(true);
+    expect(explicitAssignmentRequestSchema.safeParse({ assignee_membership_id: "bad", expected_task_version: 0 }).success).toBe(false);
+  });
+
+  it("validates the deterministic assignment workload projection", () => {
+    const assignment = {
+      task,
+      warnings: [{ code: "ASSIGNEE_OVER_CAPACITY" }],
+      effective_capacity_hours: 40,
+      workload_before_hours: 35,
+      workload_after_hours: 43,
+    };
+    expect(explicitAssignmentResponseSchema.safeParse(assignment).success).toBe(true);
+    expect(explicitAssignmentResponseSchema.safeParse({ ...assignment, warnings: [{}] }).success).toBe(false);
+    expect(explicitAssignmentResponseSchema.safeParse({ ...assignment, workload_after_hours: -1 }).success).toBe(false);
   });
 
   it("enforces the structured error envelope", () => {

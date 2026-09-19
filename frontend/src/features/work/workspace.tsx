@@ -19,11 +19,11 @@ import { listProjectWeeks } from "@/features/planning/api";
 import { AiAssistant } from "@/features/ai-proposals/ai-assistant";
 import { PeopleCapacityPanel } from "@/features/people-capacity/people-capacity-panel";
 import { TeamPanel } from "@/features/project-team/team-panel";
+import { TaskAssignmentControl } from "@/features/project-team/task-assignment-control";
 
 import {
   createProject,
   createTask,
-  listMembers,
   listMyTasks,
   listProjects,
   listTasks,
@@ -33,7 +33,7 @@ import {
   type ProjectInput,
   type TaskInput,
 } from "./api";
-import type { Member, Project, ProjectPage, Task, TaskPage, TaskStatus } from "./contracts";
+import type { Project, ProjectPage, Task, TaskPage, TaskStatus } from "./contracts";
 
 type View = "aiAssistant" | "projects" | "myTasks" | "peopleCapacity";
 type ProjectFormState = { project: Project | null };
@@ -226,6 +226,11 @@ export function WorkWorkspace({
             onProjectsPage={setProjectsPage}
             onTasksPage={setTasksPage}
             onTaskUpdated={updateCachedTask}
+            onReloadTask={async () => {
+              const refreshed = await projectTasks.refetch();
+              const latest = refreshed.data?.items.find((item) => item.id === selectedTask?.id);
+              if (latest) setSelectedTask(latest);
+            }}
             planningContext={{
               organizationId: actor.membership.organization_id,
               actorMembershipId: actor.membership.id,
@@ -327,6 +332,7 @@ function ProjectsView(props: {
   selectedTask: Task | null; onSelectProject: (p: Project | null) => void; onSelectTask: (t: Task | null) => void;
   onNewProject: () => void; onEditProject: (p: Project) => void; onNewTask: () => void;
   onEditTask: (task: Task) => void; onTaskUpdated: (task: Task) => void;
+  onReloadTask: () => void | Promise<void>;
   onRetryProjects: () => void; onRetryTasks: () => void;
   onProjectsPage: (page: number) => void; onTasksPage: (page: number) => void;
   planningContext: PlanningContext;
@@ -334,7 +340,7 @@ function ProjectsView(props: {
   onProjectSection: (section: "tasks" | "plan" | "projectTeam") => void;
 }) {
   const t = useTranslations("work");
-  if (props.selectedTask) return <TaskDetail task={props.selectedTask} canEdit={props.canManage} onEdit={() => props.onEditTask(props.selectedTask!)} onUpdated={props.onTaskUpdated} onBack={() => props.onSelectTask(null)} planningContext={props.planningContext} tasks={props.tasks.items} />;
+  if (props.selectedTask) return <TaskDetail task={props.selectedTask} canEdit={props.canManage} onEdit={() => props.onEditTask(props.selectedTask!)} onUpdated={props.onTaskUpdated} onBack={() => props.onSelectTask(null)} onOpenTeam={() => { props.onSelectTask(null); props.onProjectSection("projectTeam"); }} onReloadTask={props.onReloadTask} planningContext={props.planningContext} tasks={props.tasks.items} />;
   if (props.selectedProject) {
     return (
       <section className="work-view">
@@ -403,13 +409,9 @@ function ProjectForm({ state, onClose, onSaved }: { state: ProjectFormState; onC
 function TaskForm({ state, projectId, queryScope, onClose, onSaved }: { state: TaskFormState; projectId: string; queryScope: WorkQueryKey; onClose: () => void; onSaved: (task: Task) => void }) {
   const t = useTranslations("work");
   const attempt = useMutationAttempt();
-  const [membersPage, setMembersPage] = useState(1);
-  const members = useQuery({ queryKey: [...queryScope, "members", membersPage], queryFn: () => listMembers(membersPage) });
   const weeks = useQuery({ queryKey: [...queryScope, "weeks", projectId], queryFn: () => listProjectWeeks(projectId) });
   const [title, setTitle] = useState(state.task?.title ?? "");
   const [description, setDescription] = useState(state.task?.description ?? "");
-  const [selectedAssignee, setSelectedAssignee] = useState(state.task?.assignee ?? null);
-  const assignee = selectedAssignee?.membership_id ?? "";
   const [dueDate, setDueDate] = useState(state.task?.due_date ?? "");
   const [projectWeekId, setProjectWeekId] = useState(state.task?.project_week_id ?? "");
   const [requiredSkills, setRequiredSkills] = useState(state.task?.required_skill_labels.join("\n") ?? "");
@@ -431,16 +433,15 @@ function TaskForm({ state, projectId, queryScope, onClose, onSaved }: { state: T
     }
     setSubmitting(true); setIssue(null);
     try {
-      const input: TaskInput = { project_id: projectId, project_week_id: projectWeekId, title: title.trim(), description: description.trim() || null, assignee_membership_id: assignee || null, required_skill_labels: requiredSkills.split("\n").map((value) => value.trim()).filter(Boolean), estimated_effort_hours: effortHours, due_date: dueDate || null };
+      const input: TaskInput = { project_id: projectId, project_week_id: projectWeekId, title: title.trim(), description: description.trim() || null, assignee_membership_id: null, required_skill_labels: requiredSkills.split("\n").map((value) => value.trim()).filter(Boolean), estimated_effort_hours: effortHours, due_date: dueDate || null };
       const key = attempt.keyFor(input);
-      const result = state.task ? await updateTask(state.task.id, { title: input.title, description: input.description, assignee_membership_id: input.assignee_membership_id, project_week_id: input.project_week_id, required_skill_labels: input.required_skill_labels, estimated_effort_hours: input.estimated_effort_hours, due_date: input.due_date }, state.task.version, key) : await createTask(input, key);
+      const result = state.task ? await updateTask(state.task.id, { title: input.title, description: input.description, project_week_id: input.project_week_id, required_skill_labels: input.required_skill_labels, estimated_effort_hours: input.estimated_effort_hours, due_date: input.due_date }, state.task.version, key) : await createTask(input, key);
       onSaved(result.data);
     } catch (caught) {
       setIssue(formIssue(caught, t));
       if (isDefinitiveMutationRejection(caught)) attempt.reset();
     } finally { setSubmitting(false); }
   }
-  const selectedMemberMissing = selectedAssignee && !members.data?.items.some((member) => member.membership_id === selectedAssignee.membership_id);
   return <Dialog title={state.task ? t("task.edit") : t("task.create")} onClose={onClose}>
     <form onSubmit={submit}>
       <Field label={t("task.title")} error={issue?.fields.title}><input className="form-input" value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
@@ -448,17 +449,15 @@ function TaskForm({ state, projectId, queryScope, onClose, onSaved }: { state: T
       <Field label={t("task.week")} error={issue?.fields.project_week_id}><select className="form-input" value={projectWeekId} onChange={(event) => setProjectWeekId(event.target.value)}><option value="">{t("task.selectWeek")}</option>{weeks.data?.filter((week) => week.status !== "COMPLETED").map((week) => <option key={week.id} value={week.id}>{t("task.weekNumber", { number: week.week_number })}</option>)}</select></Field>
       <Field label={t("task.requiredSkills")}><textarea className="form-input" value={requiredSkills} onChange={(event) => setRequiredSkills(event.target.value)} /></Field>
       <Field label={t("task.effortHours")}><input className="form-input" min={1} type="number" value={effortHours} onChange={(event) => setEffortHours(Number(event.target.value))} /></Field>
-      <Field label={t("task.assignee")}><select className="form-input" value={assignee} onChange={(event) => setSelectedAssignee(members.data?.items.find((member) => member.membership_id === event.target.value) ?? null)}><option value="">{t("task.unassigned")}</option>{selectedMemberMissing ? <option value={selectedAssignee.membership_id}>{selectedAssignee.display_name}</option> : null}{members.data?.items.map((member: Member) => <option key={member.membership_id} value={member.membership_id}>{member.display_name}</option>)}</select></Field>
-      {members.data ? <Pagination page={members.data} onPage={setMembersPage} /> : null}
       <Field label={t("task.dueDate")}><input className="form-input" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></Field>
-      {members.error || weeks.error ? <ErrorState error={(members.error ?? weeks.error) as Error} onRetry={() => { void members.refetch(); void weeks.refetch(); }} /> : null}
+      {weeks.error ? <ErrorState error={weeks.error} onRetry={() => void weeks.refetch()} /> : null}
       {issue ? <FormIssueNotice issue={issue} /> : null}
-      <FormActions submitting={submitting || members.isPending || weeks.isPending} onCancel={onClose} saveLabel={t("task.save")} />
+      <FormActions submitting={submitting || weeks.isPending} onCancel={onClose} saveLabel={t("task.save")} />
     </form>
   </Dialog>;
 }
 
-function TaskDetail({ task, canEdit, onEdit, onUpdated, onBack, planningContext, tasks }: { task: Task; canEdit: boolean; onEdit: () => void; onUpdated: (task: Task) => void; onBack: () => void; planningContext: PlanningContext; tasks: Task[] }) {
+function TaskDetail({ task, canEdit, onEdit, onUpdated, onBack, onOpenTeam, onReloadTask, planningContext, tasks }: { task: Task; canEdit: boolean; onEdit: () => void; onUpdated: (task: Task) => void; onBack: () => void; onOpenTeam?: () => void; onReloadTask?: () => void | Promise<void>; planningContext: PlanningContext; tasks: Task[] }) {
   const t = useTranslations("work");
   const locale = useLocale();
   const attempt = useMutationAttempt();
@@ -481,7 +480,7 @@ function TaskDetail({ task, canEdit, onEdit, onUpdated, onBack, planningContext,
       if (isDefinitiveMutationRejection(caught)) attempt.reset();
     } finally { setSubmitting(false); }
   }
-  return <section className="work-view work-detail"><button className="text-button" type="button" onClick={onBack}>← {t("action.back")}</button><div className="work-view-heading mt-6 flex flex-wrap items-start justify-between gap-4"><div><span className={`status-pill status-${task.status.toLowerCase()}`}>{t(`status.${task.status}`)}</span><h2 className="page-title mt-4">{task.title}</h2></div>{canEdit ? <button className="secondary-button" type="button" onClick={onEdit}>{t("task.edit")}</button> : null}</div><dl className="work-detail-grid mt-8 grid gap-5 sm:grid-cols-2"><Detail label={t("task.assignee")} value={task.assignee?.display_name ?? t("task.unassigned")} /><Detail label={t("task.dueDate")} value={task.due_date ? formatCalendarDate(task.due_date, locale) : t("task.noDueDate")} /><Detail label={t("task.description")} value={task.description || t("common.noDescription")} /></dl><div className="mt-8"><h3 className="font-semibold">{t("task.availableActions")}</h3><div className="mt-3 flex flex-wrap gap-3">{transitions[task.status].map((item) => <button key={item.target} className="primary-button" disabled={submitting} type="button" onClick={() => transition(item.target)}>{item.label}</button>)}</div>{error ? <p className="error-message" role="alert">{error}</p> : null}</div><button className="secondary-button mt-8" type="button" aria-expanded={showCriteria} onClick={() => setShowCriteria((value) => !value)}>{t("task.acceptanceCriteria")}</button>{showCriteria ? <ProjectPlanPanel organizationId={planningContext.organizationId} actorMembershipId={planningContext.actorMembershipId} canManage={planningContext.canManage} projectId={task.project_id} taskId={task.id} tasks={tasks.length ? tasks : [task]} /> : null}</section>;
+  return <section className="work-view work-detail"><button className="text-button" type="button" onClick={onBack}>← {t("action.back")}</button><div className="work-view-heading mt-6 flex flex-wrap items-start justify-between gap-4"><div><span className={`status-pill status-${task.status.toLowerCase()}`}>{t(`status.${task.status}`)}</span><h2 className="page-title mt-4">{task.title}</h2></div>{canEdit ? <button className="secondary-button" type="button" onClick={onEdit}>{t("task.edit")}</button> : null}</div><dl className="work-detail-grid mt-8 grid gap-5 sm:grid-cols-2"><Detail label={t("task.assignee")} value={task.assignee?.display_name ?? t("task.unassigned")} /><Detail label={t("task.dueDate")} value={task.due_date ? formatCalendarDate(task.due_date, locale) : t("task.noDueDate")} /><Detail label={t("task.description")} value={task.description || t("common.noDescription")} /></dl>{canEdit ? <TaskAssignmentControl task={task} onAssigned={onUpdated} onOpenTeam={onOpenTeam ?? onBack} onReloadTask={onReloadTask ?? onBack} /> : null}<div className="mt-8"><h3 className="font-semibold">{t("task.availableActions")}</h3><div className="mt-3 flex flex-wrap gap-3">{transitions[task.status].map((item) => <button key={item.target} className="primary-button" disabled={submitting} type="button" onClick={() => transition(item.target)}>{item.label}</button>)}</div>{error ? <p className="error-message" role="alert">{error}</p> : null}</div><button className="secondary-button mt-8" type="button" aria-expanded={showCriteria} onClick={() => setShowCriteria((value) => !value)}>{t("task.acceptanceCriteria")}</button>{showCriteria ? <ProjectPlanPanel organizationId={planningContext.organizationId} actorMembershipId={planningContext.actorMembershipId} canManage={planningContext.canManage} projectId={task.project_id} taskId={task.id} tasks={tasks.length ? tasks : [task]} /> : null}</section>;
 }
 
 function Dialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {

@@ -38,6 +38,11 @@ export const taskUpdateSchema = z.object({
 });
 export const taskStatusRequestSchema = z.object({ to_status: taskStatusSchema });
 
+export const explicitAssignmentRequestSchema = z.object({
+  assignee_membership_id: z.uuid(),
+  expected_task_version: z.number().int().positive(),
+}).strict();
+
 export const projectSchema = z.object({
   id: z.uuid(),
   name: z.string(),
@@ -97,6 +102,16 @@ export const taskPageSchema = z.object({
   total: z.number().int(),
 });
 
+export const assignmentWarningSchema = z.object({ code: z.string() }).strict();
+
+export const explicitAssignmentResponseSchema = z.object({
+  task: taskSchema,
+  warnings: z.array(assignmentWarningSchema),
+  effective_capacity_hours: z.number().int().nonnegative(),
+  workload_before_hours: z.number().int().nonnegative(),
+  workload_after_hours: z.number().int().nonnegative(),
+}).strict();
+
 export type Project = z.infer<typeof projectSchema>;
 export type Member = z.infer<typeof memberSchema>;
 export type Task = z.infer<typeof taskSchema>;
@@ -104,3 +119,4 @@ export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type ProjectPage = z.infer<typeof projectPageSchema>;
 export type MemberPage = z.infer<typeof memberPageSchema>;
 export type TaskPage = z.infer<typeof taskPageSchema>;
+export type ExplicitAssignmentResponse = z.infer<typeof explicitAssignmentResponseSchema>;

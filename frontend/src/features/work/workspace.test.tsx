@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { managerActor, renderWithAppProviders } from "@/test/render";
@@ -133,7 +133,8 @@ describe("WorkWorkspace", () => {
 
   it("lets a Manager create a Project and assign a Task", async () => {
     let projects = [] as typeof project[];
-    let tasks = [] as typeof task[];
+    const unassignedTask = { ...task, assignee: null };
+    let tasks: Array<typeof task | typeof unassignedTask> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -150,8 +151,22 @@ describe("WorkWorkspace", () => {
         }
         if (path.startsWith(`/api/v1/projects/${project.id}/weeks?`)) return response(page([projectWeek]));
         if (path === "/api/v1/tasks" && init?.method === "POST") {
+          tasks = [unassignedTask];
+          return response(unassignedTask, 201, { ETag: '"1"' });
+        }
+        if (path === `/api/v1/projects/${project.id}/team`) return response({ memberships: [{
+          id: "55555555-5555-4555-8555-555555555555", project_id: project.id, membership_id: employeeId,
+          decision_id: "66666666-6666-4666-8666-666666666666", active: true, created_at: "2026-08-01T10:00:00Z",
+        }] });
+        if (path.startsWith("/api/v1/workload?")) return response([{ membership_id: employeeId,
+          project_week_id: projectWeek.id, effective_capacity_hours: 40, allocated_effort_hours: 0,
+          residual_capacity_hours: 40, workload_ratio: "0.0000" }]);
+        if (path === "/api/v1/skills") return response([]);
+        if (path === `/api/v1/members/${employeeId}/skills`) return response([]);
+        if (path === `/api/v1/tasks/${task.id}/assign` && init?.method === "POST") {
           tasks = [task];
-          return response(task, 201, { ETag: '"1"' });
+          return response({ task, warnings: [], effective_capacity_hours: 40,
+            workload_before_hours: 0, workload_after_hours: task.estimated_effort_hours });
         }
         throw new Error(`Unexpected request: ${path}`);
       }),
@@ -166,11 +181,15 @@ describe("WorkWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tạo task" }));
     fireEvent.change(await screen.findByLabelText("Tiêu đề task"), { target: { value: task.title } });
     fireEvent.change(screen.getByLabelText("Tuần dự án"), { target: { value: projectWeek.id } });
-    fireEvent.change(screen.getByLabelText("Người thực hiện"), { target: { value: employeeId } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu task" }));
 
-    expect(await screen.findByText(task.title)).toBeVisible();
-    expect(screen.getByText("Demo Employee")).toBeVisible();
+    fireEvent.click(await screen.findByText(task.title));
+    const taskCard = screen.getByRole("heading", { name: task.title }).closest("section")!;
+    fireEvent.click(within(taskCard).getByRole("button", { name: "Giao task" }));
+    fireEvent.change(await within(taskCard).findByLabelText("Thành viên dự án"), { target: { value: employeeId } });
+    fireEvent.click(await within(taskCard).findByRole("button", { name: "Xác nhận giao cho Demo Employee" }));
+
+    expect(await within(taskCard).findByText("Đã giao cho Demo Employee")).toBeVisible();
   });
 
   it("lets an Employee progress an assigned Task without edit controls", async () => {
@@ -199,6 +218,9 @@ describe("WorkWorkspace", () => {
     expect(screen.getByRole("button", { name: "Cuộc trò chuyện mới" })).toBeEnabled();
     fireEvent.click(await screen.findByText(task.title));
     expect(screen.queryByRole("button", { name: "Sửa task" })).not.toBeInTheDocument();
+    const taskCard = screen.getByRole("heading", { name: task.title }).closest("section")!;
+    expect(within(taskCard).queryByRole("button", { name: "Giao task" })).not.toBeInTheDocument();
+    expect(within(taskCard).getByText("Demo Employee")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "Bắt đầu task" }));
     expect(await screen.findByText("Đang thực hiện")).toBeVisible();
@@ -354,19 +376,11 @@ describe("WorkWorkspace", () => {
     expect(await screen.findByText("Task 1")).toBeVisible();
   });
 
-  it("keeps a selected assignee visible while member pages change", async () => {
-    const secondMember = { membership_id: "55555555-5555-4555-8555-555555555555", display_name: "Second Employee", role: "EMPLOYEE", is_active: true };
+  it("keeps assignment out of the generic Task editor", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path === "/api/v1/projects") return response(page([project]));
       if (path.startsWith("/api/v1/tasks?")) return response(page([]));
-      if (path.includes("/api/v1/members")) {
-        const requestedPage = Number(new URL(path, "http://test").searchParams.get("page"));
-        const member = requestedPage === 1
-          ? { membership_id: employeeId, display_name: "Demo Employee", role: "EMPLOYEE", is_active: true }
-          : secondMember;
-        return response({ items: [member], page: requestedPage, page_size: 100, total: 101 });
-      }
       if (path.startsWith(`/api/v1/projects/${project.id}/weeks?`)) return response(page([projectWeek]));
       throw new Error(`Unexpected request: ${path}`);
     }));
@@ -374,13 +388,8 @@ describe("WorkWorkspace", () => {
     renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
     fireEvent.click(await screen.findByRole("button", { name: new RegExp(project.name) }));
     fireEvent.click(screen.getByRole("button", { name: "Tạo task" }));
-    expect(await screen.findByRole("option", { name: "Demo Employee" })).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Người thực hiện"), { target: { value: employeeId } });
-    fireEvent.click(await screen.findByRole("button", { name: "Trang sau" }));
-
-    const select = await screen.findByLabelText("Người thực hiện");
-    expect(select).toHaveValue(employeeId);
-    expect(screen.getByRole("option", { name: "Demo Employee" })).toBeVisible();
+    expect(await screen.findByLabelText("Tiêu đề task")).toBeVisible();
+    expect(screen.queryByLabelText("Người thực hiện")).not.toBeInTheDocument();
   });
 
   it("distinguishes a Project fetch failure from an empty list and retries", async () => {
@@ -489,6 +498,23 @@ describe("WorkWorkspace", () => {
     expect(screen.getByRole("button", { name: "Tạo yêu cầu từ task" })).toBeEnabled();
     expect(requests).toContain(`/api/v1/projects/${project.id}/team-requirements`);
     expect(container.querySelectorAll("aside")).toHaveLength(1);
+  });
+
+  it("offers the explicit Project Team assignment action from a Manager Task card", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/projects") return response(page([project]));
+      if (path === `/api/v1/tasks?project_id=${project.id}&page=1&page_size=20`) return response(page([{ ...task, assignee: null }]));
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    renderWithAppProviders(<WorkWorkspace actor={managerActor} />);
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(project.name) }));
+    fireEvent.click(await screen.findByText(task.title));
+
+    const taskCard = screen.getByRole("heading", { name: task.title }).closest("section");
+    expect(taskCard).not.toBeNull();
+    expect(within(taskCard!).getByRole("button", { name: "Giao task" })).toBeVisible();
   });
 });
 

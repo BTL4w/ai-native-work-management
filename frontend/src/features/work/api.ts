@@ -2,6 +2,8 @@ import { requestJson, requestJsonWithMetadata } from "@/shared/api/client";
 
 import {
   memberPageSchema,
+  explicitAssignmentRequestSchema,
+  explicitAssignmentResponseSchema,
   projectCreateSchema,
   projectPageSchema,
   projectSchema,
@@ -61,6 +63,15 @@ export function listMembers(page = 1) {
   return requestJson(`/api/v1/members?is_active=true&page=${page}&page_size=100`, { schema: memberPageSchema });
 }
 
+export async function listAllMembers() {
+  const items = [];
+  for (let page = 1; ; page += 1) {
+    const result = await listMembers(page);
+    items.push(...result.items);
+    if (items.length >= result.total || result.items.length === 0) return items;
+  }
+}
+
 export function listTasks(projectId?: string, page = 1) {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}&page=${page}&page_size=20` : `?page=${page}&page_size=20`;
   return requestJson(`/api/v1/tasks${query}`, { schema: taskPageSchema });
@@ -118,6 +129,26 @@ export function transitionTask(
         "If-Match": `"${version}"`,
       },
       body: JSON.stringify({ to_status: toStatus }),
+    },
+  });
+}
+
+export function assignTask(
+  taskId: string,
+  assigneeMembershipId: string,
+  expectedTaskVersion: number,
+  idempotencyKey: string,
+) {
+  const payload = explicitAssignmentRequestSchema.parse({
+    assignee_membership_id: assigneeMembershipId,
+    expected_task_version: expectedTaskVersion,
+  });
+  return requestJsonWithMetadata(`/api/v1/tasks/${taskId}/assign`, {
+    schema: explicitAssignmentResponseSchema,
+    init: {
+      method: "POST",
+      headers: { ...jsonHeaders, "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(payload),
     },
   });
 }

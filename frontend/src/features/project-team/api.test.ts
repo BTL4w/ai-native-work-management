@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { confirmRequirements, deriveRequirements, getRankingPreview, getRecommendation, getRecommendationVersion, getRequirements, listAllProjectTasks, refreshRequirements, reviseRequirements } from "./api";
+import { confirmRequirements, deriveRequirements, getProjectTeam, getRankingPreview, getRecommendation, getRecommendationVersion, getRequirements, listAllProjectTasks, refreshRequirements, reviseRequirements } from "./api";
 
 const projectId = "00000000-0000-4000-8000-000000000003";
 const setId = "00000000-0000-4000-8000-000000000001";
@@ -43,6 +43,22 @@ describe("project team api", () => {
       { headers: { "Content-Type": "application/json" } })));
     await getRankingPreview(projectId);
     expect(fetch).toHaveBeenCalledWith(`/api/v1/projects/${projectId}/team-requirements/ranking-preview`, expect.anything());
+  });
+
+  it("loads approved Project Team memberships through the exact project route", async () => {
+    const currentTeam = { memberships: [{
+      id: "00000000-0000-4000-8000-000000000031",
+      project_id: projectId,
+      membership_id: "00000000-0000-4000-8000-000000000032",
+      decision_id: "00000000-0000-4000-8000-000000000033",
+      active: true,
+      created_at: "2026-09-20T00:00:00Z",
+    }] };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(currentTeam), { headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+
+    expect(await getProjectTeam(projectId)).toEqual(currentTeam);
+    expect(fetch).toHaveBeenCalledWith(`/api/v1/projects/${projectId}/team`, expect.anything());
   });
 
   it("loads the current and an immutable recommendation version through their exact routes", async () => {
