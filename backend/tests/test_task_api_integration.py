@@ -27,6 +27,7 @@ async def seed_approved_project_team(
     *,
     organization_id: UUID,
     project_id: UUID,
+    project_week_id: UUID,
     manager_member: UUID,
     member_ids: tuple[UUID, ...],
 ) -> None:
@@ -35,16 +36,21 @@ async def seed_approved_project_team(
         uuid4(),
         uuid4(),
     )
+    skill_id, requirement_item_id = uuid4(), uuid4()
     recommendation_version_id, decision_id = uuid4(), uuid4()
     values = {
         "org": organization_id,
         "project": project_id,
+        "project_week": project_week_id,
         "manager": manager_member,
+        "skill": skill_id,
         "requirement_set": requirement_set_id,
         "requirement_version": requirement_version_id,
+        "requirement_item": requirement_item_id,
         "recommendation": recommendation_id,
         "recommendation_version": recommendation_version_id,
         "decision": decision_id,
+        "effort": len(member_ids),
     }
     async with engine.begin() as connection:
         await connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
@@ -58,6 +64,14 @@ async def seed_approved_project_team(
             "incomplete_items,task_provenance,created_by_membership_id) VALUES "
             "(:requirement_version,:org,:requirement_set,:project,1,'CONFIRMED',"
             "'[]'::jsonb,'[]'::jsonb,:manager)",
+            "INSERT INTO skills "
+            "(id,organization_id,name,normalized_name,created_by_membership_id,"
+            "updated_by_membership_id) VALUES "
+            "(:skill,:org,'Fixture skill','fixture-skill',:manager,:manager)",
+            "INSERT INTO team_requirement_items "
+            "(id,organization_id,requirement_version_id,skill_id,minimum_level,"
+            "project_week_id,effort_hours) VALUES "
+            "(:requirement_item,:org,:requirement_version,:skill,1,:project_week,:effort)",
             "INSERT INTO recommendations "
             "(id,organization_id,project_id,current_version,status) VALUES "
             "(:recommendation,:org,:project,1,'APPROVED')",
@@ -74,6 +88,25 @@ async def seed_approved_project_team(
         ):
             await connection.execute(text(statement), values)
         for member_id in member_ids:
+            member_values = {**values, "member": member_id}
+            await connection.execute(
+                text(
+                    "INSERT INTO candidate_scores "
+                    "(id,organization_id,recommendation_version_id,requirement_id,"
+                    "membership_id,snapshot) VALUES "
+                    "(:id,:org,:recommendation_version,:requirement_item,:member,'{}'::jsonb)"
+                ),
+                {**member_values, "id": uuid4()},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO recommendation_selections "
+                    "(id,organization_id,recommendation_version_id,requirement_id,"
+                    "membership_id,allocated_effort_hours,warning_codes) VALUES "
+                    "(:id,:org,:recommendation_version,:requirement_item,:member,1,'[]'::jsonb)"
+                ),
+                {**member_values, "id": uuid4()},
+            )
             await connection.execute(
                 text(
                     "INSERT INTO project_team_memberships "
@@ -81,7 +114,7 @@ async def seed_approved_project_team(
                     "recommendation_version_id,decision_action,active) VALUES "
                     "(:id,:org,:project,:member,:decision,:recommendation_version,'approve',true)"
                 ),
-                {**values, "id": uuid4(), "member": member_id},
+                {**member_values, "id": uuid4()},
             )
 
 
@@ -219,13 +252,6 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
             )
             assert project.status_code == 201
             project_id = project.json()["id"]
-            await seed_approved_project_team(
-                engine,
-                organization_id=organization_id,
-                project_id=project_id,
-                manager_member=manager_member,
-                member_ids=(employee_member, other_member),
-            )
             project_week = await client.post(
                 f"/api/v1/projects/{project_id}/weeks",
                 json={
@@ -238,6 +264,14 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
             )
             assert project_week.status_code == 201
             project_week_id = project_week.json()["id"]
+            await seed_approved_project_team(
+                engine,
+                organization_id=organization_id,
+                project_id=project_id,
+                project_week_id=project_week_id,
+                manager_member=manager_member,
+                member_ids=(employee_member, other_member),
+            )
 
             body = {
                 "project_id": project_id,
@@ -508,7 +542,10 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
     finally:
         append_only_tables = (
             "recommendation_decisions",
+            "recommendation_selections",
+            "candidate_scores",
             "recommendation_versions",
+            "team_requirement_items",
             "team_requirement_versions",
         )
         async with engine.begin() as connection:
@@ -524,10 +561,14 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
                     "tasks",
                     "project_team_memberships",
                     "recommendation_decisions",
+                    "recommendation_selections",
+                    "candidate_scores",
                     "recommendation_versions",
                     "recommendations",
+                    "team_requirement_items",
                     "team_requirement_versions",
                     "team_requirement_sets",
+                    "skills",
                     "projects",
                 ):
                     await connection.execute(
