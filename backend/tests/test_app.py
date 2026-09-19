@@ -63,6 +63,7 @@ async def test_openapi_document_is_available() -> None:
         "/api/v1/workload",
         "/api/v1/tasks",
         "/api/v1/tasks/{task_id}",
+        "/api/v1/tasks/{task_id}/assign",
         "/api/v1/tasks/{task_id}/status",
         "/api/v1/my-tasks",
         "/api/v1/goals",

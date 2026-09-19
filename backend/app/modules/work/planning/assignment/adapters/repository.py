@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -10,6 +12,7 @@ from decimal import Decimal
 from typing import cast
 from uuid import UUID, uuid4
 
+from pydantic import TypeAdapter
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -47,6 +50,17 @@ from app.modules.work.planning.assignment.adapters.database_models import (
     TeamRequirementSetModel,
     TeamRequirementTaskSourceModel,
     TeamRequirementVersionModel,
+)
+from app.modules.work.planning.assignment.adapters.recommendation_models import (
+    ProjectTeamMembershipModel,
+)
+from app.modules.work.planning.assignment.application.assignment_service import (
+    AssignmentError,
+    AssignmentPolicyFacts,
+    AssignmentWarning,
+    ExplicitAssignmentCommand,
+    ExplicitAssignmentResult,
+    validate_assignment_policy,
 )
 from app.modules.work.planning.assignment.application.ranking_preview import (
     CandidateRankingPreview,
@@ -97,6 +111,70 @@ TEAM_REQUIREMENT_RLS_TABLES = (
     "team_requirement_task_sources",
 )
 _TTL = timedelta(hours=24)
+_EXPLICIT_ASSIGNMENT = TypeAdapter(ExplicitAssignmentResult)
+
+
+def _assignment_task(model: TaskModel, display_name: str | None) -> Task:
+    return Task(
+        id=model.id,
+        organization_id=model.organization_id,
+        project_id=model.project_id,
+        project_week_id=model.project_week_id,
+        milestone_id=model.milestone_id,
+        title=model.title,
+        description=model.description,
+        assignee_membership_id=model.assignee_membership_id,
+        assignee_display_name=display_name,
+        required_skill_labels=tuple(model.required_skill_labels),
+        estimated_effort_hours=model.estimated_effort_hours,
+        status=TaskStatus(model.status),
+        due_date=model.due_date,
+        version=model.version,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+async def validate_project_team_assignee(
+    session: AsyncSession,
+    *,
+    actor: AuthenticatedActor,
+    project_id: UUID,
+    assignee_membership_id: UUID,
+) -> str:
+    """Resolve current authorization facts and enforce the shared hard policy."""
+
+    row = (
+        await session.execute(
+            select(MembershipModel, UserModel)
+            .join(UserModel, UserModel.id == MembershipModel.user_id)
+            .where(
+                MembershipModel.organization_id == actor.organization_id,
+                MembershipModel.id == assignee_membership_id,
+            )
+        )
+    ).one_or_none()
+    on_team = await session.scalar(
+        select(ProjectTeamMembershipModel.id).where(
+            ProjectTeamMembershipModel.organization_id == actor.organization_id,
+            ProjectTeamMembershipModel.project_id == project_id,
+            ProjectTeamMembershipModel.membership_id == assignee_membership_id,
+            ProjectTeamMembershipModel.active.is_(True),
+        )
+    )
+    validate_assignment_policy(
+        AssignmentPolicyFacts(
+            organization_id=actor.organization_id,
+            assignee_organization_id=row[0].organization_id if row is not None else None,
+            membership_active=row[0].is_active if row is not None else False,
+            user_active=row[1].is_active if row is not None else False,
+            active_project_team_membership=on_team is not None,
+            # No organization assignment-policy entity exists in Core MVP yet.
+            hard_policy_allowed=True,
+        )
+    )
+    assert row is not None
+    return row[1].display_name
 
 
 class SqlAlchemyTeamRequirementRepository:
@@ -1152,6 +1230,264 @@ class SqlAlchemyTeamRequirementRepository:
         )
 
 
+class SqlAlchemyExplicitAssignmentRepository:
+    """Commit one exact assignment with deterministic workload evidence."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def _activate(self, actor: AuthenticatedActor) -> None:
+        await self._session.execute(text("SET LOCAL ROLE app_runtime"))
+        await self._session.execute(
+            text("SELECT set_config('app.organization_id', :value, true)"),
+            {"value": str(actor.organization_id)},
+        )
+        await self._session.execute(
+            text("SELECT set_config('app.membership_id', :value, true)"),
+            {"value": str(actor.membership_id)},
+        )
+
+    @staticmethod
+    def _fingerprint(command: ExplicitAssignmentCommand) -> str:
+        canonical = json.dumps(
+            {
+                "task_id": str(command.task_id),
+                "assignee_membership_id": str(command.assignee_membership_id),
+                "expected_task_version": command.expected_task_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    async def _claim(
+        self, command: ExplicitAssignmentCommand
+    ) -> tuple[IdempotencyRecordModel, ExplicitAssignmentResult | None]:
+        operation = f"task.assign:{command.task_id}"
+        fingerprint = self._fingerprint(command)
+        now = datetime.now(UTC)
+        inserted = await self._session.scalar(
+            pg_insert(IdempotencyRecordModel)
+            .values(
+                id=uuid4(),
+                organization_id=command.actor.organization_id,
+                actor_membership_id=command.actor.membership_id,
+                operation=operation,
+                idempotency_key=command.idempotency_key,
+                request_fingerprint=fingerprint,
+                state=IdempotencyState.IN_PROGRESS,
+                response_status=None,
+                response_body=None,
+                expires_at=now + _TTL,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    "organization_id",
+                    "actor_membership_id",
+                    "operation",
+                    "idempotency_key",
+                ]
+            )
+            .returning(IdempotencyRecordModel.id)
+        )
+        record = await self._session.scalar(
+            select(IdempotencyRecordModel)
+            .where(
+                IdempotencyRecordModel.organization_id == command.actor.organization_id,
+                IdempotencyRecordModel.actor_membership_id == command.actor.membership_id,
+                IdempotencyRecordModel.operation == operation,
+                IdempotencyRecordModel.idempotency_key == command.idempotency_key,
+            )
+            .with_for_update()
+        )
+        if record is None:
+            raise RuntimeError("idempotency record missing")
+        if inserted is not None:
+            return record, None
+        if (
+            record.request_fingerprint != fingerprint
+            or record.state != IdempotencyState.COMPLETED
+            or record.response_body is None
+        ):
+            raise AssignmentError("IDEMPOTENCY_KEY_REUSED")
+        replay = _EXPLICIT_ASSIGNMENT.validate_python(record.response_body)
+        return record, replace(replay, replayed=True)
+
+    async def _workload(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        task: TaskModel,
+        assignee_membership_id: UUID,
+    ) -> tuple[int, int, int, tuple[AssignmentWarning, ...]]:
+        if task.project_week_id is None:
+            return 0, 0, 0, ()
+        week = await self._session.scalar(
+            select(ProjectWeekModel).where(
+                ProjectWeekModel.organization_id == actor.organization_id,
+                ProjectWeekModel.id == task.project_week_id,
+                ProjectWeekModel.project_id == task.project_id,
+            )
+        )
+        if week is None:
+            raise AssignmentError("TASK_WEEK_NOT_FOUND")
+        source = SqlAlchemyPeopleCapacityRepository(self._session)
+        inputs = await source.load_workload_inputs(
+            actor=actor,
+            week_start=week.start_date,
+            membership_id=assignee_membership_id,
+        )
+        workload = next(
+            (
+                calculate_weekly_workload(item)
+                for item in inputs
+                if item.project_week_id == task.project_week_id
+            ),
+            None,
+        )
+        effective = workload.effective_capacity_hours if workload is not None else 0
+        before = workload.allocated_effort_hours if workload is not None else 0
+        effort = (
+            task.estimated_effort_hours
+            if (
+                task.status in {TaskStatus.TO_DO, TaskStatus.IN_PROGRESS}
+                and task.estimated_effort_hours is not None
+                and task.assignee_membership_id != assignee_membership_id
+            )
+            else 0
+        )
+        after = before + effort
+        warnings = (AssignmentWarning("ASSIGNEE_OVER_CAPACITY"),) if after > effective else ()
+        return effective, before, after, warnings
+
+    async def assign(self, command: ExplicitAssignmentCommand) -> ExplicitAssignmentResult:
+        await self._activate(command.actor)
+        record, replay = await self._claim(command)
+        if replay is not None:
+            return replay
+        model = await self._session.scalar(
+            select(TaskModel)
+            .where(
+                TaskModel.organization_id == command.actor.organization_id,
+                TaskModel.id == command.task_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise AssignmentError("RESOURCE_NOT_FOUND")
+        if model.version != command.expected_task_version:
+            raise AssignmentError("RESOURCE_VERSION_MISMATCH", current_version=model.version)
+        display_name = await validate_project_team_assignee(
+            self._session,
+            actor=command.actor,
+            project_id=model.project_id,
+            assignee_membership_id=command.assignee_membership_id,
+        )
+        effective, before_hours, after_hours, warnings = await self._workload(
+            actor=command.actor,
+            task=model,
+            assignee_membership_id=command.assignee_membership_id,
+        )
+        before_assignee = model.assignee_membership_id
+        now = datetime.now(UTC)
+        model.assignee_membership_id = command.assignee_membership_id
+        model.version += 1
+        model.updated_by_membership_id = command.actor.membership_id
+        model.updated_at = now
+        await self._session.flush()
+        result = ExplicitAssignmentResult(
+            task=_assignment_task(model, display_name),
+            warnings=warnings,
+            effective_capacity_hours=effective,
+            workload_before_hours=before_hours,
+            workload_after_hours=after_hours,
+            replayed=False,
+        )
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=command.actor.organization_id,
+                actor_membership_id=command.actor.membership_id,
+                action="task.assigned.explicit",
+                outcome=AuditOutcome.SUCCEEDED,
+                resource_type="task",
+                resource_id=model.id,
+                request_id=command.request_id,
+                idempotency_key=command.idempotency_key,
+                before_data={
+                    "assignee_membership_id": str(before_assignee)
+                    if before_assignee is not None
+                    else None,
+                    "version": command.expected_task_version,
+                },
+                after_data={
+                    "assignee_membership_id": str(command.assignee_membership_id),
+                    "version": model.version,
+                    "warning_codes": [warning.code for warning in warnings],
+                },
+                reason_data={},
+            )
+        )
+        event_id = uuid4()
+        self._session.add(
+            OutboxEventModel(
+                id=event_id,
+                event_id=event_id,
+                organization_id=command.actor.organization_id,
+                event_type="task.assigned.v1",
+                aggregate_type="task",
+                aggregate_id=model.id,
+                payload={
+                    "envelope_version": "1.0",
+                    "organization_id": str(command.actor.organization_id),
+                    "task_id": str(model.id),
+                    "task_version": model.version,
+                    "assignee_membership_id": str(command.assignee_membership_id),
+                },
+                status="PENDING",
+                envelope_version="1.0",
+                attempt_count=0,
+                max_attempts=3,
+                available_at=now,
+                occurred_at=now,
+                created_at=now,
+            )
+        )
+        record.state = IdempotencyState.COMPLETED
+        record.response_status = 200
+        record.response_body = _EXPLICIT_ASSIGNMENT.dump_python(result, mode="json")
+        await self._session.flush()
+        return result
+
+    async def audit_rejection(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        idempotency_key: str | None,
+        resource_id: UUID | None,
+        reason_code: str,
+    ) -> None:
+        await self._activate(actor)
+        self._session.add(
+            AuditEventModel(
+                id=uuid4(),
+                organization_id=actor.organization_id,
+                actor_membership_id=actor.membership_id,
+                action=action,
+                outcome=AuditOutcome.REJECTED,
+                resource_type="task",
+                resource_id=resource_id,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                before_data={},
+                after_data={},
+                reason_data={"code": reason_code},
+            )
+        )
+
+
 class SqlAlchemyTeamRequirementTransactionFactory:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -1160,3 +1496,13 @@ class SqlAlchemyTeamRequirementTransactionFactory:
     async def __call__(self) -> AsyncGenerator[SqlAlchemyTeamRequirementRepository]:
         async with self._session_factory.begin() as session:
             yield SqlAlchemyTeamRequirementRepository(session)
+
+
+class SqlAlchemyExplicitAssignmentTransactionFactory:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncGenerator[SqlAlchemyExplicitAssignmentRepository]:
+        async with self._session_factory.begin() as session:
+            yield SqlAlchemyExplicitAssignmentRepository(session)

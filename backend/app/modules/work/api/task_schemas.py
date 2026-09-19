@@ -8,6 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.work.application.task_ports import TaskPage
 from app.modules.work.domain.tasks import Task, TaskStatus
+from app.modules.work.planning.assignment.application.assignment_service import (
+    ExplicitAssignmentResult,
+)
 
 
 class TaskCreateRequest(BaseModel):
@@ -45,6 +48,16 @@ class TaskUpdateRequest(BaseModel):
 class TaskStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     to_status: TaskStatus
+
+
+class ExplicitAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    assignee_membership_id: UUID
+    expected_task_version: int = Field(ge=1)
+
+
+class AssignmentWarningResponse(BaseModel):
+    code: str
 
 
 class AssigneeResponse(BaseModel):
@@ -108,4 +121,24 @@ class TaskPageResponse(BaseModel):
             page=result.page,
             page_size=result.page_size,
             total=result.total,
+        )
+
+
+class ExplicitAssignmentResponse(BaseModel):
+    task: TaskResponse
+    warnings: tuple[AssignmentWarningResponse, ...]
+    effective_capacity_hours: int
+    workload_before_hours: int
+    workload_after_hours: int
+
+    @classmethod
+    def from_domain(cls, result: ExplicitAssignmentResult) -> Self:
+        return cls(
+            task=TaskResponse.from_domain(result.task),
+            warnings=tuple(
+                AssignmentWarningResponse(code=warning.code) for warning in result.warnings
+            ),
+            effective_capacity_hours=result.effective_capacity_hours,
+            workload_before_hours=result.workload_before_hours,
+            workload_after_hours=result.workload_after_hours,
         )

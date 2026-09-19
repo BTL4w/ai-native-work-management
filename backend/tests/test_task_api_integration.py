@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 from collections import Counter
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pwdlib import PasswordHash
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
 from app.core.database import create_database_engine
@@ -19,6 +20,69 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(os.getenv("RUN_POSTGRES_INTEGRATION") != "1", reason="requires PostgreSQL"),
 ]
+
+
+async def seed_approved_project_team(
+    engine: AsyncEngine,
+    *,
+    organization_id: UUID,
+    project_id: UUID,
+    manager_member: UUID,
+    member_ids: tuple[UUID, ...],
+) -> None:
+    requirement_set_id, requirement_version_id, recommendation_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    recommendation_version_id, decision_id = uuid4(), uuid4()
+    values = {
+        "org": organization_id,
+        "project": project_id,
+        "manager": manager_member,
+        "requirement_set": requirement_set_id,
+        "requirement_version": requirement_version_id,
+        "recommendation": recommendation_id,
+        "recommendation_version": recommendation_version_id,
+        "decision": decision_id,
+    }
+    async with engine.begin() as connection:
+        await connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+        for statement in (
+            "INSERT INTO team_requirement_sets "
+            "(id,organization_id,project_id,current_version,status,version,"
+            "created_by_membership_id,updated_by_membership_id) VALUES "
+            "(:requirement_set,:org,:project,1,'CONFIRMED',1,:manager,:manager)",
+            "INSERT INTO team_requirement_versions "
+            "(id,organization_id,requirement_set_id,project_id,version,status,"
+            "incomplete_items,task_provenance,created_by_membership_id) VALUES "
+            "(:requirement_version,:org,:requirement_set,:project,1,'CONFIRMED',"
+            "'[]'::jsonb,'[]'::jsonb,:manager)",
+            "INSERT INTO recommendations "
+            "(id,organization_id,project_id,current_version,status) VALUES "
+            "(:recommendation,:org,:project,1,'APPROVED')",
+            "INSERT INTO recommendation_versions "
+            "(id,organization_id,recommendation_id,version,requirement_set_id,"
+            "requirement_version,policy_version,snapshot,input_snapshot,"
+            "created_by_membership_id) VALUES "
+            "(:recommendation_version,:org,:recommendation,1,:requirement_set,1,"
+            "'ranking-v1','{}'::jsonb,'{}'::jsonb,:manager)",
+            "INSERT INTO recommendation_decisions "
+            "(id,organization_id,recommendation_version_id,project_id,"
+            "actor_membership_id,action) VALUES "
+            "(:decision,:org,:recommendation_version,:project,:manager,'approve')",
+        ):
+            await connection.execute(text(statement), values)
+        for member_id in member_ids:
+            await connection.execute(
+                text(
+                    "INSERT INTO project_team_memberships "
+                    "(id,organization_id,project_id,membership_id,decision_id,"
+                    "recommendation_version_id,decision_action,active) VALUES "
+                    "(:id,:org,:project,:member,:decision,:recommendation_version,'approve',true)"
+                ),
+                {**values, "id": uuid4(), "member": member_id},
+            )
 
 
 @pytest.mark.asyncio
@@ -155,6 +219,13 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
             )
             assert project.status_code == 201
             project_id = project.json()["id"]
+            await seed_approved_project_team(
+                engine,
+                organization_id=organization_id,
+                project_id=project_id,
+                manager_member=manager_member,
+                member_ids=(employee_member, other_member),
+            )
             project_week = await client.post(
                 f"/api/v1/projects/{project_id}/weeks",
                 json={
@@ -256,6 +327,19 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
                 json={"title": "Forbidden update"},
                 headers={"Idempotency-Key": "employee-task-update", "If-Match": '"2"'},
             )
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE project_team_memberships SET active=false "
+                        "WHERE organization_id=:org AND project_id=:project "
+                        "AND membership_id=:member"
+                    ),
+                    {
+                        "org": organization_id,
+                        "project": project_id,
+                        "member": employee_member,
+                    },
+                )
             progressed = await client.post(
                 f"/api/v1/tasks/{task_id}/status",
                 json={"to_status": "IN_PROGRESS"},
@@ -351,6 +435,19 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
                     "/api/v1/auth/login", json={"email": emails["admin"], "password": password}
                 )
             ).status_code == 200
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE project_team_memberships SET active=false "
+                        "WHERE organization_id=:org AND project_id=:project "
+                        "AND membership_id=:member"
+                    ),
+                    {
+                        "org": organization_id,
+                        "project": project_id,
+                        "member": other_member,
+                    },
+                )
             admin_update = await client.patch(
                 f"/api/v1/tasks/{task_id}",
                 json={"title": "Admin managed task"},
@@ -358,6 +455,14 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
             )
             assert admin_update.status_code == 200
             assert admin_update.json()["version"] == 5
+            unassigned = await client.patch(
+                f"/api/v1/tasks/{task_id}",
+                json={"assignee_membership_id": None},
+                headers={"Idempotency-Key": "task-unassign-key1", "If-Match": '"5"'},
+            )
+            assert unassigned.status_code == 200
+            assert unassigned.json()["assignee"] is None
+            assert unassigned.json()["version"] == 6
 
         await app.state.database_engine.dispose()
         async with engine.connect() as connection:
@@ -388,6 +493,8 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
                     ("task.assigned", "SUCCEEDED", "task-reassign-key1"): 1,
                     ("task.status_changed", "REJECTED", "task-status-other1"): 1,
                     ("task.updated", "SUCCEEDED", "admin-task-update"): 1,
+                    ("task.updated", "SUCCEEDED", "task-unassign-key1"): 1,
+                    ("task.unassigned", "SUCCEEDED", "task-unassign-key1"): 1,
                 }
             )
             transition_count = await connection.scalar(
@@ -399,18 +506,43 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
             )
             assert transition_count == 1
     finally:
+        append_only_tables = (
+            "recommendation_decisions",
+            "recommendation_versions",
+            "team_requirement_versions",
+        )
         async with engine.begin() as connection:
-            for table in (
-                "task_status_transitions",
-                "idempotency_records",
-                "audit_events",
-                "auth_sessions",
-                "tasks",
-                "projects",
-            ):
+            for table in append_only_tables:
+                await connection.execute(text(f"ALTER TABLE {table} DISABLE TRIGGER USER"))
+        try:
+            async with engine.begin() as connection:
+                for table in (
+                    "task_status_transitions",
+                    "idempotency_records",
+                    "audit_events",
+                    "auth_sessions",
+                    "tasks",
+                    "project_team_memberships",
+                    "recommendation_decisions",
+                    "recommendation_versions",
+                    "recommendations",
+                    "team_requirement_versions",
+                    "team_requirement_sets",
+                    "projects",
+                ):
+                    await connection.execute(
+                        text(
+                            f"DELETE FROM {table} WHERE organization_id "
+                            "IN (:organization_id, :foreign_organization_id)"
+                        ),
+                        {
+                            "organization_id": organization_id,
+                            "foreign_organization_id": foreign_organization_id,
+                        },
+                    )
                 await connection.execute(
                     text(
-                        f"DELETE FROM {table} WHERE organization_id "
+                        "DELETE FROM memberships WHERE organization_id "
                         "IN (:organization_id, :foreign_organization_id)"
                     ),
                     {
@@ -418,28 +550,22 @@ async def test_task_flow_assignment_status_visibility_and_audit() -> None:
                         "foreign_organization_id": foreign_organization_id,
                     },
                 )
-            await connection.execute(
-                text(
-                    "DELETE FROM memberships WHERE organization_id "
-                    "IN (:organization_id, :foreign_organization_id)"
-                ),
-                {
-                    "organization_id": organization_id,
-                    "foreign_organization_id": foreign_organization_id,
-                },
-            )
-            await connection.execute(
-                text("DELETE FROM users WHERE id IN (:a, :b, :c, :d, :e)"),
-                {
-                    "a": manager_user,
-                    "b": employee_user,
-                    "c": other_user,
-                    "d": admin_user,
-                    "e": foreign_user,
-                },
-            )
-            await connection.execute(
-                text("DELETE FROM organizations WHERE id IN (:organization_id, :foreign_id)"),
-                {"organization_id": organization_id, "foreign_id": foreign_organization_id},
-            )
+                await connection.execute(
+                    text("DELETE FROM users WHERE id IN (:a, :b, :c, :d, :e)"),
+                    {
+                        "a": manager_user,
+                        "b": employee_user,
+                        "c": other_user,
+                        "d": admin_user,
+                        "e": foreign_user,
+                    },
+                )
+                await connection.execute(
+                    text("DELETE FROM organizations WHERE id IN (:organization_id, :foreign_id)"),
+                    {"organization_id": organization_id, "foreign_id": foreign_organization_id},
+                )
+        finally:
+            async with engine.begin() as connection:
+                for table in append_only_tables:
+                    await connection.execute(text(f"ALTER TABLE {table} ENABLE TRIGGER USER"))
         await engine.dispose()

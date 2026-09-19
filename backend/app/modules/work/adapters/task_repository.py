@@ -39,6 +39,10 @@ from app.modules.work.domain.tasks import (
     TaskVersionMismatchError,
 )
 from app.modules.work.planning.adapters.database_models import MilestoneModel, ProjectWeekModel
+from app.modules.work.planning.assignment.adapters.repository import (
+    validate_project_team_assignee,
+)
+from app.modules.work.planning.assignment.application.assignment_service import AssignmentError
 from app.modules.work.planning.domain.project_weeks import ProjectWeekStatus
 
 _TTL = timedelta(hours=24)
@@ -255,7 +259,9 @@ class SqlAlchemyTaskRepository:
         return tuple(_task_from_row(model, name) for model, name in rows)
 
     async def _assignee_name(
-        self, actor: AuthenticatedActor, membership_id: UUID | None
+        self,
+        actor: AuthenticatedActor,
+        membership_id: UUID | None,
     ) -> str | None:
         if membership_id is None:
             return None
@@ -274,6 +280,24 @@ class SqlAlchemyTaskRepository:
         if row is None:
             raise TaskReferenceError("assignee_membership_id")
         return row.display_name
+
+    async def _validated_assignee_name(
+        self,
+        actor: AuthenticatedActor,
+        project_id: UUID,
+        membership_id: UUID | None,
+    ) -> str | None:
+        if membership_id is None:
+            return None
+        try:
+            return await validate_project_team_assignee(
+                self._session,
+                actor=actor,
+                project_id=project_id,
+                assignee_membership_id=membership_id,
+            )
+        except AssignmentError as error:
+            raise TaskReferenceError("assignee_membership_id") from error
 
     async def _require_project(self, actor: AuthenticatedActor, project_id: UUID) -> None:
         found = await self._session.scalar(
@@ -434,7 +458,9 @@ class SqlAlchemyTaskRepository:
             project_week_id=draft.project_week_id,
             due_date=draft.due_date,
         )
-        display_name = await self._assignee_name(actor, draft.assignee_membership_id)
+        display_name = await self._validated_assignee_name(
+            actor, draft.project_id, draft.assignee_membership_id
+        )
         now = datetime.now(UTC)
         record = self._record(
             actor=actor,
@@ -518,11 +544,12 @@ class SqlAlchemyTaskRepository:
             raise TaskNotFoundError
         if model.version != expected_version:
             raise TaskVersionMismatchError(model.version)
-        display_name = await self._assignee_name(
-            actor,
-            patch.assignee_membership_id
-            if patch.assignee_supplied and patch.assignee_membership_id
-            else model.assignee_membership_id,
+        display_name = (
+            await self._validated_assignee_name(
+                actor, model.project_id, patch.assignee_membership_id
+            )
+            if patch.assignee_supplied
+            else await self._assignee_name(actor, model.assignee_membership_id)
         )
         await self._validate_milestone(
             actor,
@@ -591,7 +618,11 @@ class SqlAlchemyTaskRepository:
         if reassigned:
             self._audit(
                 actor=actor,
-                action="task.assigned",
+                action=(
+                    "task.unassigned"
+                    if after["assignee_membership_id"] is None
+                    else "task.assigned"
+                ),
                 task_id=task.id,
                 request_id=request_id,
                 key=idempotency_key,

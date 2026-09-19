@@ -98,6 +98,8 @@ def test_task_patch_preserves_omitted_and_explicit_null_fields() -> None:
     patch = TaskPatch.create(
         description=None,
         description_supplied=True,
+        assignee_membership_id=None,
+        assignee_supplied=True,
         due_date=None,
         due_date_supplied=True,
         milestone_id=None,
@@ -106,6 +108,7 @@ def test_task_patch_preserves_omitted_and_explicit_null_fields() -> None:
     updated = _task().apply(patch, updated_at=datetime(2026, 8, 2, tzinfo=UTC))
 
     assert updated.description is None
+    assert updated.assignee_membership_id is None
     assert updated.due_date is None
     assert updated.milestone_id is None
     assert updated.version == 2

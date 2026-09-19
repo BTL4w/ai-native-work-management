@@ -141,5 +141,15 @@
       "ProjectTeamMembershipResponse": { "required": ["id", "project_id", "membership_id", "decision_id", "active", "created_at"], "properties": { "id": "string:uuid", "project_id": "string:uuid", "membership_id": "string:uuid", "decision_id": "string:uuid", "active": "boolean", "created_at": "string:date-time" } },
       "ProjectTeamResponse": { "required": ["memberships"], "properties": { "memberships": "array:ref:ProjectTeamMembershipResponse" } }
     }
+  },
+  "explicit_assignment": {
+    "paths": {
+      "/api/v1/tasks/{task_id}/assign": ["post"]
+    },
+    "schemas": {
+      "ExplicitAssignmentRequest": { "required": ["assignee_membership_id", "expected_task_version"], "properties": { "assignee_membership_id": "string:uuid", "expected_task_version": "integer" } },
+      "AssignmentWarningResponse": { "required": ["code"], "properties": { "code": "string" } },
+      "ExplicitAssignmentResponse": { "required": ["task", "warnings", "effective_capacity_hours", "workload_before_hours", "workload_after_hours"], "properties": { "task": "ref:TaskResponse", "warnings": "array:ref:AssignmentWarningResponse", "effective_capacity_hours": "integer", "workload_before_hours": "integer", "workload_after_hours": "integer" } }
+    }
   }
 }

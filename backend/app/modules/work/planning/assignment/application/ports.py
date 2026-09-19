@@ -5,7 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol
+from uuid import UUID
 
+from app.modules.identity.domain.auth import AuthenticatedActor
+from app.modules.work.planning.assignment.application.assignment_service import (
+    ExplicitAssignmentCommand,
+    ExplicitAssignmentResult,
+)
 from app.modules.work.planning.assignment.application.requirement_service import (
     ConfirmRequirementsCommand,
     DeriveRequirementsCommand,
@@ -28,11 +34,30 @@ class TeamRequirementRepository(Protocol):
         action: str,
         request_id: str,
         idempotency_key: str | None,
-        resource_id: object | None,
+        resource_id: UUID | None,
         reason_code: str,
     ) -> None: ...
 
 
 TeamRequirementTransactionFactory = Callable[
     [], AbstractAsyncContextManager[TeamRequirementRepository]
+]
+
+
+class ExplicitAssignmentRepository(Protocol):
+    async def assign(self, command: ExplicitAssignmentCommand) -> ExplicitAssignmentResult: ...
+    async def audit_rejection(
+        self,
+        *,
+        actor: AuthenticatedActor,
+        action: str,
+        request_id: str,
+        idempotency_key: str | None,
+        resource_id: UUID | None,
+        reason_code: str,
+    ) -> None: ...
+
+
+ExplicitAssignmentTransactionFactory = Callable[
+    [], AbstractAsyncContextManager[ExplicitAssignmentRepository]
 ]

@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Coroutine
 from datetime import date
-from typing import Annotated, Any, NoReturn
+from functools import partial
+from inspect import isawaitable
+from typing import Annotated, Any, NoReturn, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi import status as http_status
+from fastapi.routing import APIRoute
 
 from app.api.errors import ApplicationError, ErrorResponse
-from app.modules.identity.api.dependencies import ActorDependency
-from app.modules.work.api.task_dependencies import TaskServiceDependency
+from app.core.config import Settings
+from app.modules.identity.api.dependencies import ActorDependency, get_authenticated_actor
+from app.modules.identity.application.auth_service import AuthService
+from app.modules.organization.domain.roles import MembershipRole
+from app.modules.work.api.task_dependencies import (
+    ExplicitAssignmentServiceDependency,
+    TaskServiceDependency,
+    get_explicit_assignment_service,
+)
 from app.modules.work.api.task_schemas import (
+    ExplicitAssignmentRequest,
+    ExplicitAssignmentResponse,
     TaskCreateRequest,
     TaskPageResponse,
     TaskResponse,
@@ -32,8 +45,52 @@ from app.modules.work.domain.tasks import (
     TaskStatus,
     TaskVersionMismatchError,
 )
+from app.modules.work.planning.assignment.application.assignment_service import (
+    AssignmentError,
+    ExplicitAssignmentCommand,
+)
 
-router = APIRouter(tags=["tasks"])
+
+class TaskRoute(APIRoute):
+    """Audit assignment failures that occur before request-body decoding."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+        route_name = self.name
+
+        async def preflight(request: Request) -> Response:
+            if request.method == "POST" and route_name == "assign_task":
+                override = request.app.dependency_overrides.get(get_authenticated_actor)
+                if override is not None:
+                    candidate = override()
+                    actor = await candidate if isawaitable(candidate) else candidate
+                else:
+                    actor = await get_authenticated_actor(
+                        request,
+                        cast(AuthService, request.app.state.auth_service),
+                        cast(Settings, request.app.state.settings),
+                    )
+                service = get_explicit_assignment_service(request)
+                key = request.headers.get("Idempotency-Key")
+                request.state.mutation_rejection_audit = partial(
+                    service.audit_transport_rejection,
+                    actor=actor,
+                    action="task.assignment.transport.rejected",
+                    request_id=str(request.state.request_id),
+                    idempotency_key=key if key and len(key) <= 128 else None,
+                )
+                if actor.role not in {MembershipRole.ADMIN, MembershipRole.MANAGER}:
+                    raise ApplicationError(
+                        status_code=403,
+                        code="FORBIDDEN",
+                        message_key="common.error.forbidden",
+                    )
+            return await handler(request)
+
+        return preflight
+
+
+router = APIRouter(tags=["tasks"], route_class=TaskRoute)
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)]
 IfMatch = Annotated[str | None, Header(alias="If-Match")]
 _ETAG = re.compile(r'^"([1-9][0-9]*)"$')
@@ -58,7 +115,38 @@ def _version(value: str | None) -> int:
 
 
 def _raise(error: TaskError) -> NoReturn:
-    if isinstance(error, TaskForbiddenError):
+    if isinstance(error, AssignmentError):
+        if error.code == "FORBIDDEN":
+            mapped = ApplicationError(
+                status_code=403, code="FORBIDDEN", message_key="common.error.forbidden"
+            )
+        elif error.code == "RESOURCE_NOT_FOUND":
+            mapped = ApplicationError(
+                status_code=404,
+                code="RESOURCE_NOT_FOUND",
+                message_key="common.error.notFound",
+            )
+        elif error.code == "RESOURCE_VERSION_MISMATCH":
+            mapped = ApplicationError(
+                status_code=412,
+                code="RESOURCE_VERSION_MISMATCH",
+                message_key="common.error.resourceVersionMismatch",
+                details={"current_version": error.current_version},
+            )
+        elif error.code == "IDEMPOTENCY_KEY_REUSED":
+            mapped = ApplicationError(
+                status_code=409,
+                code="IDEMPOTENCY_KEY_REUSED",
+                message_key="common.error.idempotencyKeyReused",
+            )
+        else:
+            mapped = ApplicationError(
+                status_code=422,
+                code="VALIDATION_FAILED",
+                message_key="common.error.validation",
+                details={"reason": error.code},
+            )
+    elif isinstance(error, TaskForbiddenError):
         mapped = ApplicationError(
             status_code=403, code="FORBIDDEN", message_key="common.error.forbidden"
         )
@@ -98,6 +186,39 @@ def _headers(response: Response, version: int, replayed: bool) -> None:
     response.headers["ETag"] = f'"{version}"'
     if replayed:
         response.headers["Idempotency-Replayed"] = "true"
+
+
+@router.post(
+    "/tasks/{task_id}/assign",
+    response_model=ExplicitAssignmentResponse,
+    responses=_ERRORS,
+)
+async def assign_task(
+    task_id: UUID,
+    payload: ExplicitAssignmentRequest,
+    request: Request,
+    response: Response,
+    actor: ActorDependency,
+    service: ExplicitAssignmentServiceDependency,
+    idempotency_key: IdempotencyKey,
+) -> ExplicitAssignmentResponse:
+    # From this point the application service owns rejection auditing.
+    request.state.mutation_rejection_audit = None
+    try:
+        result = await service.assign(
+            ExplicitAssignmentCommand(
+                actor=actor,
+                task_id=task_id,
+                assignee_membership_id=payload.assignee_membership_id,
+                expected_task_version=payload.expected_task_version,
+                request_id=str(request.state.request_id),
+                idempotency_key=idempotency_key,
+            )
+        )
+    except TaskError as error:
+        _raise(error)
+    _headers(response, result.task.version, result.replayed)
+    return ExplicitAssignmentResponse.from_domain(result)
 
 
 @router.get("/tasks", response_model=TaskPageResponse, responses=_ERRORS)

@@ -187,3 +187,27 @@ def test_team_recommendations_openapi_matches_frontend_manifest() -> None:
             "properties": {name: _describe(value, schemas) for name, value in properties.items()},
         }
         assert actual == expected, schema_name
+
+
+def test_explicit_assignment_openapi_matches_frontend_manifest() -> None:
+    schema = app.openapi()
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "features"
+        / "work"
+        / "openapi-contract.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["explicit_assignment"]
+    schemas = cast(dict[str, object], schema["components"]["schemas"])
+    for path, expected_methods in manifest["paths"].items():
+        assert set(schema["paths"][path]) == set(expected_methods)
+    for schema_name, expected in manifest["schemas"].items():
+        contract = cast(dict[str, object], schemas[schema_name])
+        properties = cast(dict[str, dict[str, object]], contract["properties"])
+        actual = {
+            "required": cast(list[str], contract.get("required", [])),
+            "properties": {name: _describe(value, schemas) for name, value in properties.items()},
+        }
+        assert actual == expected, schema_name

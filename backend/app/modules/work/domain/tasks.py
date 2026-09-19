@@ -180,8 +180,6 @@ class TaskPatch:
         effective_title_supplied = title_supplied or title is not None
         if effective_title_supplied and title is None:
             raise InvalidTaskFieldError("title")
-        if assignee_supplied and assignee_membership_id is None:
-            raise InvalidTaskFieldError("assignee_membership_id")
         if project_week_supplied and project_week_id is None:
             raise InvalidTaskFieldError("project_week_id")
         if estimated_effort_hours_supplied and estimated_effort_hours is None:
@@ -256,7 +254,7 @@ class Task:
             description=patch.description if patch.description_supplied else self.description,
             assignee_membership_id=(
                 patch.assignee_membership_id
-                if patch.assignee_supplied and patch.assignee_membership_id is not None
+                if patch.assignee_supplied
                 else self.assignee_membership_id
             ),
             due_date=patch.due_date if patch.due_date_supplied else self.due_date,
