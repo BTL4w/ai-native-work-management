@@ -1,0 +1,17 @@
+schema_version: "1.0"
+name: assignment.read_workload
+version: "1.0.0"
+owner: assignment-agent
+tenant_scope: actor_membership
+roles: [ADMIN, MANAGER]
+risk_level: READ_ONLY
+input_contract: work_management_ai.tools.assignment.read_workload.contracts.ReadWorkloadInput
+output_contract: work_management_ai.tools.assignment.read_workload.contracts.ReadWorkloadOutput
+timeout_seconds: 10
+max_attempts: 2
+retry_policy: IDEMPOTENT
+idempotency: NOT_APPLICABLE
+audit: SAFE_METADATA
+evidence_output: true
+freshness_output: true
+trace_metadata: [tool_id, duration_ms, result_status, evidence_count]

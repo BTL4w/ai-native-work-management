@@ -1,0 +1,43 @@
+schema_version: "1.0"
+agent:
+  id: assignment
+  name: Assignment Agent
+  version: "1.0.0"
+  owner: assignment-agent
+  activation_phase: 3
+capabilities:
+  - assignment.recommend_team
+  - assignment.revise_team
+  - assignment.analyze_workload
+  - assignment.assign_task_explicitly
+contracts:
+  input: work_management_ai.runtime.contracts.AgentHandoff
+  output: work_management_ai.runtime.contracts.AgentResult
+  handoff: work_management_ai.runtime.contracts.AgentHandoff
+permissions:
+  roles: [ADMIN, MANAGER]
+  tenant_scope: actor_membership
+  risk_ceiling: EXPLICIT_WRITE
+runtime:
+  workflow: assignment-agent.v1
+  max_iterations: 4
+  max_tool_calls: 2
+  max_handoffs: 0
+  max_replans: 0
+  timeout_seconds: 90
+  checkpoint: durable
+  model_policy: grounded_explanation_only
+allowed_skills: [recommend_project_team@1, analyze_workload@1]
+allowed_tools: [assignment.manage_team@1, assignment.read_workload@1, assignment.assign_task@1]
+approval:
+  produced_writes: POLICY
+  can_self_approve: false
+fallback:
+  strategy: DETERMINISTIC_MANUAL_FALLBACK
+evaluators: [assignment_explanation@1, assignment_policy@1]
+stop_conditions:
+  - invalid_handoff
+  - role_forbidden
+  - budget_exhausted
+  - tool_failure
+  - peer_handoff_requested

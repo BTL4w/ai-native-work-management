@@ -25,7 +25,11 @@ class AgentRegistryError(ValueError):
     pass
 
 
-_RISK_ORDER = {RiskLevel.READ_ONLY: 0, RiskLevel.PROPOSAL_ONLY: 1}
+_RISK_ORDER = {
+    RiskLevel.READ_ONLY: 0,
+    RiskLevel.PROPOSAL_ONLY: 1,
+    RiskLevel.EXPLICIT_WRITE: 2,
+}
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from work_management_ai.runtime.contracts import RiskLevel
 from work_management_ai.runtime.manifests import (
     ToolManifest,
     canonical_manifest_fingerprint,
@@ -26,6 +27,13 @@ class ToolRegistry:
     def __init__(self, manifests: Iterable[ToolManifest] = ()) -> None:
         entries: dict[str, RegisteredTool] = {}
         for manifest in manifests:
+            if manifest.risk_level is RiskLevel.EXPLICIT_WRITE and (
+                manifest.idempotency != "REQUIRED"
+                or manifest.audit != "REQUIRED"
+                or "EMPLOYEE" in manifest.roles
+                or not manifest.roles
+            ):
+                raise ToolRegistryError("TOOL_EXPLICIT_WRITE_POLICY_INVALID")
             for contract_path in (manifest.input_contract, manifest.output_contract):
                 try:
                     resolve_contract(contract_path)

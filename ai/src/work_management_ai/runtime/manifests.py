@@ -107,6 +107,7 @@ class AgentManifest(_ManifestModel):
     approval: AgentApprovalManifest
     fallback: AgentFallbackManifest
     evaluators: tuple[str, ...] = Field(min_length=1)
+    stop_conditions: tuple[str, ...] = ()
 
     @field_validator("allowed_skills", "allowed_tools", "evaluators")
     @classmethod
@@ -121,6 +122,7 @@ class AgentManifest(_ManifestModel):
             self.allowed_tools,
             self.evaluators,
             self.permissions.roles,
+            self.stop_conditions,
         )
         if any(len(values) != len(set(values)) for values in declarations):
             raise ValueError("manifest declarations must be unique")
@@ -139,6 +141,7 @@ class SkillManifest(_ManifestModel):
     input_contract: str
     output_contract: str
     evaluators: tuple[str, ...] = Field(min_length=1)
+    evaluation_cases: tuple[str, ...] = ()
     triggers: tuple[str, ...] = ()
     required_context: tuple[str, ...] = ()
     approval: Literal["NONE", "ALWAYS", "POLICY"] = "NONE"
@@ -149,7 +152,7 @@ class SkillManifest(_ManifestModel):
     def validate_version(cls, value: str) -> str:
         return _semantic_version(value)
 
-    @field_validator("allowed_tools", "evaluators")
+    @field_validator("allowed_tools", "evaluators", "evaluation_cases")
     @classmethod
     def validate_versioned_references(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(_versioned_reference(value) for value in values)
@@ -158,6 +161,21 @@ class SkillManifest(_ManifestModel):
     @classmethod
     def validate_contract_paths(cls, value: str) -> str:
         return _contract_path(value)
+
+    @model_validator(mode="after")
+    def validate_unique_declarations(self) -> "SkillManifest":
+        declarations = (
+            self.runnable_by_agents,
+            self.allowed_tools,
+            self.evaluators,
+            self.evaluation_cases,
+            self.triggers,
+            self.required_context,
+            self.stop_conditions,
+        )
+        if any(len(values) != len(set(values)) for values in declarations):
+            raise ValueError("skill manifest declarations must be unique")
+        return self
 
 
 class ToolManifest(_ManifestModel):

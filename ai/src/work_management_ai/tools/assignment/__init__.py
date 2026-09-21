@@ -1,0 +1,1 @@
+"""Typed Assignment Agent tools."""

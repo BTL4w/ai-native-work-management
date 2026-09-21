@@ -1,0 +1,21 @@
+schema_version: "1.0"
+name: analyze_workload
+version: "1.0.0"
+owner: assignment-agent
+description: Explain a verified deterministic Project workload projection without changing it.
+runnable_by_agents: [assignment]
+allowed_tools: [assignment.read_workload@1]
+risk_level: READ_ONLY
+input_contract: work_management_ai.skills.analyze_workload.contracts.AnalyzeWorkloadInput
+output_contract: work_management_ai.skills.analyze_workload.contracts.AnalyzeWorkloadOutput
+evaluators: [assignment_explanation@1]
+evaluation_cases:
+  - assignment_workload_en@1
+  - assignment_workload_vi@1
+  - assignment_workload_fallback@1
+triggers:
+  - "vi:phân tích workload, ai đang quá tải"
+  - "en:analyze workload, who is overloaded"
+required_context: [authenticated_actor, tenant_scope, exact_project, verified_workload]
+approval: NONE
+stop_conditions: [ambiguous_resource, verifier_failure, tool_failure]

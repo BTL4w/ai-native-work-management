@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from work_management_ai.runtime.contracts import RiskLevel
 from work_management_ai.runtime.manifests import (
     SkillManifest,
     canonical_manifest_fingerprint,
@@ -26,6 +27,10 @@ class SkillRegistry:
     def __init__(self, manifests: Iterable[SkillManifest] = ()) -> None:
         entries: dict[str, RegisteredSkill] = {}
         for manifest in manifests:
+            if (manifest.risk_level is RiskLevel.READ_ONLY and manifest.approval != "NONE") or (
+                manifest.risk_level is RiskLevel.PROPOSAL_ONLY and manifest.approval != "ALWAYS"
+            ):
+                raise SkillRegistryError("SKILL_APPROVAL_INCOMPATIBLE")
             for contract_path in (manifest.input_contract, manifest.output_contract):
                 try:
                     resolve_contract(contract_path)

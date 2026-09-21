@@ -1,0 +1,17 @@
+schema_version: "1.0"
+name: assignment.manage_team
+version: "1.0.0"
+owner: assignment-agent
+tenant_scope: actor_membership
+roles: [ADMIN, MANAGER]
+risk_level: PROPOSAL_ONLY
+input_contract: work_management_ai.tools.assignment.manage_team.contracts.ManageTeamInput
+output_contract: work_management_ai.tools.assignment.manage_team.contracts.ManageTeamOutput
+timeout_seconds: 30
+max_attempts: 2
+retry_policy: IDEMPOTENT
+idempotency: REQUIRED
+audit: REQUIRED
+evidence_output: true
+freshness_output: true
+trace_metadata: [tool_id, duration_ms, result_status, evidence_count]

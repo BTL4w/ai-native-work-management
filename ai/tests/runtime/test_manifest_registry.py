@@ -103,6 +103,7 @@ def _skill_registry() -> SkillRegistry:
                     "input_contract": "work_management_ai.runtime.contracts.AgentHandoff",
                     "output_contract": "work_management_ai.runtime.contracts.AgentResult",
                     "evaluators": ["planning_schema@1"],
+                    "approval": "ALWAYS",
                 }
             )
         ]
@@ -283,7 +284,9 @@ def test_registry_rejects_permission_incompatible_skill_and_tool(
             package, resource
         )
 
-    read_only_skill = skill.model_copy(update={"risk_level": RiskLevel.READ_ONLY})
+    read_only_skill = skill.model_copy(
+        update={"risk_level": RiskLevel.READ_ONLY, "approval": "NONE"}
+    )
     proposal_tool = (
         _tool_registry()
         .resolve("planning.validate_draft@1")
@@ -402,7 +405,7 @@ def test_registry_rejects_read_only_agent_that_declares_writes(
     skill = (
         _skill_registry()
         .resolve("create_project_plan@1")
-        .manifest.model_copy(update={"risk_level": RiskLevel.READ_ONLY})
+        .manifest.model_copy(update={"risk_level": RiskLevel.READ_ONLY, "approval": "NONE"})
     )
     tool = (
         _tool_registry()
@@ -415,6 +418,100 @@ def test_registry_rejects_read_only_agent_that_declares_writes(
             skill_registry=SkillRegistry([skill]),
             tool_registry=ToolRegistry([tool]),
         ).register_resource(package, resource)
+
+
+def test_assignment_agent_registers_only_at_phase3_with_exact_allowlists() -> None:
+    skill_packages = (
+        "work_management_ai.skills.recommend_project_team",
+        "work_management_ai.skills.analyze_workload",
+    )
+    tool_packages = (
+        "work_management_ai.tools.assignment.manage_team",
+        "work_management_ai.tools.assignment.read_workload",
+        "work_management_ai.tools.assignment.assign_task",
+    )
+    skills = SkillRegistry(
+        [load_yaml_resource(package, "skill.yaml", SkillManifest) for package in skill_packages]
+    )
+    tools = ToolRegistry(
+        [load_yaml_resource(package, "tool.yaml", ToolManifest) for package in tool_packages]
+    )
+    registry = AgentRegistry(
+        skill_registry=skills,
+        tool_registry=tools,
+        evaluator_ids=frozenset({"assignment_explanation@1", "assignment_policy@1"}),
+    )
+
+    registered = registry.register_resource("work_management_ai.agents.assignment", "agent.yaml")
+
+    assert registered.manifest.agent.id is AgentId.ASSIGNMENT
+    with pytest.raises(AgentRegistryError, match="AGENT_PHASE_INACTIVE"):
+        registry.resolve(AgentId.ASSIGNMENT, "1.0.0", active_phase=2)
+    assert registry.resolve(AgentId.ASSIGNMENT, "1.0.0", active_phase=3) == registered
+
+
+def test_registry_orders_explicit_write_above_proposal_only(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    proposal_skill = _skill_registry().resolve("create_project_plan@1").manifest
+    explicit_tool = (
+        _tool_registry()
+        .resolve("planning.validate_draft@1")
+        .manifest.model_copy(
+            update={
+                "risk_level": RiskLevel.EXPLICIT_WRITE,
+                "roles": ("ADMIN", "MANAGER"),
+                "idempotency": "REQUIRED",
+                "audit": "REQUIRED",
+            }
+        )
+    )
+    package, resource = _write_resource_package(tmp_path, monkeypatch, _agent_manifest_yaml())
+
+    assert proposal_skill.risk_level is RiskLevel.PROPOSAL_ONLY
+    assert explicit_tool.risk_level is RiskLevel.EXPLICIT_WRITE
+    with pytest.raises(AgentRegistryError, match="AGENT_TOOL_RISK_INCOMPATIBLE"):
+        _registry(tool_registry=ToolRegistry([explicit_tool])).register_resource(package, resource)
+
+
+def test_skill_registry_requires_approval_for_proposal_skills() -> None:
+    proposal_skill = (
+        _skill_registry()
+        .resolve("create_project_plan@1")
+        .manifest.model_copy(update={"approval": "NONE"})
+    )
+
+    with pytest.raises(SkillRegistryError, match="SKILL_APPROVAL_INCOMPATIBLE"):
+        SkillRegistry([proposal_skill])
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"idempotency": "OPTIONAL"},
+        {"audit": "SAFE_METADATA"},
+        {"roles": ("ADMIN", "MANAGER", "EMPLOYEE")},
+    ],
+)
+def test_tool_registry_rejects_under_governed_explicit_writes(
+    updates: dict[str, object],
+) -> None:
+    explicit_tool = (
+        _tool_registry()
+        .resolve("planning.validate_draft@1")
+        .manifest.model_copy(
+            update={
+                "risk_level": RiskLevel.EXPLICIT_WRITE,
+                "roles": ("ADMIN", "MANAGER"),
+                "idempotency": "REQUIRED",
+                "audit": "REQUIRED",
+                **updates,
+            }
+        )
+    )
+
+    with pytest.raises(ToolRegistryError, match="TOOL_EXPLICIT_WRITE_POLICY_INVALID"):
+        ToolRegistry([explicit_tool])
 
 
 def _registry_manifest_dict() -> dict[str, object]:

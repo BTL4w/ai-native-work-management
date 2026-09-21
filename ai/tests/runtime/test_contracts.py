@@ -16,6 +16,7 @@ from work_management_ai.runtime.contracts import (
     ContextReference,
     JsonValue,
     ResponseBlock,
+    RiskLevel,
 )
 from work_management_ai.runtime.memory_manager import MemoryManager, RuntimeMemoryError
 
@@ -145,3 +146,35 @@ def test_memory_manager_returns_an_immutable_typed_snapshot() -> None:
         "attempt": 1,
         "items": ["task-1"],
     }
+
+
+def test_assignment_runtime_vocabulary_has_exact_write_without_approval_authority() -> None:
+    assert AgentId.ASSIGNMENT.value == "assignment"
+    assert RiskLevel.EXPLICIT_WRITE.value == "EXPLICIT_WRITE"
+    with pytest.raises(ValidationError):
+        AgentHandoff.model_validate(
+            {
+                "orchestration_run_id": uuid4(),
+                "parent_agent_run_id": uuid4(),
+                "target_agent_id": "assignment",
+                "target_agent_version": "1.0.0",
+                "capability": "assignment.assign_task_explicitly",
+                "objective": "Assign an exact task",
+                "typed_input": {
+                    "task_id": str(uuid4()),
+                    "membership_id": str(uuid4()),
+                },
+                "context_references": (),
+                "actor": _actor(),
+                "budget": AgentBudget(
+                    max_iterations=2,
+                    max_tool_calls=1,
+                    max_handoffs=0,
+                    max_replans=0,
+                    timeout_seconds=60,
+                ),
+                "step_id": "assignment",
+                "idempotency_key": "assignment:1",
+                "approved": True,
+            }
+        )

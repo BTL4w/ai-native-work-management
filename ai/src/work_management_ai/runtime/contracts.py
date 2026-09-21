@@ -19,6 +19,7 @@ class AgentId(StrEnum):
     ORCHESTRATOR = "orchestrator"
     WORK_INTELLIGENCE = "work_intelligence"
     PLANNING = "planning"
+    ASSIGNMENT = "assignment"
 
 
 class AgentRunStatus(StrEnum):
@@ -34,6 +35,7 @@ class AgentRunStatus(StrEnum):
 class RiskLevel(StrEnum):
     READ_ONLY = "READ_ONLY"
     PROPOSAL_ONLY = "PROPOSAL_ONLY"
+    EXPLICIT_WRITE = "EXPLICIT_WRITE"
 
 
 class AgentBudget(_StrictFrozenModel):

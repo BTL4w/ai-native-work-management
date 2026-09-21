@@ -1,0 +1,22 @@
+schema_version: "1.0"
+name: recommend_project_team
+version: "1.0.0"
+owner: assignment-agent
+description: Create or revise a deterministic Project Team proposal and explain verified results.
+runnable_by_agents: [assignment]
+allowed_tools: [assignment.manage_team@1, assignment.read_workload@1]
+risk_level: PROPOSAL_ONLY
+input_contract: work_management_ai.skills.recommend_project_team.contracts.RecommendProjectTeamInput
+output_contract: work_management_ai.skills.recommend_project_team.contracts.RecommendProjectTeamOutput
+evaluators: [assignment_explanation@1, assignment_policy@1]
+evaluation_cases:
+  - assignment_recommend_team_en@1
+  - assignment_recommend_team_vi@1
+  - assignment_revise_team_grounding@1
+  - assignment_explanation_fallback@1
+triggers:
+  - "vi:đề xuất đội dự án, chỉnh đề xuất đội"
+  - "en:recommend a project team, revise the team proposal"
+required_context: [authenticated_actor, tenant_scope, exact_project_or_recommendation, verified_ranking]
+approval: ALWAYS
+stop_conditions: [ambiguous_resource, stale_version, verifier_failure, tool_failure]
