@@ -74,14 +74,32 @@ test("Manager plans a week, explicitly assigns a Task, and Employee completes it
   await page.getByRole("button", { name: "Tạo task" }).click();
   await page.getByLabel("Tiêu đề task").fill(taskTitle);
   await page.getByLabel("Tuần dự án").selectOption({ label: "Tuần 1" });
-  await page.getByLabel("Người thực hiện").selectOption({ label: "Demo Employee" });
+  await page.getByLabel("Kỹ năng cần thiết, mỗi dòng một mục").fill("Manual Testing");
+  await page.getByLabel("Số giờ công ước tính").fill("8");
   await page.getByRole("button", { name: "Lưu task" }).click();
   await expect(page.getByRole("heading", { name: taskTitle })).toBeVisible();
-  await expect(page.getByText("Demo Employee")).toBeVisible();
+  await expect(page.getByText("Chưa giao")).toBeVisible();
+
+  await page.getByRole("button", { name: "← Quay lại" }).click();
+  await page.getByRole("tab", { name: "Đội ngũ" }).click();
+  await page.getByRole("button", { name: "Tạo yêu cầu từ task" }).click();
+  await page.getByRole("button", { name: "Xác nhận yêu cầu" }).click();
+  await page.getByRole("button", { name: "Tạo đề xuất đội ngũ" }).click();
+  await expect(page.getByText("Đỗ Ngọc Nam").first()).toBeVisible();
+  await page.getByRole("button", { name: "Phê duyệt đội ngũ" }).click();
+  await page.getByRole("button", { name: "Xác nhận phê duyệt" }).click();
+  await expect(page.getByRole("heading", { name: "Đội ngũ hiện tại" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Tasks" }).click();
+  await page.getByRole("button", { name: taskTitle }).click();
+  await page.getByLabel("Giao task từ Project Team").getByRole("button", { name: "Giao task" }).click();
+  await page.getByLabel("Thành viên dự án").selectOption({ label: "Đỗ Ngọc Nam" });
+  await page.getByRole("button", { name: "Xác nhận giao cho Đỗ Ngọc Nam" }).click();
+  await expect(page.getByText("Đã giao cho Đỗ Ngọc Nam")).toBeVisible();
   expect(assistantMutations).toEqual([]);
   await signOut(page);
 
-  await signIn(page, "employee@example.test");
+  await signIn(page, "nam.do@example.test");
   await page.getByRole("button", { name: taskTitle }).click();
   await expect(page.getByRole("button", { name: "Sửa task" })).toHaveCount(0);
   await page.getByRole("button", { name: "Bắt đầu task" }).click();
