@@ -18,10 +18,10 @@ class OutboxPublisher(Protocol):
 
     async def publish(self, event: OutboxEvent) -> None:
         """Publish the event to external systems.
-        
+
         Args:
             event: The event to publish.
-            
+
         Raises:
             Exception: If publishing fails.
         """
@@ -30,14 +30,13 @@ class OutboxPublisher(Protocol):
 
 class UnsupportedOutboxPublisher:
     """Production fallback publisher for unimplemented events.
-    
+
     Logs and raises to fail safely. Real dispatch handlers will be added in Task 8.
     """
 
     async def publish(self, event: OutboxEvent) -> None:
         logger.error(
-            "No outbox publisher implemented for event %s type %s",
-            event.id, event.event_type
+            "No outbox publisher implemented for event %s type %s", event.id, event.event_type
         )
         raise NotImplementedError(f"Publisher not implemented for {event.event_type}")
 
@@ -65,14 +64,14 @@ class OutboxService:
 
     async def dispatch_once(self, worker_id: str, organization_id: UUID) -> bool:
         """Attempt to claim and dispatch pending outbox events for a tenant.
-        
+
         Args:
             worker_id: The identity of the worker process.
             organization_id: The tenant scope to operate within.
-            
+
         Returns:
             True if any events were processed, False otherwise.
-            
+
         Raises:
             PlanningRunDomainError: If organization_id is outside allowed scopes.
         """
@@ -111,7 +110,10 @@ class OutboxService:
                 safe_msg = str(exc)[:1000] or exc.__class__.__name__
                 logger.warning(
                     "Failed to publish outbox event %s (attempt %d/%d): %s",
-                    event.id, event.attempt_count, event.max_attempts, safe_msg
+                    event.id,
+                    event.attempt_count,
+                    event.max_attempts,
+                    safe_msg,
                 )
                 async with self._transaction_factory(organization_id) as txn:
                     backoff = compute_backoff_seconds(event.attempt_count)

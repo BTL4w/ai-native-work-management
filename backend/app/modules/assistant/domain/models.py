@@ -484,6 +484,18 @@ class AgentRun:
         current = now or _now()
         return replace(self, status=AgentRunStatus.RUNNING, started_at=current, updated_at=current)
 
+    def resume(self, now: datetime | None = None) -> "AgentRun":
+        if self.status not in {AgentRunStatus.AWAITING_INPUT, AgentRunStatus.AWAITING_HUMAN}:
+            raise InvalidAssistantTransitionError("AGENT_RUN_TRANSITION_INVALID")
+        current = now or _now()
+        return replace(
+            self,
+            status=AgentRunStatus.RUNNING,
+            stop_reason=None,
+            safe_error_code=None,
+            updated_at=current,
+        )
+
     def mark_completed(
         self,
         *,

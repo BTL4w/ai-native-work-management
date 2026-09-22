@@ -145,7 +145,11 @@ class OrchestratorGraph:
             _route,
             {"execute": "build_context", "manual_fallback": "manual_fallback"},
         )
-        builder.add_edge("build_context", "plan_objective")
+        builder.add_conditional_edges(
+            "build_context",
+            _route,
+            {"execute": "plan_objective", "ask_user": "ask_user"},
+        )
         builder.add_edge("plan_objective", "validate_execution_plan")
         builder.add_conditional_edges(
             "validate_execution_plan",

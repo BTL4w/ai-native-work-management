@@ -126,6 +126,30 @@ def test_orchestration_and_agent_terminal_states_are_immutable() -> None:
         completed_agent.mark_failed("LATE_FAILURE")
 
 
+def test_awaiting_agent_run_can_resume_the_same_durable_execution() -> None:
+    run = AgentRun.create(
+        organization_id=uuid4(),
+        orchestration_run_id=uuid4(),
+        agent_id="orchestrator",
+        agent_version="1.0.0",
+        manifest_fingerprint="f" * 64,
+        capability="orchestration.delegate",
+        typed_input={},
+        budget={},
+    ).mark_running()
+    awaiting = run.mark_awaiting(
+        status=AgentRunStatus.AWAITING_HUMAN,
+        typed_output={"pending": True},
+        stop_reason="WAITING_PROJECT_DECISION",
+    )
+
+    resumed = awaiting.resume()
+
+    assert resumed.status is AgentRunStatus.RUNNING
+    assert resumed.started_at == run.started_at
+    assert resumed.stop_reason is None
+
+
 @pytest.mark.parametrize("unsafe", ["private provider detail", "sql:error", "", "has space"])
 def test_safe_error_code_rejects_internal_text(unsafe: str) -> None:
     turn = AssistantTurn.create(

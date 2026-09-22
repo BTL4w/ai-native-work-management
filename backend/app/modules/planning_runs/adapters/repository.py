@@ -443,6 +443,7 @@ class PostgreSQLPlanningRunRepository(PlanningRunRepository):
                     "proposal_version": expected_version,
                     "decision": decision.value,
                     "checkpoint_sequence": checkpoint.sequence,
+                    "project_id": str(created.project_id) if created.project_id else None,
                 },
                 attempt_count=0,
                 max_attempts=3,

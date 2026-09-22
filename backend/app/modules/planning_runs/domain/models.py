@@ -289,7 +289,9 @@ class ProposalVersion:
 
     def __post_init__(self) -> None:
         if self.creator_type not in (
-            "AI_SYSTEM", "HUMAN_MANAGER", "UNKNOWN",
+            "AI_SYSTEM",
+            "HUMAN_MANAGER",
+            "UNKNOWN",
         ):
             raise PlanningRunDomainError(
                 f"Invalid creator_type '{self.creator_type}'. "
@@ -348,7 +350,9 @@ class Proposal:
         )
 
     def mark_ready_for_decision(
-        self, approval_id: UUID, now: datetime | None = None,
+        self,
+        approval_id: UUID,
+        now: datetime | None = None,
     ) -> "Proposal":
         allowed = (
             ProposalStatus.DRAFT,
@@ -357,18 +361,13 @@ class Proposal:
         )
         if self.status not in allowed:
             raise InvalidTransitionError(
-                "Cannot transition Proposal from "
-                f"{self.status} to READY_FOR_DECISION."
+                f"Cannot transition Proposal from {self.status} to READY_FOR_DECISION."
             )
         current_time = now or datetime.now(UTC)
         is_re_ready = (
-            self.status == ProposalStatus.READY_FOR_DECISION
-            and self.approval_id != approval_id
+            self.status == ProposalStatus.READY_FOR_DECISION and self.approval_id != approval_id
         )
-        superseded = (
-            self.approval_id if is_re_ready
-            else self.superseded_approval_id
-        )
+        superseded = self.approval_id if is_re_ready else self.superseded_approval_id
         return replace(
             self,
             status=ProposalStatus.READY_FOR_DECISION,
@@ -380,18 +379,10 @@ class Proposal:
 
     def edit(self, now: datetime | None = None) -> "Proposal":
         if self.status.is_terminal:
-            raise InvalidTransitionError(
-                "Cannot edit Proposal in terminal "
-                f"status {self.status}."
-            )
+            raise InvalidTransitionError(f"Cannot edit Proposal in terminal status {self.status}.")
         current_time = now or datetime.now(UTC)
-        is_ready = (
-            self.status == ProposalStatus.READY_FOR_DECISION
-        )
-        superseded = (
-            self.approval_id if is_ready
-            else self.superseded_approval_id
-        )
+        is_ready = self.status == ProposalStatus.READY_FOR_DECISION
+        superseded = self.approval_id if is_ready else self.superseded_approval_id
         return replace(
             self,
             status=ProposalStatus.DRAFT,
@@ -405,17 +396,11 @@ class Proposal:
     def mark_stale(self, now: datetime | None = None) -> "Proposal":
         if self.status.is_terminal:
             raise InvalidTransitionError(
-                "Cannot mark Proposal as STALE from "
-                f"terminal status {self.status}."
+                f"Cannot mark Proposal as STALE from terminal status {self.status}."
             )
         current_time = now or datetime.now(UTC)
-        is_ready = (
-            self.status == ProposalStatus.READY_FOR_DECISION
-        )
-        superseded = (
-            self.approval_id if is_ready
-            else self.superseded_approval_id
-        )
+        is_ready = self.status == ProposalStatus.READY_FOR_DECISION
+        superseded = self.approval_id if is_ready else self.superseded_approval_id
         return replace(
             self,
             status=ProposalStatus.STALE,
@@ -438,10 +423,7 @@ class Proposal:
 
     def mark_rejected(self, now: datetime | None = None) -> "Proposal":
         if self.status != ProposalStatus.READY_FOR_DECISION:
-            raise InvalidTransitionError(
-                "Cannot reject Proposal from "
-                f"status {self.status}."
-            )
+            raise InvalidTransitionError(f"Cannot reject Proposal from status {self.status}.")
         current_time = now or datetime.now(UTC)
         return replace(
             self,

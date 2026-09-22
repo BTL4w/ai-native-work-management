@@ -11,6 +11,8 @@ from _pytest.monkeypatch import MonkeyPatch
 from work_management_ai.agents.orchestrator.contracts import (
     ActiveConversationContext,
     ActivePlanningContext,
+    ActiveTeamContext,
+    ExactAssignmentContext,
     ExecutionPlan,
     OrchestratorInput,
     OrchestratorStatus,
@@ -36,7 +38,12 @@ from work_management_ai.runtime.contracts import (
     ResolvedActorContext,
     SafeErrorResponseBlock,
 )
-from work_management_ai.runtime.manifests import AgentManifest, load_yaml_resource
+from work_management_ai.runtime.manifests import (
+    AgentManifest,
+    SkillManifest,
+    ToolManifest,
+    load_yaml_resource,
+)
 from work_management_ai.runtime.policy_guard import PolicyGuard
 from work_management_ai.runtime.skill_registry import SkillRegistry
 from work_management_ai.runtime.tool_registry import ToolRegistry
@@ -249,6 +256,51 @@ def _revision_registry(tmp_path: Path, monkeypatch: MonkeyPatch) -> AgentRegistr
     return registry
 
 
+def _phase3_registry() -> AgentRegistry:
+    skill_packages = (
+        "work_management_ai.skills.answer_work_question",
+        "work_management_ai.skills.create_project_plan",
+        "work_management_ai.skills.revise_project_plan",
+        "work_management_ai.skills.recommend_project_team",
+        "work_management_ai.skills.analyze_workload",
+    )
+    tool_packages = (
+        "work_management_ai.tools.work.read_my_tasks",
+        "work_management_ai.tools.work.read_resource",
+        "work_management_ai.tools.planning.manage_run",
+        "work_management_ai.tools.assignment.manage_team",
+        "work_management_ai.tools.assignment.read_workload",
+        "work_management_ai.tools.assignment.assign_task",
+    )
+    registry = AgentRegistry(
+        skill_registry=SkillRegistry(
+            load_yaml_resource(package, "skill.yaml", SkillManifest) for package in skill_packages
+        ),
+        tool_registry=ToolRegistry(
+            load_yaml_resource(package, "tool.yaml", ToolManifest) for package in tool_packages
+        ),
+        evaluator_ids=frozenset(
+            {
+                "orchestrator_plan@1",
+                "work_grounding@1",
+                "planning_schema@1",
+                "planning_invariants@1",
+                "planning_grounding@1",
+                "assignment_explanation@1",
+                "assignment_policy@1",
+            }
+        ),
+    )
+    for package in (
+        "work_management_ai.agents.orchestrator",
+        "work_management_ai.agents.work_intelligence",
+        "work_management_ai.agents.planning",
+        "work_management_ai.agents.assignment",
+    ):
+        registry.register_resource(package, "agent.yaml")
+    return registry
+
+
 def _harness(
     *,
     actor: ResolvedActorContext,
@@ -400,8 +452,8 @@ async def test_completed_specialist_cannot_synthesize_false_manager_input_interr
 
     output = await harness.run_turn(_input(actor, locale="vi", message="Lập kế hoạch theo tuần"))
 
-    assert output.status is OrchestratorStatus.COMPLETED
-    assert [block.kind for block in output.blocks] == ["planning_run"]
+    assert output.status is OrchestratorStatus.FAILED
+    assert [block.kind for block in output.blocks] == ["safe_error"]
 
 
 @pytest.mark.asyncio
@@ -884,7 +936,7 @@ async def test_inactive_capability_yields_availability_block_and_zero_handoffs(
 ) -> None:
     actor = _resolved_actor()
     runner = RecordingSpecialistRunner()
-    plan = {
+    plan: dict[str, object] = {
         "schema_version": "1.0",
         "objectives": ["Generate a management report"],
         "steps": [],
@@ -1093,3 +1145,517 @@ async def test_replan_budget_exhaustion_stops_without_broadening_scope(
         "planning.create",
     ]
     assert output.blocks[0].kind == "safe_error"
+
+
+@pytest.mark.asyncio
+async def test_project_only_prompt_never_delegates_to_assignment() -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner()
+    plan: dict[str, object] = {
+        "objectives": ["Create Project Atlas"],
+        "steps": [
+            {
+                "step_id": "plan_project",
+                "target_agent_id": "planning",
+                "target_agent_version": "1.0.0",
+                "capability": "planning.create",
+                "objective": "Create Project Atlas",
+                "typed_input": {},
+                "mode": "PROPOSAL",
+            }
+        ],
+        "response_language": "en",
+    }
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": plan,
+            "orchestrator.en.synthesize": {"blocks": [{"kind": "text", "text": "Ready."}]},
+        },
+    )
+
+    await harness.run_turn(_input(actor, locale="en", message="Create Project Atlas"))
+
+    assert [handoff.target_agent_id for handoff in runner.handoffs] == [AgentId.PLANNING]
+
+
+@pytest.mark.asyncio
+async def test_project_only_prompt_rejects_model_fabricated_assignment_step() -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner()
+    fabricated: dict[str, object] = {
+        "objectives": ["Create Project Atlas"],
+        "steps": [
+            {
+                "step_id": "plan_project",
+                "target_agent_id": "planning",
+                "target_agent_version": "1.0.0",
+                "capability": "planning.create",
+                "objective": "Create Project Atlas",
+                "typed_input": {},
+                "mode": "PROPOSAL",
+            },
+            {
+                "step_id": "recommend_team",
+                "target_agent_id": "assignment",
+                "target_agent_version": "1.0.0",
+                "capability": "assignment.recommend_team",
+                "objective": "Recommend a team",
+                "typed_input": {},
+                "depends_on": ["plan_project"],
+                "mode": "PROPOSAL",
+            },
+        ],
+        "response_language": "en",
+    }
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": fabricated,
+            "orchestrator.en.repair": fabricated,
+        },
+    )
+
+    output = await harness.run_turn(_input(actor, locale="en", message="Create Project Atlas"))
+
+    assert output.status is OrchestratorStatus.FAILED
+    assert output.stop_reason == "EXECUTION_PLAN_INVALID"
+    assert runner.handoffs == []
+
+
+@pytest.mark.asyncio
+async def test_historical_team_context_cannot_authorize_unrelated_assignment() -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner()
+    fabricated: dict[str, object] = {
+        "objectives": ["Analyze the old team"],
+        "steps": [
+            {
+                "step_id": "analyze_workload",
+                "target_agent_id": "assignment",
+                "target_agent_version": "1.0.0",
+                "capability": "assignment.analyze_workload",
+                "objective": "Analyze workload",
+                "typed_input": {},
+                "mode": "READ_ONLY",
+            }
+        ],
+        "response_language": "en",
+    }
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": fabricated,
+            "orchestrator.en.repair": fabricated,
+        },
+    )
+    value = _input(actor, locale="en", message="Summarize my latest conversation").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(), active_team=ActiveTeamContext(project_id=uuid4())
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.FAILED
+    assert output.stop_reason == "EXECUTION_PLAN_INVALID"
+    assert runner.handoffs == []
+
+
+@pytest.mark.asyncio
+async def test_team_revision_card_uses_exact_trusted_context() -> None:
+    actor = _resolved_actor()
+    project_id = uuid4()
+    recommendation_id = uuid4()
+    runner = RecordingSpecialistRunner(
+        {
+            "assignment.revise_team": [
+                AgentResult(
+                    agent_id=AgentId.ASSIGNMENT,
+                    agent_version="1.0.0",
+                    status=AgentRunStatus.AWAITING_HUMAN,
+                    typed_output={"summary": "review team proposal"},
+                    stop_reason="awaiting_human",
+                )
+            ]
+        }
+    )
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={"orchestrator.vi.synthesize": {"blocks": [{"kind": "text", "text": "Đã nhận."}]}},
+    )
+    value = _input(actor, locale="vi", message="Thay Lan bằng Minh vì Lan quá tải").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(),
+                active_team=ActiveTeamContext(
+                    project_id=project_id,
+                    recommendation_id=recommendation_id,
+                    recommendation_version=2,
+                    recommendation_status="PROPOSED",
+                    requested_operation="REVISE_TEAM",
+                ),
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.AWAITING_HUMAN
+    assert len(runner.handoffs) == 1
+    handoff = runner.handoffs[0]
+    assert handoff.target_agent_id is AgentId.ASSIGNMENT
+    assert handoff.capability == "assignment.revise_team"
+    assert handoff.typed_input == {
+        "operation": "REVISE_TEAM",
+        "locale": "vi",
+        "project_id": str(project_id),
+        "recommendation_id": str(recommendation_id),
+        "recommendation_version": 2,
+        "revision_instruction": "Thay Lan bằng Minh vì Lan quá tải",
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_assignment_context_allows_one_explicit_write_handoff() -> None:
+    actor = _resolved_actor()
+    project_id, task_id, membership_id = uuid4(), uuid4(), uuid4()
+    runner = RecordingSpecialistRunner()
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.synthesize": {
+                "blocks": [{"kind": "text", "text": "The task was assigned."}]
+            }
+        },
+    )
+    value = _input(actor, locale="en", message="Assign Task A to Lan").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(),
+                exact_assignment=ExactAssignmentContext(
+                    project_id=project_id,
+                    task_id=task_id,
+                    task_version=4,
+                    membership_id=membership_id,
+                ),
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.COMPLETED
+    assert len(runner.handoffs) == 1
+    handoff = runner.handoffs[0]
+    assert handoff.capability == "assignment.assign_task_explicitly"
+    assert handoff.typed_input == {
+        "operation": "ASSIGN_TASK_EXPLICITLY",
+        "locale": "en",
+        "task_id": str(task_id),
+        "task_version": 4,
+        "membership_id": str(membership_id),
+    }
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_explicit_assignment_asks_before_any_handoff() -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner()
+    harness = _harness(actor=actor, registry=_phase3_registry(), runner=runner, fixtures={})
+    value = _input(actor, locale="en", message="Assign Task A to Lan").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(),
+                assignment_resolution_issue="TASK_AMBIGUOUS_OR_NOT_FOUND",
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.AWAITING_INPUT
+    assert runner.handoffs == []
+    assert isinstance(output.blocks[0], QuestionResponseBlock)
+    assert output.blocks[0].response_context == {"source": "assignment_resolution"}
+
+
+@pytest.mark.asyncio
+async def test_employee_cannot_use_exact_assignment_context() -> None:
+    actor = _resolved_actor(role="EMPLOYEE")
+    runner = RecordingSpecialistRunner()
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={},
+    )
+    value = _input(actor, locale="en", message="Assign Task A to Lan").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(),
+                exact_assignment=ExactAssignmentContext(
+                    project_id=uuid4(),
+                    task_id=uuid4(),
+                    task_version=1,
+                    membership_id=uuid4(),
+                ),
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.COMPLETED
+    assert output.stop_reason == "CAPABILITY_UNAVAILABLE"
+    assert runner.handoffs == []
+
+
+@pytest.mark.asyncio
+async def test_employee_assignment_resolution_denial_never_calls_a_specialist() -> None:
+    actor = _resolved_actor(role="EMPLOYEE")
+    runner = RecordingSpecialistRunner()
+    harness = _harness(actor=actor, registry=_phase3_registry(), runner=runner, fixtures={})
+    value = _input(actor, locale="en", message="Assign Task A to Lan").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(), assignment_resolution_issue="ASSIGNMENT_FORBIDDEN"
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.COMPLETED
+    assert output.stop_reason == "ASSIGNMENT_FORBIDDEN"
+    assert runner.handoffs == []
+    assert isinstance(output.blocks[0], CapabilityUnavailableResponseBlock)
+
+
+@pytest.mark.asyncio
+async def test_combined_project_team_plan_emits_durable_pending_followup() -> None:
+    actor = _resolved_actor()
+    workflow_run_id, proposal_id = uuid4(), uuid4()
+    planning_result = AgentResult(
+        agent_id=AgentId.PLANNING,
+        agent_version="1.0.0",
+        status=AgentRunStatus.AWAITING_HUMAN,
+        typed_output={
+            "operation": "CREATE",
+            "workflow_run_id": str(workflow_run_id),
+            "workflow_status": "WAITING_FOR_DECISION",
+            "proposal_id": str(proposal_id),
+            "proposal_version": 2,
+            "approval_id": str(uuid4()),
+            "awaiting": "MANAGER_DECISION",
+            "public_summary": "Review the project proposal.",
+        },
+        stop_reason="awaiting_human",
+    )
+    runner = RecordingSpecialistRunner({"planning.create": [planning_result]})
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": {
+                "objectives": ["Create Project Atlas and form its team"],
+                "steps": [
+                    {
+                        "step_id": "plan_project",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.create",
+                        "objective": "Create Project Atlas",
+                        "typed_input": {},
+                        "mode": "PROPOSAL",
+                    },
+                    {
+                        "step_id": "recommend_team",
+                        "target_agent_id": "assignment",
+                        "target_agent_version": "1.0.0",
+                        "capability": "assignment.recommend_team",
+                        "objective": "Recommend the Project Team after approval",
+                        "typed_input": {},
+                        "depends_on": ["plan_project"],
+                        "mode": "PROPOSAL",
+                    },
+                ],
+                "response_language": "en",
+            }
+        },
+    )
+
+    output = await harness.run_turn(
+        _input(actor, locale="en", message="Create Project Atlas and form a team")
+    )
+
+    assert [handoff.capability for handoff in runner.handoffs] == ["planning.create"]
+    assert output.pending_followup is not None
+    assert output.pending_followup.planning_workflow_run_id == workflow_run_id
+    assert output.pending_followup.planning_proposal_id == proposal_id
+    assert output.pending_followup.planning_proposal_version == 2
+    assert output.pending_followup.state == "WAITING_PROJECT_DECISION"
+
+
+@pytest.mark.asyncio
+async def test_async_combined_plan_waits_for_proposal_before_assignment() -> None:
+    actor = _resolved_actor()
+    workflow_run_id = uuid4()
+    planning_result = AgentResult(
+        agent_id=AgentId.PLANNING,
+        agent_version="1.0.0",
+        status=AgentRunStatus.COMPLETED,
+        typed_output={
+            "operation": "CREATE",
+            "workflow_run_id": str(workflow_run_id),
+            "workflow_status": "QUEUED",
+            "proposal_id": None,
+            "proposal_version": None,
+            "approval_id": None,
+            "awaiting": "NONE",
+            "public_summary": "Planning workflow started.",
+        },
+        stop_reason="COMPLETED",
+    )
+    runner = RecordingSpecialistRunner({"planning.create": [planning_result]})
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": {
+                "objectives": ["Create Project Atlas and form its team"],
+                "steps": [
+                    {
+                        "step_id": "plan_project",
+                        "target_agent_id": "planning",
+                        "target_agent_version": "1.0.0",
+                        "capability": "planning.create",
+                        "objective": "Create Project Atlas",
+                        "typed_input": {},
+                        "mode": "PROPOSAL",
+                    },
+                    {
+                        "step_id": "recommend_team",
+                        "target_agent_id": "assignment",
+                        "target_agent_version": "1.0.0",
+                        "capability": "assignment.recommend_team",
+                        "objective": "Recommend the Project Team after approval",
+                        "typed_input": {},
+                        "depends_on": ["plan_project"],
+                        "mode": "PROPOSAL",
+                    },
+                ],
+                "response_language": "en",
+            }
+        },
+    )
+
+    output = await harness.run_turn(
+        _input(actor, locale="en", message="Create Project Atlas and form a team")
+    )
+
+    assert [handoff.capability for handoff in runner.handoffs] == ["planning.create"]
+    assert output.status is OrchestratorStatus.AWAITING_HUMAN
+    assert output.pending_followup is not None
+    assert output.pending_followup.planning_workflow_run_id == workflow_run_id
+    assert output.pending_followup.state == "WAITING_PROJECT_PROPOSAL"
+
+
+@pytest.mark.asyncio
+async def test_model_cannot_fabricate_assignment_result_block() -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner()
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={
+            "orchestrator.en.plan": {
+                "objectives": ["Read my tasks"],
+                "steps": [
+                    {
+                        "step_id": "read_tasks",
+                        "target_agent_id": "work_intelligence",
+                        "target_agent_version": "1.0.0",
+                        "capability": "work.read_my_tasks",
+                        "objective": "Read tasks",
+                        "typed_input": {},
+                        "mode": "READ_ONLY",
+                    }
+                ],
+                "response_language": "en",
+            },
+            "orchestrator.en.synthesize": {
+                "blocks": [
+                    {
+                        "kind": "assignment_result",
+                        "task_id": str(uuid4()),
+                        "task_version": 2,
+                        "membership_id": str(uuid4()),
+                        "warning_codes": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    output = await harness.run_turn(_input(actor, locale="en", message="Read my tasks"))
+
+    assert output.status is OrchestratorStatus.FAILED
+    assert all(block.kind != "assignment_result" for block in output.blocks)
+
+
+@pytest.mark.asyncio
+async def test_post_project_team_failure_links_to_manual_team_editor() -> None:
+    actor = _resolved_actor()
+    runner = RecordingSpecialistRunner(
+        {
+            "assignment.recommend_team": [
+                AgentResult(
+                    agent_id=AgentId.ASSIGNMENT,
+                    agent_version="1.0.0",
+                    status=AgentRunStatus.FAILED,
+                    typed_output={"fallback": "manual_assignment"},
+                    stop_reason="tool_failed",
+                    safe_error_code="ASSIGNMENT_MANUAL_FALLBACK",
+                )
+            ]
+        }
+    )
+    harness = _harness(
+        actor=actor,
+        registry=_phase3_registry(),
+        runner=runner,
+        fixtures={},
+    )
+    value = _input(actor, locale="en", message="Continue with the Project Team").model_copy(
+        update={
+            "active_context": ActiveConversationContext(
+                recent_messages=(),
+                active_team=ActiveTeamContext(
+                    project_id=uuid4(), requested_operation="RECOMMEND_TEAM"
+                ),
+            )
+        }
+    )
+
+    output = await harness.run_turn(value)
+
+    assert output.status is OrchestratorStatus.FAILED
+    block = output.blocks[0]
+    assert isinstance(block, SafeErrorResponseBlock)
+    assert block.manual_fallback == "PROJECT_TEAM_EDITOR"

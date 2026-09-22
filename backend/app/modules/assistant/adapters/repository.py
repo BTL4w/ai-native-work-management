@@ -27,6 +27,7 @@ from app.modules.assistant.application.ports import (
     AssistantTurnMutationResult,
     LinkedWorkflowEvent,
 )
+from app.modules.assistant.application.projection_service import advance_pending_followup
 from app.modules.assistant.domain.models import (
     AgentCheckpoint,
     AgentHandoffRecord,
@@ -54,6 +55,8 @@ from app.modules.identity.domain.auth import AuthenticatedActor
 from app.modules.planning_runs.adapters.database_models import WorkflowEventModel
 from app.modules.planning_runs.domain.models import WorkflowEvent
 from app.modules.work.adapters.database_models import IdempotencyRecordModel, IdempotencyState
+from app.modules.work.planning.assignment.adapters.database_models import TeamRequirementSetModel
+from work_management_ai.agents.orchestrator.contracts import PendingFollowup
 
 _IDEMPOTENCY_TTL = timedelta(hours=24)
 
@@ -1055,6 +1058,21 @@ class PostgreSQLAssistantRepository:
         )
         if conversation is None:
             return False
+        checkpoint_value = await self._session.scalar(
+            select(OrchestrationRunModel.checkpoint).where(
+                OrchestrationRunModel.organization_id == organization_id,
+                OrchestrationRunModel.id == item.agent_run.orchestration_run_id,
+            )
+        )
+        original_checkpoint = dict(checkpoint_value or {})
+        checkpoint, should_resume = advance_pending_followup(original_checkpoint, event)
+        if should_resume:
+            blocks = tuple(
+                {**block, "continue_team": True}
+                if block.get("kind") == "decision_result"
+                else block
+                for block in blocks
+            )
         dedupe_key = f"workflow:{event.workflow_run_id}:{event.sequence}"
         existing = await self._session.scalar(
             select(AssistantMessageModel.id).where(
@@ -1139,8 +1157,139 @@ class PostgreSQLAssistantRepository:
                 )
                 .values(status=status, safe_error_code=safe_error_code, updated_at=now)
             )
+        if checkpoint != original_checkpoint:
+            pending_state = None
+            raw_pending = checkpoint.get("pending_followup")
+            if isinstance(raw_pending, dict):
+                pending_values = cast(dict[str, object], raw_pending)
+                raw_state = pending_values.get("state")
+                pending_state = raw_state if isinstance(raw_state, str) else None
+            checkpoint_status = (
+                "QUEUED"
+                if should_resume
+                else ("COMPLETED" if pending_state == "CANCELLED" else "AWAITING_HUMAN")
+            )
+            await self._session.execute(
+                update(OrchestrationRunModel)
+                .where(
+                    OrchestrationRunModel.organization_id == organization_id,
+                    OrchestrationRunModel.id == item.agent_run.orchestration_run_id,
+                )
+                .values(
+                    checkpoint=checkpoint,
+                    status=checkpoint_status,
+                    completed_at=now if checkpoint_status == "COMPLETED" else None,
+                    updated_at=now,
+                )
+            )
+            if should_resume:
+                await self._session.execute(
+                    update(AssistantTurnModel)
+                    .where(
+                        AssistantTurnModel.organization_id == organization_id,
+                        AssistantTurnModel.id == item.turn_id,
+                    )
+                    .values(status="QUEUED", safe_error_code=None, updated_at=now)
+                )
+                await self._session.execute(
+                    update(AssistantJobModel)
+                    .where(
+                        AssistantJobModel.organization_id == organization_id,
+                        AssistantJobModel.orchestration_run_id
+                        == item.agent_run.orchestration_run_id,
+                    )
+                    .values(
+                        status="QUEUED",
+                        available_at=now,
+                        locked_by=None,
+                        lease_until=None,
+                        safe_error_code=None,
+                        updated_at=now,
+                    )
+                )
         await self._session.flush()
         return existing is None
+
+    async def resume_confirmed_team_followups(self, *, organization_id: UUID, limit: int) -> int:
+        runs = tuple(
+            (
+                await self._session.scalars(
+                    select(OrchestrationRunModel)
+                    .where(
+                        OrchestrationRunModel.organization_id == organization_id,
+                        OrchestrationRunModel.status == OrchestrationRunStatus.AWAITING_HUMAN.value,
+                    )
+                    .order_by(OrchestrationRunModel.updated_at, OrchestrationRunModel.id)
+                    .limit(min(max(limit, 1), 50))
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+        )
+        resumed = 0
+        now = datetime.now(UTC)
+        for run in runs:
+            raw = dict(run.checkpoint or {}).get("pending_followup")
+            if not isinstance(raw, dict):
+                continue
+            try:
+                pending = PendingFollowup.model_validate(raw)
+            except ValueError:
+                continue
+            if (
+                pending.state != "WAITING_TEAM_REQUIREMENTS"
+                or pending.project_id is None
+                or pending.requirement_set_id is None
+            ):
+                continue
+            requirement = await self._session.scalar(
+                select(TeamRequirementSetModel).where(
+                    TeamRequirementSetModel.organization_id == organization_id,
+                    TeamRequirementSetModel.id == pending.requirement_set_id,
+                    TeamRequirementSetModel.project_id == pending.project_id,
+                    TeamRequirementSetModel.current_version >= pending.requirement_version,
+                    TeamRequirementSetModel.status == "CONFIRMED",
+                )
+            )
+            if requirement is None:
+                continue
+            ready = pending.mark_ready()
+            run.checkpoint = {
+                **dict(run.checkpoint or {}),
+                "pending_followup": ready.model_dump(mode="json"),
+            }
+            run.status = OrchestrationRunStatus.QUEUED.value
+            run.completed_at = None
+            run.updated_at = now
+            await self._session.execute(
+                update(AssistantTurnModel)
+                .where(
+                    AssistantTurnModel.organization_id == organization_id,
+                    AssistantTurnModel.id == run.turn_id,
+                )
+                .values(
+                    status=AssistantTurnStatus.QUEUED.value,
+                    safe_error_code=None,
+                    updated_at=now,
+                )
+            )
+            await self._session.execute(
+                update(AssistantJobModel)
+                .where(
+                    AssistantJobModel.organization_id == organization_id,
+                    AssistantJobModel.orchestration_run_id == run.id,
+                )
+                .values(
+                    status=AssistantJobStatus.QUEUED.value,
+                    available_at=now,
+                    locked_by=None,
+                    lease_until=None,
+                    safe_error_code=None,
+                    updated_at=now,
+                )
+            )
+            resumed += 1
+        await self._session.flush()
+        return resumed
 
     async def finish_agent_run(self, *, run: AgentRun) -> None:
         model = await self._session.scalar(
@@ -1162,6 +1311,27 @@ class PostgreSQLAssistantRepository:
         model.completed_at = run.completed_at
         model.updated_at = run.updated_at
         await self._session.flush()
+
+    async def resume_agent_run(self, *, run: AgentRun) -> AgentRun:
+        model = await self._session.scalar(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == run.organization_id,
+                AgentRunModel.id == run.id,
+                AgentRunModel.status.in_(
+                    (AgentRunStatus.AWAITING_INPUT.value, AgentRunStatus.AWAITING_HUMAN.value)
+                ),
+            )
+            .with_for_update()
+        )
+        if model is None or run.status is not AgentRunStatus.RUNNING:
+            raise AssistantDomainLookupError("AGENT_RUN_NOT_AWAITING")
+        model.status = run.status.value
+        model.stop_reason = run.stop_reason
+        model.safe_error_code = run.safe_error_code
+        model.updated_at = run.updated_at
+        await self._session.flush()
+        return _agent_run(model)
 
     async def append_handoff(self, *, handoff: AgentHandoffRecord) -> None:
         self._session.add(

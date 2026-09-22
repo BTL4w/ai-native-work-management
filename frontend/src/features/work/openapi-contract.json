@@ -91,6 +91,9 @@
       "question": "#/components/schemas/QuestionBlock",
       "safe_error": "#/components/schemas/SafeErrorBlock",
       "text": "#/components/schemas/TextBlock",
+      "team_recommendation": "#/components/schemas/TeamRecommendationBlock",
+      "team_decision_result": "#/components/schemas/TeamDecisionResultBlock",
+      "assignment_result": "#/components/schemas/AssignmentResultBlock",
       "work_evidence": "#/components/schemas/WorkEvidenceBlock"
     },
     "schemas": {

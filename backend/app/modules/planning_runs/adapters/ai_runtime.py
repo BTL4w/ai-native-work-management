@@ -961,6 +961,11 @@ class PlanningFinalizationJobHandler:
             proposal_version = int(job.payload["proposal_version"])
             checkpoint_sequence = int(job.payload["checkpoint_sequence"])
             decision = str(job.payload["decision"])
+            project_id = (
+                UUID(str(job.payload["project_id"]))
+                if job.payload.get("project_id") is not None
+                else None
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise RuntimeError("FINALIZATION_PAYLOAD_INVALID") from error
         async with self._transactions(actor) as transaction:
@@ -1010,6 +1015,7 @@ class PlanningFinalizationJobHandler:
                         "proposal_id": str(proposal.id),
                         "proposal_version": proposal_version,
                         "approval_id": str(approval.id),
+                        "project_id": str(project_id) if project_id else None,
                     },
                 )
             )
@@ -1026,6 +1032,7 @@ class PlanningFinalizationJobHandler:
                         "proposal_id": str(proposal.id),
                         "proposal_version": proposal_version,
                         "approval_id": str(approval.id),
+                        "project_id": str(project_id) if project_id else None,
                     },
                 )
             )

@@ -14,6 +14,7 @@ from work_management_ai.agents.assignment.contracts import (
     ExplicitAssignmentSnapshot,
     ProjectWorkloadSnapshot,
     TeamRecommendationSnapshot,
+    TeamRequirementsPendingSnapshot,
     WorkloadExplanation,
 )
 from work_management_ai.runtime.contracts import (
@@ -42,7 +43,10 @@ type Route = Literal[
     "manual_fallback",
 ]
 type DeterministicSnapshot = (
-    TeamRecommendationSnapshot | ProjectWorkloadSnapshot | ExplicitAssignmentSnapshot
+    TeamRecommendationSnapshot
+    | TeamRequirementsPendingSnapshot
+    | ProjectWorkloadSnapshot
+    | ExplicitAssignmentSnapshot
 )
 type Explanation = AssignmentExplanation | WorkloadExplanation
 

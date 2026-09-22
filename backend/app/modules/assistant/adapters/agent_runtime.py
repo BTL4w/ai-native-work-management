@@ -26,13 +26,17 @@ from app.modules.assistant.domain.models import (
     AgentRunStatus as DomainAgentRunStatus,
 )
 from app.modules.identity.domain.auth import AuthenticatedActor
+from work_management_ai.agents.assignment.harness import AssignmentAgentHarness
 from work_management_ai.agents.orchestrator.contracts import (
     ActiveConversationContext,
     ActivePlanningContext,
+    ActiveTeamContext,
     ActorContextResolverPort,
     ConversationExcerpt,
+    ExactAssignmentResolution,
     OrchestratorInput,
     OrchestratorOutput,
+    PendingFollowup,
 )
 from work_management_ai.agents.orchestrator.harness import OrchestratorHarness
 from work_management_ai.agents.planning.harness import PlanningAgentHarness
@@ -79,16 +83,22 @@ _SKILL_RESOURCES = (
     ("work_management_ai.skills.answer_work_question", "skill.yaml"),
     ("work_management_ai.skills.create_project_plan", "skill.yaml"),
     ("work_management_ai.skills.revise_project_plan", "skill.yaml"),
+    ("work_management_ai.skills.recommend_project_team", "skill.yaml"),
+    ("work_management_ai.skills.analyze_workload", "skill.yaml"),
 )
 _TOOL_RESOURCES = (
     ("work_management_ai.tools.work.read_my_tasks", "tool.yaml"),
     ("work_management_ai.tools.work.read_resource", "tool.yaml"),
     ("work_management_ai.tools.planning.manage_run", "tool.yaml"),
+    ("work_management_ai.tools.assignment.manage_team", "tool.yaml"),
+    ("work_management_ai.tools.assignment.read_workload", "tool.yaml"),
+    ("work_management_ai.tools.assignment.assign_task", "tool.yaml"),
 )
 _AGENT_RESOURCES = (
     ("work_management_ai.agents.orchestrator", "agent.yaml"),
     ("work_management_ai.agents.work_intelligence", "agent.yaml"),
     ("work_management_ai.agents.planning", "agent.yaml"),
+    ("work_management_ai.agents.assignment", "agent.yaml"),
 )
 _EVALUATORS = frozenset(
     {
@@ -97,6 +107,8 @@ _EVALUATORS = frozenset(
         "planning_schema@1",
         "planning_invariants@1",
         "planning_grounding@1",
+        "assignment_explanation@1",
+        "assignment_policy@1",
     }
 )
 _MODEL_SCOPE: ContextVar[tuple[UUID, UUID] | None] = ContextVar(
@@ -108,6 +120,12 @@ class CurrentActorResolverPort(Protocol):
     async def resolve(
         self, *, organization_id: UUID, membership_id: UUID
     ) -> AuthenticatedActor | None: ...
+
+
+class AssignmentContextResolverPort(Protocol):
+    async def resolve_assignment(
+        self, *, actor: AuthenticatedActor, message: str
+    ) -> ExactAssignmentResolution: ...
 
 
 def resolve_ambient_planning_context(
@@ -149,6 +167,50 @@ def resolve_ambient_planning_context(
                 proposal_status=str(state),
                 requested_operation=None,
             )
+    return None
+
+
+def resolve_ambient_team_context(
+    messages: tuple[AssistantMessage, ...],
+    *,
+    pending_followup: PendingFollowup | None = None,
+) -> ActiveTeamContext | None:
+    for message in reversed(messages):
+        for block in reversed(message.content_blocks):
+            if (
+                block.get("kind") == "decision_result"
+                and block.get("decision") == "APPROVE"
+                and block.get("project_id") is not None
+                and block.get("continue_team") is True
+                and pending_followup is not None
+                and pending_followup.state == "READY"
+            ):
+                try:
+                    if (
+                        UUID(str(block["workflow_run_id"]))
+                        != pending_followup.planning_workflow_run_id
+                        or UUID(str(block["project_id"])) != pending_followup.project_id
+                    ):
+                        continue
+                    return ActiveTeamContext(
+                        project_id=UUID(str(pending_followup.project_id)),
+                        planning_proposal_id=pending_followup.planning_proposal_id,
+                        planning_proposal_version=pending_followup.planning_proposal_version,
+                        requested_operation="RECOMMEND_TEAM",
+                    )
+                except ValueError:
+                    continue
+            if block.get("kind") != "team_recommendation":
+                continue
+            try:
+                return ActiveTeamContext(
+                    project_id=UUID(str(block["project_id"])),
+                    recommendation_id=UUID(str(block["recommendation_id"])),
+                    recommendation_version=int(block["recommendation_version"]),
+                    recommendation_status=str(block["status"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
     return None
 
 
@@ -249,7 +311,7 @@ class _ScopedOrchestrator:
 
 
 def build_agent_registry() -> tuple[AgentRegistry, ToolRegistry]:
-    """Load and validate every Phase-2 activated runtime resource at startup."""
+    """Load and validate every Phase-3 activated runtime resource at startup."""
     skill_registry = SkillRegistry(
         load_yaml_resource(package, resource, SkillManifest)
         for package, resource in _SKILL_RESOURCES
@@ -305,6 +367,18 @@ class InactivePlanningToolExecutor(ToolExecutorPort):
         )
 
 
+class InactiveAssignmentToolExecutor(ToolExecutorPort):
+    """Fail closed when a test composition omits the Phase 3 application bridge."""
+
+    async def execute(self, request: ToolExecutionRequest) -> ToolExecutionResult:
+        del request
+        return ToolExecutionResult(
+            status="REJECTED",
+            typed_output={},
+            safe_error_code="ASSIGNMENT_TOOL_BRIDGE_NOT_ACTIVE",
+        )
+
+
 def build_execution_engine_factory(
     *,
     model_gateway: ModelGateway,
@@ -313,6 +387,7 @@ def build_execution_engine_factory(
     work_tool_executor: ToolExecutorPort,
     transaction_factory: AssistantTransactionFactory,
     planning_tool_executor: ToolExecutorPort | None = None,
+    assignment_tool_executor: ToolExecutorPort | None = None,
 ) -> Callable[[ExecutionRecorderPort], AgentExecutionEngine]:
     """Compose hub-and-spoke Harnesses without opening a database transaction."""
     agent_actor_resolver = CurrentAgentActorResolver(actor_resolver)
@@ -331,6 +406,13 @@ def build_execution_engine_factory(
             PlanningAgentHarness(
                 model_gateway=recording_gateway,
                 tool_executor=planning_tool_executor or InactivePlanningToolExecutor(),
+                actor_resolver=agent_actor_resolver,
+            )
+        ),
+        AgentId.ASSIGNMENT: _ScopedAgentHarness(
+            AssignmentAgentHarness(
+                model_gateway=recording_gateway,
+                tool_executor=assignment_tool_executor or InactiveAssignmentToolExecutor(),
                 actor_resolver=agent_actor_resolver,
             )
         ),
@@ -387,7 +469,7 @@ class PostgreSQLExecutionRecorder(ExecutionRecorderPort):
                 organization_id=self._job.organization_id, run_id=run_id
             )
             if existing is None:
-                registered = self._registry.resolve(AgentId.ORCHESTRATOR, "1.0.0", 2)
+                registered = self._registry.resolve(AgentId.ORCHESTRATOR, "1.0.0", 3)
                 run = AgentRun.create(
                     id=run_id,
                     organization_id=self._job.organization_id,
@@ -400,6 +482,11 @@ class PostgreSQLExecutionRecorder(ExecutionRecorderPort):
                     budget=registered.manifest.runtime.model_dump(mode="json"),
                 ).mark_running()
                 await transaction.repository.append_agent_run(run=run)
+            elif existing.status in {
+                DomainAgentRunStatus.AWAITING_INPUT,
+                DomainAgentRunStatus.AWAITING_HUMAN,
+            }:
+                await transaction.repository.resume_agent_run(run=existing.resume())
             await transaction.commit()
         return run_id
 
@@ -451,6 +538,12 @@ class PostgreSQLExecutionRecorder(ExecutionRecorderPort):
                 organization_id=self._job.organization_id, run_id=run_id
             )
             if existing is not None:
+                if existing.status in {
+                    DomainAgentRunStatus.AWAITING_INPUT,
+                    DomainAgentRunStatus.AWAITING_HUMAN,
+                }:
+                    existing = existing.resume()
+                    await transaction.repository.resume_agent_run(run=existing)
                 await transaction.commit()
                 replayed = (
                     AgentResult.model_validate(existing.typed_output)
@@ -464,7 +557,7 @@ class PostgreSQLExecutionRecorder(ExecutionRecorderPort):
                     replayed_result=replayed,
                 )
             registered = self._registry.resolve(
-                handoff.target_agent_id, handoff.target_agent_version, 2
+                handoff.target_agent_id, handoff.target_agent_version, 3
             )
             await transaction.repository.append_handoff(
                 handoff=AgentHandoffRecord(
@@ -590,10 +683,12 @@ class AssistantTurnExecutor:
         transaction_factory: AssistantTransactionFactory,
         registry: AgentRegistry,
         engine_factory: Callable[[ExecutionRecorderPort], AgentExecutionEngine],
+        assignment_context_resolver: AssignmentContextResolverPort | None = None,
     ) -> None:
         self._transactions = transaction_factory
         self._registry = registry
         self._engine_factory = engine_factory
+        self._assignment_context_resolver = assignment_context_resolver
 
     async def execute_job(self, *, job: AssistantJob, actor: AuthenticatedActor) -> None:
         async with self._transactions(actor) as transaction:
@@ -615,6 +710,17 @@ class AssistantTurnExecutor:
             raise RuntimeError("ASSISTANT_EXECUTION_CONTEXT_INVALID")
         excerpts: list[ConversationExcerpt] = []
         active_planning = resolve_ambient_planning_context(snapshot.messages)
+        pending_followup = None
+        raw_pending = run.checkpoint.get("pending_followup")
+        if isinstance(raw_pending, dict):
+            try:
+                pending_followup = PendingFollowup.model_validate(raw_pending)
+            except ValueError:
+                pending_followup = None
+        active_team = resolve_ambient_team_context(
+            snapshot.messages,
+            pending_followup=pending_followup,
+        )
         for message in snapshot.messages[-12:]:
             text = "\n".join(
                 str(block.get("text", ""))
@@ -643,7 +749,25 @@ class AssistantTurnExecutor:
                     elif action_kind == "PLANNING_REVISE":
                         requested_operation = "REVISE"
                     else:
-                        continue
+                        if action_kind != "TEAM_REVISE" or active_team is None:
+                            continue
+                        try:
+                            recommendation_id = UUID(str(trusted_action["recommendation_id"]))
+                            raw_version = trusted_action["recommendation_version"]
+                            if not isinstance(raw_version, int):
+                                continue
+                            recommendation_version = raw_version
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if (
+                            active_team.recommendation_id != recommendation_id
+                            or active_team.recommendation_version != recommendation_version
+                        ):
+                            continue
+                        active_team = active_team.model_copy(
+                            update={"requested_operation": "REVISE_TEAM"}
+                        )
+                        break
                     try:
                         workflow_run_id = UUID(str(trusted_action["workflow_run_id"]))
                         proposal_id = (
@@ -672,6 +796,16 @@ class AssistantTurnExecutor:
                         requested_operation=requested_operation,
                     )
                     break
+        exact_assignment = None
+        assignment_resolution_issue = None
+        if self._assignment_context_resolver is not None:
+            assignment_resolution = await self._assignment_context_resolver.resolve_assignment(
+                actor=actor, message=turn.objective
+            )
+            exact_assignment = assignment_resolution.exact_context
+            assignment_resolution_issue = assignment_resolution.issue
+            if assignment_resolution.team_context is not None:
+                active_team = assignment_resolution.team_context
         recorder = PostgreSQLExecutionRecorder(
             transaction_factory=self._transactions,
             registry=self._registry,
@@ -703,7 +837,11 @@ class AssistantTurnExecutor:
                     organization_id=actor.organization_id,
                 ),
                 active_context=ActiveConversationContext(
-                    recent_messages=tuple(excerpts), active_planning=active_planning
+                    recent_messages=tuple(excerpts),
+                    active_planning=active_planning,
+                    active_team=active_team,
+                    exact_assignment=exact_assignment,
+                    assignment_resolution_issue=assignment_resolution_issue,
                 ),
             ),
             recorder=recorder,

@@ -1,5 +1,5 @@
-"""Bounded Phase 3 Assignment Specialist Agent."""
+"""Bounded Phase 3 Assignment Specialist Agent.
 
-from work_management_ai.agents.assignment.harness import AssignmentAgentHarness
-
-__all__ = ["AssignmentAgentHarness"]
+The package intentionally avoids importing the Harness eagerly because Tool
+contracts depend on the Agent's snapshot contracts.
+"""

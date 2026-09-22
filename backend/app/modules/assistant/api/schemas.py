@@ -23,9 +23,22 @@ class CreateConversationRequest(BaseModel):
 
 class CardAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["PLANNING_INPUT", "PLANNING_REVISE"]
-    workflow_run_id: UUID
+    kind: Literal["PLANNING_INPUT", "PLANNING_REVISE", "TEAM_REVISE"]
+    workflow_run_id: UUID | None = None
     proposal_id: UUID | None = None
+    recommendation_id: UUID | None = None
+    recommendation_version: int | None = Field(default=None, ge=1)
+
+    @classmethod
+    def _missing_exact_reference(cls) -> ValueError:
+        return ValueError("CARD_ACTION_REFERENCE_MISSING")
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.kind == "TEAM_REVISE":
+            if self.recommendation_id is None or self.recommendation_version is None:
+                raise self._missing_exact_reference()
+        elif self.workflow_run_id is None:
+            raise self._missing_exact_reference()
 
 
 class PostAssistantMessageRequest(BaseModel):
@@ -105,6 +118,35 @@ class DecisionResultBlock(BaseModel):
     decision: Literal["APPROVE", "REJECT", "UNKNOWN"]
     proposal_id: UUID
     proposal_version: int
+    project_id: UUID | None = None
+    continue_team: bool = False
+
+
+class TeamRecommendationBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["team_recommendation"] = "team_recommendation"
+    project_id: UUID
+    recommendation_id: UUID
+    recommendation_version: int = Field(ge=1)
+    status: Literal["PROPOSED", "APPROVED", "REJECTED", "STALE"]
+    explanation_status: Literal["NOT_REQUESTED", "AVAILABLE", "UNAVAILABLE"]
+
+
+class TeamDecisionResultBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["team_decision_result"] = "team_decision_result"
+    recommendation_id: UUID
+    recommendation_version: int = Field(ge=1)
+    decision: Literal["APPROVE", "REJECT"]
+
+
+class AssignmentResultBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["assignment_result"] = "assignment_result"
+    task_id: UUID
+    task_version: int = Field(ge=1)
+    membership_id: UUID
+    warning_codes: list[str] = Field(default_factory=list)
 
 
 class SafeErrorBlock(BaseModel):
@@ -124,6 +166,9 @@ ContentBlock = Annotated[
     | PlanningRunBlock
     | ProposalBlock
     | DecisionResultBlock
+    | TeamRecommendationBlock
+    | TeamDecisionResultBlock
+    | AssignmentResultBlock
     | SafeErrorBlock,
     Field(discriminator="kind"),
 ]
@@ -176,7 +221,12 @@ class MessageResponse(BaseModel):
             _public_block(block, dedupe_key=m.dedupe_key)
             for block in m.content_blocks
             if block.get("kind")
-            not in {"accepted_card_action", "PLANNING_INPUT", "PLANNING_REVISE"}
+            not in {
+                "accepted_card_action",
+                "PLANNING_INPUT",
+                "PLANNING_REVISE",
+                "TEAM_REVISE",
+            }
         )
         return cls(
             id=m.id,

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.api.errors import register_error_handlers
 from app.core.config import Settings, get_settings
 from app.core.database import create_database_engine, create_session_factory
+from app.modules.assistant.adapters.assignment_tools import TeamRecommendationSnapshotAdapter
 from app.modules.assistant.adapters.planning_snapshot import PostgreSQLPlanningSnapshot
 from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransactionFactory
 from app.modules.assistant.api.routes import router as assistant_router
@@ -151,9 +152,7 @@ def create_app(
         if database_engine is None:
             database_engine = create_database_engine(resolved_settings)
         resolved_explicit_assignment_service = ExplicitTaskAssignmentService(
-            SqlAlchemyExplicitAssignmentTransactionFactory(
-                create_session_factory(database_engine)
-            )
+            SqlAlchemyExplicitAssignmentTransactionFactory(create_session_factory(database_engine))
         )
     resolved_manual_planning_service = manual_planning_service
     resolved_team_recommendation_service = team_recommendation_service
@@ -221,6 +220,9 @@ def create_app(
                 transaction_factory=assistant_transaction_factory,
                 planning_snapshot=PostgreSQLPlanningSnapshot(
                     PostgreSQLPlanningRunTransactionFactory(create_session_factory(database_engine))
+                ),
+                team_recommendation_snapshot=TeamRecommendationSnapshotAdapter(
+                    resolved_team_recommendation_service
                 ),
                 orchestrator_version=orchestrator_manifest.agent.version,
                 orchestrator_fingerprint=canonical_manifest_fingerprint(orchestrator_manifest),

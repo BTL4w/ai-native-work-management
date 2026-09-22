@@ -197,10 +197,40 @@ class ProposalResponseBlock(_StrictFrozenModel):
     approval_id: UUID | None
 
 
+class TeamRecommendationResponseBlock(_StrictFrozenModel):
+    kind: Literal["team_recommendation"] = "team_recommendation"
+    project_id: UUID
+    recommendation_id: UUID
+    recommendation_version: int = Field(ge=1)
+    status: Literal["PROPOSED", "APPROVED", "REJECTED", "STALE"]
+    explanation_status: Literal["NOT_REQUESTED", "AVAILABLE", "UNAVAILABLE"]
+
+
+class TeamDecisionResultResponseBlock(_StrictFrozenModel):
+    kind: Literal["team_decision_result"] = "team_decision_result"
+    recommendation_id: UUID
+    recommendation_version: int = Field(ge=1)
+    decision: Literal["APPROVE", "REJECT"]
+
+
+class AssignmentResultResponseBlock(_StrictFrozenModel):
+    kind: Literal["assignment_result"] = "assignment_result"
+    task_id: UUID
+    task_version: int = Field(ge=1)
+    membership_id: UUID
+    warning_codes: tuple[str, ...] = ()
+
+
 class SafeErrorResponseBlock(_StrictFrozenModel):
     kind: Literal["safe_error"] = "safe_error"
     code: str = Field(min_length=1, max_length=100)
     message_key: str = Field(min_length=1, max_length=200)
+    manual_fallback: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        exclude_if=lambda value: value is None,
+    )
 
 
 type ResponseBlock = Annotated[
@@ -211,6 +241,9 @@ type ResponseBlock = Annotated[
     | CapabilityUnavailableResponseBlock
     | PlanningRunResponseBlock
     | ProposalResponseBlock
+    | TeamRecommendationResponseBlock
+    | TeamDecisionResultResponseBlock
+    | AssignmentResultResponseBlock
     | SafeErrorResponseBlock,
     Field(discriminator="kind"),
 ]

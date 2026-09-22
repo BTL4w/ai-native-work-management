@@ -26,6 +26,8 @@ class AssignmentAgentInput(_StrictFrozenModel):
     operation: AssignmentOperation
     locale: Literal["vi", "en"]
     project_id: UUID | None = None
+    planning_proposal_id: UUID | None = None
+    planning_proposal_version: int | None = Field(default=None, ge=1)
     recommendation_id: UUID | None = None
     recommendation_version: int | None = Field(default=None, ge=1)
     task_id: UUID | None = None
@@ -35,6 +37,8 @@ class AssignmentAgentInput(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def references_match_operation(self) -> "AssignmentAgentInput":
+        if (self.planning_proposal_id is None) != (self.planning_proposal_version is None):
+            raise ValueError("planning proposal provenance must be complete")
         if self.operation in {
             AssignmentOperation.RECOMMEND_TEAM,
             AssignmentOperation.ANALYZE_WORKLOAD,
@@ -43,7 +47,8 @@ class AssignmentAgentInput(_StrictFrozenModel):
                 raise ValueError("project_id is required")
         elif self.operation is AssignmentOperation.REVISE_TEAM:
             if (
-                self.recommendation_id is None
+                self.project_id is None
+                or self.recommendation_id is None
                 or self.recommendation_version is None
                 or self.revision_instruction is None
             ):
@@ -104,6 +109,16 @@ class TeamRecommendationSnapshot(_StrictFrozenModel):
     selected_members: tuple[SelectedMemberSnapshot, ...]
     alternatives: tuple[CandidateSnapshot, ...]
     uncovered_requirement_ids: tuple[UUID, ...]
+    observed_at: datetime
+
+
+class TeamRequirementsPendingSnapshot(_StrictFrozenModel):
+    kind: Literal["team_requirements_pending"] = "team_requirements_pending"
+    organization_id: UUID
+    project_id: UUID
+    requirement_set_id: UUID
+    requirement_version: int = Field(ge=1)
+    reason_codes: tuple[str, ...] = Field(min_length=1)
     observed_at: datetime
 
 

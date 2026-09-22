@@ -42,7 +42,7 @@ def validate_execution_plan(
             registered = registry.resolve(
                 step.target_agent_id,
                 step.target_agent_version,
-                active_phase=2,
+                active_phase=3,
             )
         except AgentRegistryError as exc:
             raise ExecutionPlanError("UNKNOWN_OR_INACTIVE_AGENT") from exc
@@ -56,6 +56,11 @@ def validate_execution_plan(
             and manifest.permissions.risk_ceiling is RiskLevel.READ_ONLY
         ):
             raise ExecutionPlanError("PROPOSAL_MODE_NOT_ALLOWED")
+        if step.mode is StepMode.EXPLICIT_WRITE and (
+            manifest.permissions.risk_ceiling is not RiskLevel.EXPLICIT_WRITE
+            or actor.role not in {"ADMIN", "MANAGER"}
+        ):
+            raise ExecutionPlanError("EXPLICIT_WRITE_NOT_ALLOWED")
 
     _reject_cycles(by_id)
     for step in plan.steps:
@@ -102,6 +107,9 @@ def ready_batches(
     proposals = tuple(step for step in ready if step.mode is StepMode.PROPOSAL)
     if proposals:
         return ((proposals[0],),)
+    explicit_writes = tuple(step for step in ready if step.mode is StepMode.EXPLICIT_WRITE)
+    if explicit_writes:
+        return ((explicit_writes[0],),)
     return ()
 
 

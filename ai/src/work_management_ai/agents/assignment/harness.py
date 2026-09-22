@@ -14,6 +14,7 @@ from work_management_ai.agents.assignment.contracts import (
     ExplicitAssignmentSnapshot,
     ProjectWorkloadSnapshot,
     TeamRecommendationSnapshot,
+    TeamRequirementsPendingSnapshot,
     WorkloadExplanation,
 )
 from work_management_ai.agents.assignment.evaluators.explanation import (
@@ -384,13 +385,19 @@ class AssignmentAgentHarness:
     @staticmethod
     def _trusted_tool_input(value: AssignmentAgentInput) -> tuple[str, dict[str, JsonValue]]:
         if value.operation is AssignmentOperation.RECOMMEND_TEAM:
-            typed = ManageTeamInput(action="CREATE", project_id=value.project_id)
+            typed = ManageTeamInput(
+                action="CREATE",
+                project_id=value.project_id,
+                planning_proposal_id=value.planning_proposal_id,
+                planning_proposal_version=value.planning_proposal_version,
+            )
             return "assignment.manage_team", cast(
                 dict[str, JsonValue], typed.model_dump(mode="json", exclude_none=True)
             )
         if value.operation is AssignmentOperation.REVISE_TEAM:
             typed = ManageTeamInput(
                 action="REVISE",
+                project_id=value.project_id,
                 recommendation_id=value.recommendation_id,
                 recommendation_version=value.recommendation_version,
                 revision_instruction=value.revision_instruction,
@@ -413,8 +420,15 @@ class AssignmentAgentHarness:
     @staticmethod
     def _parse_snapshot(
         operation: AssignmentOperation, value: dict[str, JsonValue]
-    ) -> TeamRecommendationSnapshot | ProjectWorkloadSnapshot | ExplicitAssignmentSnapshot:
+    ) -> (
+        TeamRecommendationSnapshot
+        | TeamRequirementsPendingSnapshot
+        | ProjectWorkloadSnapshot
+        | ExplicitAssignmentSnapshot
+    ):
         if operation in {AssignmentOperation.RECOMMEND_TEAM, AssignmentOperation.REVISE_TEAM}:
+            if value.get("kind") == "team_requirements_pending":
+                return TeamRequirementsPendingSnapshot.model_validate(value)
             return TeamRecommendationSnapshot.model_validate(value)
         if operation is AssignmentOperation.ANALYZE_WORKLOAD:
             return ProjectWorkloadSnapshot.model_validate(value)

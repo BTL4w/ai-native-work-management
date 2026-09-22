@@ -110,7 +110,7 @@ def _raise_assistant_error(error: Exception) -> NoReturn:
                 code="RESOURCE_VERSION_MISMATCH",
                 message_key="common.error.resourceVersionMismatch",
             ) from error
-        if code in {"PROPOSAL_ID_REQUIRED"}:
+        if code in {"PROPOSAL_ID_REQUIRED", "RECOMMENDATION_ID_REQUIRED"}:
             raise ApplicationError(
                 status_code=400,
                 code=code,
@@ -233,7 +233,11 @@ async def post_message(
     if_match: IfMatchHeader = None,
 ) -> AssistantTurnAcceptedResponse:
     if_match_version = _expected_version_optional(if_match)
-    card_dict = payload.card_action.model_dump(mode="json") if payload.card_action else None
+    card_dict = (
+        payload.card_action.model_dump(mode="json", exclude_none=True)
+        if payload.card_action
+        else None
+    )
     try:
         result = await service.post_message(
             actor=actor,

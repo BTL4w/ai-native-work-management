@@ -3,7 +3,7 @@
 import asyncio
 import re
 from typing import cast
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from work_management_ai.agents.orchestrator.contracts import (
     ActorContextResolverPort,
@@ -13,6 +13,7 @@ from work_management_ai.agents.orchestrator.contracts import (
     OrchestratorOutput,
     OrchestratorStatus,
     OrchestratorSynthesis,
+    PendingFollowup,
     SpecialistRunnerPort,
     StepMode,
 )
@@ -34,20 +35,29 @@ from work_management_ai.model_gateway.contracts import ModelGateway, StructuredM
 from work_management_ai.model_gateway.errors import ModelGatewayError
 from work_management_ai.runtime.agent_registry import AgentRegistry
 from work_management_ai.runtime.contracts import (
+    ActivityResponseBlock,
     AgentBudget,
     AgentHandoff,
     AgentId,
+    AgentResult,
     AgentRunStatus,
+    AssignmentResultResponseBlock,
     CapabilityUnavailableResponseBlock,
     JsonValue,
+    PlanningRunResponseBlock,
     QuestionResponseBlock,
+    ResponseBlock,
     SafeErrorResponseBlock,
+    TeamRecommendationResponseBlock,
+    TextResponseBlock,
+    WorkEvidenceResponseBlock,
 )
 from work_management_ai.runtime.policy_guard import AgentPolicyError, PolicyGuard
 
 _MAX_PLAN_REPAIRS = 1
 _MAX_REPLANS = 2
 _MAX_HANDOFFS = 6
+_ACTIVE_PHASE = 3
 _REVISION_SIGNALS = (
     "add",
     "change",
@@ -132,10 +142,12 @@ class OrchestratorHarness:
         }
 
     async def build_context(self, state: OrchestratorState) -> dict[str, object]:
-        return {}
+        if state["value"].active_context.assignment_resolution_issue is not None:
+            return {"route": "ask_user", "stop_reason": "ASSIGNMENT_CLARIFICATION_REQUIRED"}
+        return {"route": "execute"}
 
     async def plan_objective(self, state: OrchestratorState) -> dict[str, object]:
-        trusted_plan = self._trusted_planning_action_plan(state)
+        trusted_plan = self._trusted_action_plan(state)
         if trusted_plan is not None:
             updates: dict[str, object] = {
                 "plan": trusted_plan,
@@ -159,7 +171,7 @@ class OrchestratorHarness:
                 requested_handoff=requested,
                 prior_plan=state["prior_plan"],
                 specialist_catalog=self._registry.planning_catalog(
-                    active_phase=2,
+                    active_phase=_ACTIVE_PHASE,
                     role=(state["current_actor"].role if state["current_actor"] else "EMPLOYEE"),
                 ),
             ),
@@ -179,6 +191,12 @@ class OrchestratorHarness:
             updates["original_plan"] = response.parsed
         return updates
 
+    def _trusted_action_plan(self, state: OrchestratorState) -> ExecutionPlan | None:
+        assignment = self._trusted_assignment_action_plan(state)
+        if assignment is not None:
+            return assignment
+        return self._trusted_planning_action_plan(state)
+
     def _trusted_planning_action_plan(self, state: OrchestratorState) -> ExecutionPlan | None:
         active = state["value"].active_context.active_planning
         if active is None or active.requested_operation is None:
@@ -189,7 +207,7 @@ class OrchestratorHarness:
         }[active.requested_operation]
         actor = state["current_actor"]
         catalog = self._registry.planning_catalog(
-            active_phase=2,
+            active_phase=_ACTIVE_PHASE,
             role=(actor.role if actor is not None else "EMPLOYEE"),
         )
         planning_agent = next(
@@ -227,6 +245,64 @@ class OrchestratorHarness:
             response_language=state["value"].locale,
         )
 
+    def _trusted_assignment_action_plan(self, state: OrchestratorState) -> ExecutionPlan | None:
+        value = state["value"]
+        active_team = value.active_context.active_team
+        exact = value.active_context.exact_assignment
+        capability: str | None = None
+        step_id = "assignment"
+        mode = StepMode.PROPOSAL
+        if active_team is not None and active_team.requested_operation == "REVISE_TEAM":
+            capability = "assignment.revise_team"
+            step_id = "revise_team"
+        elif active_team is not None and active_team.requested_operation == "RECOMMEND_TEAM":
+            capability = "assignment.recommend_team"
+            step_id = "recommend_team"
+        elif active_team is not None and active_team.requested_operation == "ANALYZE_WORKLOAD":
+            capability = "assignment.analyze_workload"
+            step_id = "analyze_workload"
+        elif exact is not None:
+            capability = "assignment.assign_task_explicitly"
+            step_id = "assign_task"
+            mode = StepMode.EXPLICIT_WRITE
+        if capability is None:
+            return None
+        actor = state["current_actor"]
+        catalog = self._registry.planning_catalog(
+            active_phase=_ACTIVE_PHASE,
+            role=(actor.role if actor is not None else "EMPLOYEE"),
+        )
+        registered = next(
+            (
+                item
+                for item in catalog
+                if item["agent_id"] == AgentId.ASSIGNMENT.value
+                and capability in cast(list[object], item["capabilities"])
+            ),
+            None,
+        )
+        if registered is None:
+            return ExecutionPlan(
+                objectives=(value.message,),
+                unavailable_capabilities=(capability,),
+                response_language=value.locale,
+            )
+        return ExecutionPlan(
+            objectives=(value.message,),
+            steps=(
+                ExecutionStep(
+                    step_id=step_id,
+                    target_agent_id=AgentId.ASSIGNMENT,
+                    target_agent_version=str(registered["agent_version"]),
+                    capability=capability,
+                    objective=value.message,
+                    typed_input={},
+                    mode=mode,
+                ),
+            ),
+            response_language=value.locale,
+        )
+
     async def validate_plan(self, state: OrchestratorState) -> dict[str, object]:
         plan = state["plan"]
         if plan is None:
@@ -244,6 +320,7 @@ class OrchestratorHarness:
             if plan.response_language != state["value"].locale:
                 raise ExecutionPlanError("RESPONSE_LANGUAGE_MISMATCH")
             self._validate_planning_context(plan, state["value"])
+            self._validate_assignment_context(plan, state["value"])
             requested = state["pending_requested_handoff"]
             prior = state["prior_plan"]
             if requested is not None and prior is not None:
@@ -280,6 +357,41 @@ class OrchestratorHarness:
             ):
                 raise ExecutionPlanError("PLANNING_RESUME_CONTEXT_MISSING")
 
+    @staticmethod
+    def _validate_assignment_context(plan: ExecutionPlan, value: OrchestratorInput) -> None:
+        assignment_steps = tuple(
+            step for step in plan.steps if step.target_agent_id is AgentId.ASSIGNMENT
+        )
+        if not assignment_steps:
+            return
+        active = value.active_context
+        if active.exact_assignment is not None and all(
+            step.capability == "assignment.assign_task_explicitly" for step in assignment_steps
+        ):
+            return
+        if active.active_team is not None and active.active_team.requested_operation is not None:
+            expected = {
+                "REVISE_TEAM": "assignment.revise_team",
+                "RECOMMEND_TEAM": "assignment.recommend_team",
+                "ANALYZE_WORKLOAD": "assignment.analyze_workload",
+            }[active.active_team.requested_operation]
+            if all(step.capability == expected for step in assignment_steps):
+                return
+        planning_steps = {
+            step.step_id for step in plan.steps if step.capability == "planning.create"
+        }
+        combined_is_explicit = (
+            _has_combined_project_team_signal(value.message)
+            and bool(planning_steps)
+            and all(
+                step.capability == "assignment.recommend_team"
+                and bool(planning_steps.intersection(step.depends_on))
+                for step in assignment_steps
+            )
+        )
+        if not combined_is_explicit:
+            raise ExecutionPlanError("ASSIGNMENT_TRUSTED_INTENT_MISSING")
+
     async def select_next_step(self, state: OrchestratorState) -> dict[str, object]:
         plan = state["plan"]
         if plan is None:
@@ -304,7 +416,7 @@ class OrchestratorHarness:
             registered = self._registry.resolve(
                 step.target_agent_id,
                 step.target_agent_version,
-                active_phase=2,
+                active_phase=_ACTIVE_PHASE,
             )
             runtime = registered.manifest.runtime
             handoff = AgentHandoff(
@@ -363,7 +475,47 @@ class OrchestratorHarness:
     def _trusted_specialist_input(
         step: ExecutionStep, value: OrchestratorInput
     ) -> dict[str, JsonValue]:
-        """Reconstruct Planning contracts from trusted turn/card context."""
+        """Reconstruct mutation contracts from trusted turn/card context."""
+        if step.target_agent_id is AgentId.ASSIGNMENT:
+            active_team = value.active_context.active_team
+            exact = value.active_context.exact_assignment
+            if step.capability == "assignment.revise_team" and active_team is not None:
+                return {
+                    "operation": "REVISE_TEAM",
+                    "locale": value.locale,
+                    "project_id": str(active_team.project_id),
+                    "recommendation_id": str(active_team.recommendation_id),
+                    "recommendation_version": active_team.recommendation_version,
+                    "revision_instruction": value.message,
+                }
+            if step.capability == "assignment.assign_task_explicitly" and exact is not None:
+                return {
+                    "operation": "ASSIGN_TASK_EXPLICITLY",
+                    "locale": value.locale,
+                    "task_id": str(exact.task_id),
+                    "task_version": exact.task_version,
+                    "membership_id": str(exact.membership_id),
+                }
+            if active_team is not None and step.capability in {
+                "assignment.recommend_team",
+                "assignment.analyze_workload",
+            }:
+                return {
+                    "operation": (
+                        "RECOMMEND_TEAM"
+                        if step.capability == "assignment.recommend_team"
+                        else "ANALYZE_WORKLOAD"
+                    ),
+                    "locale": value.locale,
+                    "project_id": str(active_team.project_id),
+                    "planning_proposal_id": (
+                        str(active_team.planning_proposal_id)
+                        if active_team.planning_proposal_id is not None
+                        else None
+                    ),
+                    "planning_proposal_version": active_team.planning_proposal_version,
+                }
+            return {}
         if step.target_agent_id is not AgentId.PLANNING:
             return step.typed_input
         base: dict[str, JsonValue] = {"locale": value.locale, "brief": value.message}
@@ -412,6 +564,8 @@ class OrchestratorHarness:
             "results": (*state["results"], *results),
             "completed_step_ids": completed,
         }
+        if self._combined_planning_started(state, results):
+            return {**updates, "route": "human_gate"}
         awaiting_input = next(
             (result for result in results if result.status is AgentRunStatus.AWAITING_INPUT), None
         )
@@ -448,6 +602,12 @@ class OrchestratorHarness:
         plan = state["plan"]
         if plan is None:
             return self._failure("EXECUTION_PLAN_MISSING")
+        assignment_blocks = self._assignment_blocks(state["results"])
+        if assignment_blocks:
+            return {"blocks": assignment_blocks, "route": "execute"}
+        planning_blocks = self._planning_blocks(state["results"])
+        if planning_blocks:
+            return {"blocks": planning_blocks, "route": "execute"}
         request = StructuredModelRequest(
             invocation_key=f"orchestrator.{state['value'].locale}.synthesize",
             messages=build_synthesis_messages(state["value"], plan, state["results"]),
@@ -461,7 +621,10 @@ class OrchestratorHarness:
         blocks = tuple(
             block
             for block in response.parsed.blocks
-            if not isinstance(block, QuestionResponseBlock)
+            if isinstance(
+                block,
+                (TextResponseBlock, ActivityResponseBlock, WorkEvidenceResponseBlock),
+            )
         )
         return {
             "blocks": blocks,
@@ -471,10 +634,61 @@ class OrchestratorHarness:
 
     async def verify_response(self, state: OrchestratorState) -> dict[str, object]:
         if not state["blocks"]:
-            return self._failure("EMPTY_ORCHESTRATOR_RESPONSE")
+            return {
+                "blocks": (
+                    SafeErrorResponseBlock(
+                        code="ORCHESTRATOR_MANUAL_FALLBACK",
+                        message_key="ai.error.manualFallback",
+                    ),
+                ),
+                "status": OrchestratorStatus.FAILED,
+                "stop_reason": "EMPTY_ORCHESTRATOR_RESPONSE",
+            }
         return {"status": OrchestratorStatus.COMPLETED, "stop_reason": "COMPLETED"}
 
     async def ask_user(self, state: OrchestratorState) -> dict[str, object]:
+        issue = state["value"].active_context.assignment_resolution_issue
+        if issue is not None:
+            locale = state["value"].locale
+            if issue == "ASSIGNMENT_FORBIDDEN":
+                return {
+                    "blocks": (
+                        CapabilityUnavailableResponseBlock(
+                            capability="assignment.assign_task_explicitly",
+                            message_key="ai.assignment.forbidden",
+                        ),
+                    ),
+                    "status": OrchestratorStatus.COMPLETED,
+                    "stop_reason": "ASSIGNMENT_FORBIDDEN",
+                }
+            if issue == "TASK_AMBIGUOUS_OR_NOT_FOUND":
+                question = (
+                    "Vui lòng chỉ rõ đúng công việc cần giao."
+                    if locale == "vi"
+                    else "Please specify the exact task to assign."
+                )
+            elif issue == "MEMBER_AMBIGUOUS_OR_NOT_FOUND":
+                question = (
+                    "Vui lòng chỉ rõ đúng thành viên cần giao việc."
+                    if locale == "vi"
+                    else "Please specify the exact member to assign."
+                )
+            else:
+                question = (
+                    "Vui lòng chỉ rõ đúng dự án."
+                    if locale == "vi"
+                    else "Please specify the exact project."
+                )
+            return {
+                "blocks": (
+                    QuestionResponseBlock(
+                        question=question,
+                        response_context={"source": "assignment_resolution"},
+                    ),
+                ),
+                "status": OrchestratorStatus.AWAITING_INPUT,
+                "stop_reason": "ASSIGNMENT_CLARIFICATION_REQUIRED",
+            }
         result = state["last_batch_results"][0]
         question_value = result.typed_output.get("question")
         question = (
@@ -489,6 +703,26 @@ class OrchestratorHarness:
         }
 
     async def human_gate(self, state: OrchestratorState) -> dict[str, object]:
+        pending = self._pending_followup(state)
+        if pending is not None and pending.state == "WAITING_PROJECT_PROPOSAL":
+            result = state["last_batch_results"][0]
+            return {
+                "blocks": (
+                    PlanningRunResponseBlock(
+                        workflow_run_id=pending.planning_workflow_run_id,
+                        status=str(result.typed_output.get("workflow_status", "QUEUED")),
+                    ),
+                ),
+                "status": OrchestratorStatus.AWAITING_HUMAN,
+                "stop_reason": "WAITING_PROJECT_PROPOSAL",
+            }
+        assignment_blocks = self._assignment_blocks(state["last_batch_results"])
+        if assignment_blocks:
+            return {
+                "blocks": assignment_blocks,
+                "status": OrchestratorStatus.AWAITING_HUMAN,
+                "stop_reason": "AWAITING_HUMAN",
+            }
         return {
             "blocks": (
                 QuestionResponseBlock(
@@ -499,6 +733,75 @@ class OrchestratorHarness:
             "status": OrchestratorStatus.AWAITING_HUMAN,
             "stop_reason": "AWAITING_HUMAN",
         }
+
+    @staticmethod
+    def _assignment_blocks(results: tuple[AgentResult, ...]) -> tuple[ResponseBlock, ...]:
+        blocks: list[ResponseBlock] = []
+        for result in results:
+            if result.agent_id is not AgentId.ASSIGNMENT:
+                continue
+            deterministic = result.typed_output.get("deterministic_result")
+            operation = result.typed_output.get("operation")
+            if not isinstance(deterministic, dict):
+                continue
+            if deterministic.get("kind") == "team_requirements_pending":
+                blocks.append(
+                    SafeErrorResponseBlock(
+                        code="TEAM_REQUIREMENTS_CONFIRMATION_REQUIRED",
+                        message_key="ai.assignment.teamRequirementsConfirmationRequired",
+                        manual_fallback="PROJECT_TEAM_EDITOR",
+                    )
+                )
+                continue
+            if operation in {"RECOMMEND_TEAM", "REVISE_TEAM"}:
+                try:
+                    blocks.append(
+                        TeamRecommendationResponseBlock.model_validate(
+                            {
+                                "project_id": deterministic["project_id"],
+                                "recommendation_id": deterministic["recommendation_id"],
+                                "recommendation_version": deterministic["version"],
+                                "status": deterministic["status"],
+                                "explanation_status": result.typed_output.get(
+                                    "explanation_status", "UNAVAILABLE"
+                                ),
+                            }
+                        )
+                    )
+                except (KeyError, ValueError):
+                    continue
+            elif operation == "ASSIGN_TASK_EXPLICITLY":
+                try:
+                    blocks.append(
+                        AssignmentResultResponseBlock.model_validate(
+                            {
+                                "task_id": deterministic["task_id"],
+                                "task_version": deterministic["task_version"],
+                                "membership_id": deterministic["membership_id"],
+                                "warning_codes": deterministic.get("warning_codes", []),
+                            }
+                        )
+                    )
+                except (KeyError, ValueError):
+                    continue
+        return tuple(blocks)
+
+    @staticmethod
+    def _planning_blocks(results: tuple[AgentResult, ...]) -> tuple[ResponseBlock, ...]:
+        blocks: list[ResponseBlock] = []
+        for result in results:
+            if result.agent_id is not AgentId.PLANNING:
+                continue
+            try:
+                blocks.append(
+                    PlanningRunResponseBlock(
+                        workflow_run_id=UUID(str(result.typed_output["workflow_run_id"])),
+                        status=str(result.typed_output["workflow_status"]),
+                    )
+                )
+            except (KeyError, ValueError):
+                continue
+        return tuple(blocks)
 
     async def capability_unavailable(self, state: OrchestratorState) -> dict[str, object]:
         plan = state["plan"]
@@ -518,11 +821,15 @@ class OrchestratorHarness:
         }
 
     async def manual_fallback(self, state: OrchestratorState) -> dict[str, object]:
+        manual_fallback = (
+            "PROJECT_TEAM_EDITOR" if state["value"].active_context.active_team is not None else None
+        )
         return {
             "blocks": (
                 SafeErrorResponseBlock(
                     code="ORCHESTRATOR_MANUAL_FALLBACK",
                     message_key="ai.error.manualFallback",
+                    manual_fallback=manual_fallback,
                 ),
             ),
             "status": OrchestratorStatus.FAILED,
@@ -540,8 +847,75 @@ class OrchestratorHarness:
                 stop_reason=state["stop_reason"],
                 replans_used=state["replans_used"],
                 model_refs=state["model_refs"],
+                pending_followup=self._pending_followup(state),
             )
         }
+
+    @staticmethod
+    def _pending_followup(state: OrchestratorState) -> PendingFollowup | None:
+        plan = state["plan"]
+        if plan is None:
+            return None
+        planning_step_ids = {
+            step.step_id for step in plan.steps if step.capability == "planning.create"
+        }
+        has_dependent_team_step = any(
+            step.capability == "assignment.recommend_team"
+            and bool(planning_step_ids.intersection(step.depends_on))
+            for step in plan.steps
+        )
+        if not has_dependent_team_step:
+            return None
+        result = next(
+            (
+                item
+                for item in state["results"]
+                if item.agent_id is AgentId.PLANNING
+                and item.status in {AgentRunStatus.COMPLETED, AgentRunStatus.AWAITING_HUMAN}
+            ),
+            None,
+        )
+        if result is None:
+            return None
+        try:
+            workflow_run_id = UUID(str(result.typed_output["workflow_run_id"]))
+            proposal_id = result.typed_output.get("proposal_id")
+            proposal_version = result.typed_output.get("proposal_version")
+            if proposal_id is None or proposal_version is None:
+                return PendingFollowup(
+                    planning_workflow_run_id=workflow_run_id,
+                    state="WAITING_PROJECT_PROPOSAL",
+                )
+            return PendingFollowup(
+                planning_workflow_run_id=workflow_run_id,
+                planning_proposal_id=UUID(str(proposal_id)),
+                planning_proposal_version=int(str(proposal_version)),
+                state="WAITING_PROJECT_DECISION",
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _combined_planning_started(
+        state: OrchestratorState, results: tuple[AgentResult, ...]
+    ) -> bool:
+        plan = state["plan"]
+        if plan is None:
+            return False
+        planning_steps = {
+            step.step_id for step in plan.steps if step.capability == "planning.create"
+        }
+        if not any(
+            step.capability == "assignment.recommend_team"
+            and bool(planning_steps.intersection(step.depends_on))
+            for step in plan.steps
+        ):
+            return False
+        return any(
+            result.agent_id is AgentId.PLANNING
+            and result.typed_output.get("workflow_run_id") is not None
+            for result in results
+        )
 
     @staticmethod
     def _failure(code: str) -> dict[str, object]:
@@ -558,3 +932,13 @@ def _has_revision_signal(message: str) -> bool:
         re.search(rf"(?<!\w){re.escape(signal)}(?!\w)", normalized) is not None
         for signal in _REVISION_SIGNALS
     )
+
+
+def _has_combined_project_team_signal(message: str) -> bool:
+    normalized = message.casefold()
+    has_project = any(token in normalized for token in ("project", "dự án"))
+    has_team = any(
+        token in normalized
+        for token in ("form a team", "create a team", "team", "đội ngũ", "nhóm", "nhân sự")
+    )
+    return has_project and has_team

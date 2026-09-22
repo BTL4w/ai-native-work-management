@@ -18,6 +18,10 @@ Never target the Orchestrator as a Specialist and never invent a future Agent.
 Use only exact agent IDs, versions and capability strings from specialist_catalog.
 Represent unavailable capabilities explicitly. Do not output hidden reasoning.
 Read-only steps may be independent; proposal steps must be ordered and human-gated downstream.
+Route Project-only requests only to Planning. Route Assignment only for an explicit team,
+workload, team-revision or exact Task-to-member request supplied through trusted context.
+For combined Project-plus-team requests, keep Assignment dependent on the approved,
+committed Project result. Never manufacture Project, recommendation, Task or member IDs.
 """
 
 

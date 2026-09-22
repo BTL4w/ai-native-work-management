@@ -17,6 +17,11 @@ from app.modules.assistant.adapters.agent_runtime import (
     build_agent_registry,
     build_execution_engine_factory,
 )
+from app.modules.assistant.adapters.assignment_tools import (
+    AssignmentApplicationService,
+    AssistantAssignmentContextResolver,
+    AssistantAssignmentToolAdapter,
+)
 from app.modules.assistant.adapters.planning_tools import AssistantPlanningToolAdapter
 from app.modules.assistant.adapters.transaction import PostgreSQLAssistantTransactionFactory
 from app.modules.assistant.adapters.work_tools import RecordingToolExecutor, WorkToolExecutor
@@ -26,6 +31,12 @@ from app.modules.assistant.application.projection_service import AssistantProjec
 from app.modules.identity.adapters.auth_repository import SqlAlchemyAuthTransactionFactory
 from app.modules.identity.adapters.current_actor import CurrentActorResolver
 from app.modules.identity.application.current_actor_service import CurrentActorService
+from app.modules.organization.adapters.member_repository import SqlAlchemyMemberTransactionFactory
+from app.modules.organization.application.member_service import MemberService
+from app.modules.people_capacity.adapters.repository import (
+    SqlAlchemyPeopleCapacityTransactionFactory,
+)
+from app.modules.people_capacity.application.service import PeopleCapacityService
 from app.modules.planning_runs.adapters.ai_runtime import (
     PlanningAIRuntime,
     build_model_gateway,
@@ -47,6 +58,22 @@ from app.modules.work.planning.adapters.manual_repository import (
     SqlAlchemyManualPlanningTransactionFactory,
 )
 from app.modules.work.planning.application.manual_service import ManualPlanningService
+from app.modules.work.planning.assignment.adapters.recommendation_repository import (
+    SqlAlchemyRecommendationTransactionFactory,
+)
+from app.modules.work.planning.assignment.adapters.repository import (
+    SqlAlchemyExplicitAssignmentTransactionFactory,
+    SqlAlchemyTeamRequirementTransactionFactory,
+)
+from app.modules.work.planning.assignment.application.assignment_service import (
+    ExplicitTaskAssignmentService,
+)
+from app.modules.work.planning.assignment.application.recommendation_service import (
+    TeamRecommendationService,
+)
+from app.modules.work.planning.assignment.application.requirement_service import (
+    TeamRequirementService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,14 +194,30 @@ async def _run_worker() -> None:
         transaction_factory=planning_transaction_factory,
         runtime=planning_runtime,
     )
+    task_service = TaskService(SqlAlchemyTaskTransactionFactory(session_factory))
+    member_service = MemberService(SqlAlchemyMemberTransactionFactory(session_factory))
+    manual_planning_service = ManualPlanningService(
+        SqlAlchemyManualPlanningTransactionFactory(session_factory)
+    )
+    project_service = ProjectService(SqlAlchemyProjectTransactionFactory(session_factory))
+    people_capacity_service = PeopleCapacityService(
+        SqlAlchemyPeopleCapacityTransactionFactory(session_factory)
+    )
+    requirement_service = TeamRequirementService(
+        SqlAlchemyTeamRequirementTransactionFactory(session_factory)
+    )
+    recommendation_service = TeamRecommendationService(
+        SqlAlchemyRecommendationTransactionFactory(session_factory)
+    )
+    explicit_assignment_service = ExplicitTaskAssignmentService(
+        SqlAlchemyExplicitAssignmentTransactionFactory(session_factory)
+    )
     work_tool_backend = WorkToolExecutor(
         actor_resolver=actor_resolver,
         tool_registry=tool_registry,
-        task_service=TaskService(SqlAlchemyTaskTransactionFactory(session_factory)),
-        project_service=ProjectService(SqlAlchemyProjectTransactionFactory(session_factory)),
-        planning_service=ManualPlanningService(
-            SqlAlchemyManualPlanningTransactionFactory(session_factory)
-        ),
+        task_service=task_service,
+        project_service=project_service,
+        planning_service=manual_planning_service,
     )
     work_tool_executor = RecordingToolExecutor(
         transaction_factory=assistant_transaction_factory,
@@ -191,6 +234,20 @@ async def _run_worker() -> None:
             proposal_service=proposal_service,
         ),
     )
+    assignment_application = AssignmentApplicationService(
+        actor_resolver=actor_resolver,
+        requirements=requirement_service,
+        recommendations=recommendation_service,
+        assignments=explicit_assignment_service,
+        people_capacity=people_capacity_service,
+        planning=manual_planning_service,
+        members=member_service,
+    )
+    assignment_tool_executor = RecordingToolExecutor(
+        transaction_factory=assistant_transaction_factory,
+        tool_registry=tool_registry,
+        backend=AssistantAssignmentToolAdapter(application=assignment_application),
+    )
     turn_executor = AssistantTurnExecutor(
         transaction_factory=assistant_transaction_factory,
         registry=registry,
@@ -201,6 +258,12 @@ async def _run_worker() -> None:
             work_tool_executor=work_tool_executor,
             transaction_factory=assistant_transaction_factory,
             planning_tool_executor=planning_tool_executor,
+            assignment_tool_executor=assignment_tool_executor,
+        ),
+        assignment_context_resolver=AssistantAssignmentContextResolver(
+            tasks=task_service,
+            members=member_service,
+            projects=project_service,
         ),
     )
     assistant_execution_service = AssistantExecutionService(

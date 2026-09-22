@@ -86,6 +86,10 @@ class _Repository:
         self.cursors[item.agent_run.id] = item.event.sequence
         return True
 
+    async def resume_confirmed_team_followups(self, *, organization_id, limit):
+        del organization_id, limit
+        return 0
+
 
 class _Transaction(AbstractAsyncContextManager["_Transaction"]):
     def __init__(self, repository: _Repository, *, crash: bool = False) -> None:
@@ -294,7 +298,12 @@ async def test_task8_finalize_projects_approve_and_reject_without_model_call(
 ) -> None:
     item = _item(
         "workflow.completed",
-        {"decision": decision, "proposal_id": str(uuid4()), "proposal_version": 3},
+        {
+            "decision": decision,
+            "proposal_id": str(uuid4()),
+            "proposal_version": 3,
+            "project_id": str(uuid4()) if decision == "APPROVE" else None,
+        },
     )
     repository = _Repository([item])
 
@@ -302,6 +311,7 @@ async def test_task8_finalize_projects_approve_and_reject_without_model_call(
 
     assert repository.projected[0]["blocks"][0]["kind"] == "decision_result"
     assert repository.projected[0]["blocks"][0]["decision"] == decision
+    assert repository.projected[0]["blocks"][0]["continue_team"] is False
     assert repository.projected[0]["status"] == "COMPLETED"
     assert repository.model_calls == repository.business_calls == 0
 

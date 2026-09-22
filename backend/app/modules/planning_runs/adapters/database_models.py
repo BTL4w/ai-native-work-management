@@ -188,33 +188,47 @@ class ProposalVersionModel(Base):
         JSONB,
         default=dict,
         server_default=text(
-            '\'{"status": "UNKNOWN", "is_valid": null, '
-            '"errors": [], "warnings": []}\'::jsonb'
+            '\'{"status": "UNKNOWN", "is_valid": null, "errors": [], "warnings": []}\'::jsonb'
         ),
     )
     source_reference_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, default=list, server_default=text("'[]'::jsonb"),
+        JSONB,
+        default=list,
+        server_default=text("'[]'::jsonb"),
     )
     workflow_version: Mapped[str] = mapped_column(
-        String(50), default="UNKNOWN", server_default="UNKNOWN",
+        String(50),
+        default="UNKNOWN",
+        server_default="UNKNOWN",
     )
     prompt_version: Mapped[str] = mapped_column(
-        String(50), default="UNKNOWN", server_default="UNKNOWN",
+        String(50),
+        default="UNKNOWN",
+        server_default="UNKNOWN",
     )
     schema_version: Mapped[str] = mapped_column(
-        String(50), default="UNKNOWN", server_default="UNKNOWN",
+        String(50),
+        default="UNKNOWN",
+        server_default="UNKNOWN",
     )
     model_reference: Mapped[str] = mapped_column(
-        String(100), default="UNKNOWN", server_default="UNKNOWN",
+        String(100),
+        default="UNKNOWN",
+        server_default="UNKNOWN",
     )
     verifier_version: Mapped[str] = mapped_column(
-        String(50), default="UNKNOWN", server_default="UNKNOWN",
+        String(50),
+        default="UNKNOWN",
+        server_default="UNKNOWN",
     )
     creator_type: Mapped[str] = mapped_column(
-        String(50), default="UNKNOWN", server_default="UNKNOWN",
+        String(50),
+        default="UNKNOWN",
+        server_default="UNKNOWN",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        DateTime(timezone=True),
+        server_default=func.now(),
     )
 
 
@@ -415,6 +429,7 @@ class OutboxEventModel(Base):
     locked_by_worker_id: Mapped[str | None] = mapped_column(String(100))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     occurred_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        DateTime(timezone=True),
+        server_default=func.now(),
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

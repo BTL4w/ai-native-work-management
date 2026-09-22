@@ -134,11 +134,10 @@ class Settings(BaseSettings):
         if not self.worker_id.strip():
             import os
             import socket
-            object.__setattr__(
-                self, "worker_id",
-                f"worker-{socket.gethostname()}-{os.getpid()}"
-            )
+
+            object.__setattr__(self, "worker_id", f"worker-{socket.gethostname()}-{os.getpid()}")
         return self
+
 
 @lru_cache
 def get_settings() -> Settings:

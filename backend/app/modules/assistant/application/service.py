@@ -74,6 +74,14 @@ class PlanningSnapshotPort(Protocol):
         ...
 
 
+class TeamRecommendationSnapshotPort(Protocol):
+    """Read-only port for stale-safe team recommendation card actions."""
+
+    async def get_recommendation_version(
+        self, *, actor: AuthenticatedActor, recommendation_id: UUID
+    ) -> int | None: ...
+
+
 # ---------------------------------------------------------------------------
 # Fingerprint helpers
 # ---------------------------------------------------------------------------
@@ -134,11 +142,13 @@ class AssistantService:
         *,
         transaction_factory: Any,
         planning_snapshot: PlanningSnapshotPort,
+        team_recommendation_snapshot: TeamRecommendationSnapshotPort | None = None,
         orchestrator_version: str,
         orchestrator_fingerprint: str,
     ) -> None:
         self._transactions = transaction_factory
         self._planning_snapshot = planning_snapshot
+        self._team_recommendation_snapshot = team_recommendation_snapshot
         self._orchestrator_version = orchestrator_version
         self._orchestrator_fingerprint = orchestrator_fingerprint
 
@@ -270,6 +280,25 @@ class AssistantService:
             current_version = await self._planning_snapshot.get_proposal_version(
                 actor=actor,
                 proposal_id=proposal_id,
+            )
+            if current_version is None:
+                raise ResourceNotFoundError()
+            if current_version != if_match_version:
+                raise AssistantServiceError("RESOURCE_VERSION_MISMATCH")
+
+        if card_kind == "TEAM_REVISE":
+            if not card_action or not card_action.get("recommendation_id"):
+                raise AssistantServiceError("RECOMMENDATION_ID_REQUIRED")
+            if if_match_version is None:
+                raise AssistantServiceError("IF_MATCH_REQUIRED")
+            if self._team_recommendation_snapshot is None:
+                raise AssistantServiceError("ASSISTANT_UNAVAILABLE")
+            if card_action.get("recommendation_version") != if_match_version:
+                raise AssistantServiceError("RESOURCE_VERSION_MISMATCH")
+            recommendation_id = UUID(str(card_action["recommendation_id"]))
+            current_version = await self._team_recommendation_snapshot.get_recommendation_version(
+                actor=actor,
+                recommendation_id=recommendation_id,
             )
             if current_version is None:
                 raise ResourceNotFoundError()

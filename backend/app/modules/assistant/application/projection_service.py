@@ -7,6 +7,56 @@ from app.modules.assistant.application.ports import (
     AssistantTransactionFactory,
     LinkedWorkflowEvent,
 )
+from app.modules.planning_runs.domain.models import WorkflowEvent
+from work_management_ai.agents.orchestrator.contracts import PendingFollowup
+
+
+def advance_pending_followup(
+    checkpoint: dict[str, Any], event: WorkflowEvent
+) -> tuple[dict[str, Any], bool]:
+    """Advance only an exact persisted Project-to-Team continuation."""
+
+    raw = checkpoint.get("pending_followup")
+    if not isinstance(raw, dict):
+        return dict(checkpoint), False
+    try:
+        pending = PendingFollowup.model_validate(raw)
+    except ValueError:
+        return dict(checkpoint), False
+    if pending.planning_workflow_run_id != event.workflow_run_id:
+        return dict(checkpoint), False
+    if event.event_type == "proposal.ready" and pending.state == "WAITING_PROJECT_PROPOSAL":
+        try:
+            updated = pending.bind_proposal(
+                proposal_id=UUID(str(event.public_payload["proposal_id"])),
+                proposal_version=int(str(event.public_payload["version"])),
+            )
+        except (KeyError, TypeError, ValueError):
+            return dict(checkpoint), False
+        return {
+            **checkpoint,
+            "pending_followup": updated.model_dump(mode="json"),
+        }, False
+    if event.event_type != "workflow.completed" or pending.state != "WAITING_PROJECT_DECISION":
+        return dict(checkpoint), False
+    decision = event.public_payload.get("decision")
+    project_id = event.public_payload.get("project_id")
+    proposal_id = event.public_payload.get("proposal_id")
+    proposal_version = event.public_payload.get("proposal_version")
+    if (
+        str(pending.planning_proposal_id) != str(proposal_id)
+        or pending.planning_proposal_version != proposal_version
+    ):
+        return dict(checkpoint), False
+    updated = (
+        pending.mark_ready(project_id=UUID(str(project_id)))
+        if decision == "APPROVE" and project_id is not None
+        else pending.mark_cancelled()
+    )
+    return {
+        **checkpoint,
+        "pending_followup": updated.model_dump(mode="json"),
+    }, updated.state == "READY"
 
 
 class AssistantProjectionService:
@@ -32,6 +82,10 @@ class AssistantProjectionService:
                     safe_error_code=safe_error,
                 ):
                     projected += 1
+            projected += await transaction.repository.resume_confirmed_team_followups(
+                organization_id=organization_id,
+                limit=bounded,
+            )
             await transaction.commit()
             return projected
 
@@ -122,6 +176,8 @@ class AssistantProjectionService:
                         "decision": str(payload.get("decision", "UNKNOWN")),
                         "proposal_id": str(payload.get("proposal_id", "")),
                         "proposal_version": int(payload.get("proposal_version", 0)),
+                        "project_id": payload.get("project_id"),
+                        "continue_team": False,
                     },
                 ),
                 "COMPLETED",

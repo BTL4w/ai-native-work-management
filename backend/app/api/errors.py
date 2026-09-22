@@ -148,9 +148,7 @@ def register_error_handlers(app: FastAPI) -> None:
     async def handle_validation_error(  # pyright: ignore[reportUnusedFunction]
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        if not await _audit_pending_mutation_rejection(
-            request, reason_code="VALIDATION_FAILED"
-        ):
+        if not await _audit_pending_mutation_rejection(request, reason_code="VALIDATION_FAILED"):
             return _audit_unavailable_response(request)
         field_errors = [
             FieldError(
