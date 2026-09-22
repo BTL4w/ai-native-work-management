@@ -6,6 +6,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { decideApproval, editProposal } from "@/features/ai-proposals/api";
 import type { ProposalContent } from "@/features/ai-proposals/contracts";
+import { decideRecommendation, recordRecommendationFeedback, reviseRecommendation } from "@/features/project-team/api";
+import type { CandidateOverrideInput, RecommendationVersion } from "@/features/project-team/contracts";
 import type { MeResponse } from "@/shared/api/contracts";
 import { ApiError, isDefinitiveMutationRejection } from "@/shared/api/client";
 
@@ -17,6 +19,7 @@ import { connectAssistantEvents } from "./event-source";
 import { Transcript } from "./transcript";
 
 type ProposalBlock = Extract<AssistantBlock, { kind: "proposal" }>;
+type TeamRecommendationBlock = Extract<AssistantBlock, { kind: "team_recommendation" }>;
 type Attempt = { fingerprint: string; key: string };
 type Connection = { close(): void };
 type ConnectEvents = (options: Parameters<typeof connectAssistantEvents>[0]) => Connection;
@@ -89,10 +92,13 @@ export function AssistantShell({
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [teamRevisionTarget, setTeamRevisionTarget] = useState<TeamRecommendationBlock | null>(null);
+  const [teamFeedbackWarning, setTeamFeedbackWarning] = useState(false);
   const createAttempt = useAttempt();
   const messageAttempt = useAttempt();
   const editAttempt = useAttempt();
   const decisionAttempt = useAttempt();
+  const teamMutationAttempt = useAttempt();
 
   const conversationsKey = assistantKeys.conversations(organizationId, membershipId);
   const conversations = useQuery({
@@ -138,7 +144,7 @@ export function AssistantShell({
   );
 
   async function send(input: PostMessageInput, version?: number) {
-    if (submitting) return;
+    if (submitting) return false;
     setSubmitting(true); setError(null);
     try {
       let conversationId = activeConversationId;
@@ -153,20 +159,29 @@ export function AssistantShell({
       await postAssistantMessage(conversationId, input, messageAttempt.key({ conversationId, input, version }), version);
       messageAttempt.reset(); setMessage("");
       await queryClient.invalidateQueries({ queryKey: assistantKeys.conversation(organizationId, membershipId, conversationId) });
+      return true;
     } catch (caught) {
       setError(caught);
       if (isDefinitiveMutationRejection(caught)) messageAttempt.reset();
+      if (caught instanceof ApiError && caught.code === "RESOURCE_VERSION_MISMATCH") await snapshot.refetch();
+      return false;
     } finally { setSubmitting(false); }
   }
 
   function submitComposer() {
     const normalized = message.trim();
     if (!normalized) return;
+    if (teamRevisionTarget) {
+      const target = teamRevisionTarget;
+      void send({ message: normalized, locale, card_action: {
+        kind: "TEAM_REVISE",
+        recommendation_id: target.recommendation_id,
+        recommendation_version: target.recommendation_version,
+      } }, target.recommendation_version).then((sent) => { if (sent) setTeamRevisionTarget(null); });
+      return;
+    }
     const workflowRunId = latestQuestion?.response_context.workflow_run_id;
-    const cardAction = typeof workflowRunId === "string" ? {
-      kind: "PLANNING_INPUT" as const,
-      workflow_run_id: workflowRunId,
-    } : undefined;
+    const cardAction = typeof workflowRunId === "string" ? { kind: "PLANNING_INPUT" as const, workflow_run_id: workflowRunId } : undefined;
     void send({ message: normalized, locale, ...(cardAction ? { card_action: cardAction } : {}) });
   }
 
@@ -204,6 +219,52 @@ export function AssistantShell({
     } finally { setSubmitting(false); }
   }
 
+  async function reviseTeam(base: RecommendationVersion, overrides: CandidateOverrideInput[]) {
+    const payload = { recommendationId: base.recommendation_id, version: base.version, overrides };
+    setSubmitting(true); setError(null); setTeamFeedbackWarning(false);
+    try {
+      const result = await reviseRecommendation(base.recommendation_id, overrides, base.version, teamMutationAttempt.key(payload));
+      teamMutationAttempt.reset();
+      const comment = overrides.map((override) => override.override_reason?.trim()).filter(Boolean).join("; ");
+      try {
+        await recordRecommendationFeedback(base.recommendation_id, result.data.version, "override", comment, teamMutationAttempt.key({ ...payload, action: "feedback", version: result.data.version, comment }));
+        teamMutationAttempt.reset();
+      } catch (caught) {
+        if (isDefinitiveMutationRejection(caught)) teamMutationAttempt.reset();
+        setTeamFeedbackWarning(true);
+      }
+      await snapshot.refetch();
+      return result.data;
+    } catch (caught) {
+      setError(caught); if (isDefinitiveMutationRejection(caught)) teamMutationAttempt.reset();
+      if (caught instanceof ApiError && caught.code === "RESOURCE_VERSION_MISMATCH") await snapshot.refetch();
+      return null;
+    } finally { setSubmitting(false); }
+  }
+
+  async function decideTeam(base: RecommendationVersion, action: "approve" | "reject", reason: string | null) {
+    const payload = { recommendationId: base.recommendation_id, version: base.version, action, reason };
+    setSubmitting(true); setError(null); setTeamFeedbackWarning(false);
+    try {
+      const result = await decideRecommendation(base.recommendation_id, base.version, action, reason, teamMutationAttempt.key(payload));
+      teamMutationAttempt.reset();
+      try {
+        await recordRecommendationFeedback(base.recommendation_id, base.version, action === "approve" ? "accept" : "reject", reason ?? "", teamMutationAttempt.key({ ...payload, action: "feedback" }));
+        teamMutationAttempt.reset();
+      } catch (caught) {
+        if (isDefinitiveMutationRejection(caught)) teamMutationAttempt.reset();
+        setTeamFeedbackWarning(true);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["projectTeam"] });
+      await snapshot.refetch();
+      return result.data;
+    } catch (caught) {
+      setError(caught); if (isDefinitiveMutationRejection(caught)) teamMutationAttempt.reset();
+      if (caught instanceof ApiError && caught.code === "RESOURCE_VERSION_MISMATCH") await snapshot.refetch();
+      return null;
+    } finally { setSubmitting(false); }
+  }
+
   const visibleError = error ?? snapshot.error ?? conversations.error;
 
   return <section className={`assistant-shell ${collapsed ? "is-sidebar-collapsed" : ""} ${assistantActive ? "" : "has-workspace-pane"}`} aria-labelledby={assistantActive ? "assistant-title" : "workspace-title"}>
@@ -227,6 +288,7 @@ export function AssistantShell({
     {assistantActive ? <div className="assistant-main-pane">
         <header className="assistant-header"><div><p>{t("eyebrow")}</p><h1 id="assistant-title">{t("title")}</h1></div></header>
         {visibleError ? <div className="assistant-safe-notice" role="alert"><p>{t("error.safe")}</p>{visibleError instanceof ApiError && visibleError.requestId ? <p>{t("error.reference", { requestId: visibleError.requestId })}</p> : null}</div> : null}
+        {teamFeedbackWarning ? <div className="assistant-safe-notice" role="status"><p>{t("teamRecommendation.feedbackWarning")}</p></div> : null}
         {snapshot.isPending && activeConversationId ? <p role="status">{t("loading")}</p> : <Transcript
           messages={snapshot.data?.messages ?? []}
           canManage={canManage}
@@ -234,8 +296,12 @@ export function AssistantShell({
           onRevise={revise}
           onApprove={(block) => void decide(block, "APPROVE")}
           onReject={(block) => void decide(block, "REJECT")}
+          onTeamRevise={(block) => { setTeamRevisionTarget(block); setMessage(""); setError(null); }}
+          onTeamManualRevise={reviseTeam}
+          onTeamDecide={decideTeam}
           onContinueManually={onContinueManually}
         />}
+        {teamRevisionTarget ? <div className="assistant-revision-context" role="status"><span>{t("teamRecommendation.revisionContext", { version: teamRevisionTarget.recommendation_version })}</span><button type="button" onClick={() => setTeamRevisionTarget(null)}>{t("teamRecommendation.cancelRevision")}</button></div> : null}
         <Composer value={message} disabled={submitting} autoFocus={!activeConversationId || (snapshot.data?.messages.length ?? 0) === 0} onChange={setMessage} onSubmit={submitComposer} />
       </div> : <div className="assistant-workspace-pane">
         <header className="assistant-workspace-header">

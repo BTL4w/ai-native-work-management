@@ -26,6 +26,7 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 const noEvents = () => ({ close() {} });
 const proposalId = "55555555-5555-4555-8555-555555555555";
 const approvalId = "66666666-6666-4666-8666-666666666666";
+const recommendationId = "77777777-7777-4777-8777-777777777777";
 const proposalContent = {
   project: { title: "Launch", description: null, start_date: "2026-09-01", due_date: "2026-09-14" },
   goal: { title: "Ship safely", description: null, expected_outcomes: ["Live"], target_date: "2026-09-14" },
@@ -365,6 +366,99 @@ describe("AssistantShell", () => {
     expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({
       card_action: { kind: "PLANNING_REVISE", workflow_run_id: workflowRunId, proposal_id: proposalId },
     });
+  });
+
+  it("sends an exact TEAM_REVISE action from the inline recommendation card", async () => {
+    const recommendation = {
+      recommendation_id: recommendationId,
+      version: 1,
+      requirement_set_id: "88888888-8888-4888-8888-888888888888",
+      requirement_version: 1,
+      policy_version: "ranking-v1",
+      status: "PROPOSED",
+      selections: [],
+      alternatives: [],
+      uncovered: [],
+      demands: [],
+      diff: null,
+      explanation_status: "UNAVAILABLE",
+    };
+    const teamSnapshot = { conversation, messages: [{
+      id: messageId,
+      sequence: 1,
+      role: "ASSISTANT",
+      content_blocks: [{
+        kind: "team_recommendation",
+        project_id: "99999999-9999-4999-8999-999999999999",
+        recommendation_id: recommendationId,
+        recommendation_version: 1,
+        status: "PROPOSED",
+        explanation_status: "UNAVAILABLE",
+      }],
+      created_at: "2026-08-13T10:01:00Z",
+    }] };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (path === `/api/v1/ai/conversations/${conversationId}`) return response(teamSnapshot);
+      if (path === `/api/v1/recommendations/${recommendationId}/versions/1`) return response(recommendation);
+      if (path.endsWith("/messages") && init?.method === "POST") return response({
+        conversation_id: conversationId, message_id: messageId, turn_id: workflowRunId,
+        orchestration_run_id: workflowRunId, status: "QUEUED",
+      }, 202);
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={noEvents} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Yêu cầu chỉnh đội" }));
+    expect(screen.getByText("Đang chỉnh đề xuất đội ngũ từ v1")).toBeVisible();
+    const composer = screen.getByRole("textbox", { name: "Nhắn cho Trợ lý AI" });
+    fireEvent.change(composer, { target: { value: "Đổi Lan thành Minh vì tuần 2 quá tải" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith("/messages") && init?.method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith("/messages") && init?.method === "POST");
+    expect(new Headers(post?.[1]?.headers).get("If-Match")).toBe('"1"');
+    expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({
+      message: "Đổi Lan thành Minh vì tuần 2 quá tải",
+      card_action: { kind: "TEAM_REVISE", recommendation_id: recommendationId, recommendation_version: 1 },
+    });
+  });
+
+  it("keeps direct inline team edits bound to the visible immutable version", async () => {
+    const recommendation = {
+      recommendation_id: recommendationId, version: 1,
+      requirement_set_id: "88888888-8888-4888-8888-888888888888", requirement_version: 1,
+      policy_version: "ranking-v1", status: "PROPOSED", selections: [], alternatives: [], uncovered: [], demands: [], diff: null,
+      explanation_status: "AVAILABLE",
+    };
+    const teamSnapshot = { conversation, messages: [{
+      id: messageId, sequence: 1, role: "ASSISTANT", created_at: "2026-08-13T10:01:00Z",
+      content_blocks: [{ kind: "team_recommendation", project_id: proposalId, recommendation_id: recommendationId, recommendation_version: 1, status: "PROPOSED", explanation_status: "AVAILABLE" }],
+    }] };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/ai/conversations") return response({ items: [conversation] });
+      if (path === `/api/v1/ai/conversations/${conversationId}`) return response(teamSnapshot);
+      if (path === `/api/v1/recommendations/${recommendationId}/versions/1`) return response(recommendation);
+      if (path === `/api/v1/recommendations/${recommendationId}` && init?.method === "PATCH") return response({ ...recommendation, version: 2, diff: { added_membership_ids: [], removed_membership_ids: [], before: [], after: [] } });
+      if (path === `/api/v1/recommendations/${recommendationId}/feedback` && init?.method === "POST") return response({ id: workflowRunId, recommendation_id: recommendationId, version: 2, kind: "override", comment: "" }, 201);
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithAppProviders(<AssistantShell actor={managerActor} connectEvents={noEvents} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Đổi thành viên" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lưu thành phiên bản 2" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => String(path) === `/api/v1/recommendations/${recommendationId}` && init?.method === "PATCH")).toBe(true));
+    const patch = fetchMock.mock.calls.find(([path, init]) => String(path) === `/api/v1/recommendations/${recommendationId}` && init?.method === "PATCH");
+    expect(new Headers(patch?.[1]?.headers).get("If-Match")).toBe('"1"');
+    expect(new Headers(patch?.[1]?.headers).get("Idempotency-Key")).toBeTruthy();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/feedback"))).toBe(true));
+    const feedback = fetchMock.mock.calls.find(([path]) => String(path).endsWith("/feedback"));
+    expect(JSON.parse(String(feedback?.[1]?.body))).toEqual({ version: 2, kind: "override", comment: "" });
   });
 
   it("edits the proposal inline, expands weeks on demand, and keeps exact-version mutations", async () => {

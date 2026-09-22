@@ -5,6 +5,7 @@ import { renderWithAppProviders } from "@/test/render";
 
 import { ActivityBlock } from "./activity-block";
 import { PlanningBlock } from "./planning-block";
+import { TeamRecommendationBlock } from "./team-recommendation-block";
 import { UnavailableBlock } from "./unavailable-block";
 import { WorkEvidenceBlock } from "./work-evidence-block";
 
@@ -214,5 +215,92 @@ describe("Assistant blocks", () => {
     expect(await screen.findByText("Proposal chưa vượt qua deterministic validation.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Phê duyệt kế hoạch" })).toBeDisabled();
     expect(screen.queryByText("Đã kiểm tra thời hạn, dependency và dữ liệu bắt buộc")).not.toBeInTheDocument();
+  });
+
+  it("shows an immutable team diff with expandable evidence and workload", async () => {
+    const recommendationId = "44444444-4444-4444-8444-444444444444";
+    const requirementId = "55555555-5555-4555-8555-555555555555";
+    const oldMemberId = "66666666-6666-4666-8666-666666666666";
+    const newMemberId = "77777777-7777-4777-8777-777777777777";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      recommendation_id: recommendationId,
+      version: 2,
+      requirement_set_id: "88888888-8888-4888-8888-888888888888",
+      requirement_version: 1,
+      policy_version: "ranking-v1",
+      status: "PROPOSED",
+      selections: [{ requirement_id: requirementId, membership_id: newMemberId, allocated_effort_hours: "8", warning_codes: [], override_reason: null }],
+      alternatives: [
+        { requirement_id: requirementId, membership_id: oldMemberId, display_name: "Lan", eligible: true, hard_failure_codes: [], skill_points: "0.5", capacity_points: "0.3", evidence_points: "0.1", familiarity_points: "0.1", total_points: "1.0", effective_capacity_hours: 40, residual_capacity_hours: 20, evidence: [] },
+        { requirement_id: requirementId, membership_id: newMemberId, display_name: "Minh", eligible: true, hard_failure_codes: [], skill_points: "0.5", capacity_points: "0.3", evidence_points: "0.1", familiarity_points: "0.1", total_points: "1.0", effective_capacity_hours: 40, residual_capacity_hours: 12, evidence: [{ id: "99999999-9999-4999-8999-999999999999", summary: "Delivered onboarding", source_resource_type: "task", source_resource_id: proposalId }] },
+      ],
+      uncovered: [],
+      demands: [{ requirement_id: requirementId, project_week_id: workflowRunId, effort_hours: "8" }],
+      diff: {
+        added_membership_ids: [newMemberId],
+        removed_membership_ids: [oldMemberId],
+        before: [{ requirement_id: requirementId, membership_id: oldMemberId, allocated_effort_hours: "8", warning_codes: [], override_reason: null }],
+        after: [{ requirement_id: requirementId, membership_id: newMemberId, allocated_effort_hours: "8", warning_codes: [], override_reason: null }],
+      },
+      explanation_status: "UNAVAILABLE",
+    }), { headers: { "Content-Type": "application/json" } })));
+
+    renderWithAppProviders(<TeamRecommendationBlock
+      block={{ kind: "team_recommendation", project_id: proposalId, recommendation_id: recommendationId, recommendation_version: 2, status: "PROPOSED", explanation_status: "UNAVAILABLE" }}
+      canManage
+      isLatest={false}
+      onRequestRevision={vi.fn()}
+      onManualRevise={vi.fn()}
+      onDecide={vi.fn()}
+    />);
+
+    expect(await screen.findByText("Đề xuất v2 chỉ đọc vì đã có phiên bản mới hơn.")).toBeVisible();
+    expect(screen.getByText("Lan → Minh")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Yêu cầu chỉnh đội" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Điểm số, minh chứng và khối lượng"));
+    expect(screen.getByText("Delivered onboarding")).toBeVisible();
+    expect(screen.getByText("Còn lại 12 giờ")).toBeVisible();
+    expect(screen.getByText("Không có giải thích AI; xếp hạng xác định vẫn khả dụng.")).toBeVisible();
+  });
+
+  it("offers the manual Team path when an inline recommendation cannot load", async () => {
+    const onOpenTeam = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: {
+      code: "MODEL_UNAVAILABLE", message_key: "assistant.error.safe", request_id: "request-1", field_errors: [], details: {},
+    } }), { status: 503, headers: { "Content-Type": "application/json" } })));
+
+    renderWithAppProviders(<TeamRecommendationBlock
+      block={{ kind: "team_recommendation", project_id: proposalId, recommendation_id: "44444444-4444-4444-8444-444444444444", recommendation_version: 1, status: "PROPOSED", explanation_status: "UNAVAILABLE" }}
+      canManage
+      isLatest
+      onRequestRevision={vi.fn()}
+      onManualRevise={vi.fn()}
+      onDecide={vi.fn()}
+      onOpenTeam={onOpenTeam}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mở tab Đội ngũ" }));
+    expect(onOpenTeam).toHaveBeenCalledWith(proposalId);
+  });
+
+  it("states the zero-assignment boundary before an inline team approval", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      recommendation_id: "44444444-4444-4444-8444-444444444444", version: 1,
+      requirement_set_id: "55555555-5555-4555-8555-555555555555", requirement_version: 1,
+      policy_version: "ranking-v1", status: "PROPOSED", selections: [], alternatives: [], uncovered: [], demands: [], diff: null,
+      explanation_status: "AVAILABLE",
+    }), { headers: { "Content-Type": "application/json" } })));
+
+    renderWithAppProviders(<TeamRecommendationBlock
+      block={{ kind: "team_recommendation", project_id: proposalId, recommendation_id: "44444444-4444-4444-8444-444444444444", recommendation_version: 1, status: "PROPOSED", explanation_status: "AVAILABLE" }}
+      canManage
+      isLatest
+      onRequestRevision={vi.fn()}
+      onManualRevise={vi.fn()}
+      onDecide={vi.fn()}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Phê duyệt đội ngũ" }));
+    expect(screen.getByText("Phê duyệt chỉ thêm thành viên Project Team và không giao Task.")).toBeVisible();
   });
 });

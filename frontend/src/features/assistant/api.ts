@@ -5,6 +5,7 @@ import {
   conversationListSchema,
   conversationSchema,
   conversationSnapshotSchema,
+  postMessageInputSchema,
   type AssistantConversation,
   type AssistantTurnAccepted,
   type ConversationSnapshot,
@@ -54,6 +55,7 @@ export function postAssistantMessage(
   key: string,
   version?: number,
 ): Promise<ApiResult<AssistantTurnAccepted>> {
+  const payload = postMessageInputSchema.parse(input);
   return requestJsonWithMetadata(`/api/v1/ai/conversations/${conversationId}/messages`, {
     schema: assistantTurnAcceptedSchema,
     expectedStatus: 202,
@@ -64,7 +66,7 @@ export function postAssistantMessage(
         "Idempotency-Key": key,
         ...(version === undefined ? {} : { "If-Match": `"${version}"` }),
       },
-      body: JSON.stringify(input),
+      body: JSON.stringify(payload),
     },
   });
 }

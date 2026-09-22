@@ -56,6 +56,29 @@ export const decisionResultBlockSchema = strict({
   decision: z.enum(["APPROVE", "REJECT", "UNKNOWN"]),
   proposal_id: uuid,
   proposal_version: z.number().int().positive(),
+  project_id: uuid.nullable().optional(),
+  continue_team: z.boolean().default(false),
+});
+export const teamRecommendationBlockSchema = strict({
+  kind: z.literal("team_recommendation"),
+  project_id: uuid,
+  recommendation_id: uuid,
+  recommendation_version: z.number().int().positive(),
+  status: z.enum(["PROPOSED", "APPROVED", "REJECTED", "STALE"]),
+  explanation_status: z.enum(["NOT_REQUESTED", "AVAILABLE", "UNAVAILABLE"]),
+});
+export const teamDecisionResultBlockSchema = strict({
+  kind: z.literal("team_decision_result"),
+  recommendation_id: uuid,
+  recommendation_version: z.number().int().positive(),
+  decision: z.enum(["APPROVE", "REJECT"]),
+});
+export const assignmentResultBlockSchema = strict({
+  kind: z.literal("assignment_result"),
+  task_id: uuid,
+  task_version: z.number().int().positive(),
+  membership_id: uuid,
+  warning_codes: z.array(z.string()).default([]),
 });
 export const safeErrorBlockSchema = strict({
   kind: z.literal("safe_error"),
@@ -73,6 +96,9 @@ export const assistantBlockSchema = z.discriminatedUnion("kind", [
   planningRunBlockSchema,
   proposalBlockSchema,
   decisionResultBlockSchema,
+  teamRecommendationBlockSchema,
+  teamDecisionResultBlockSchema,
+  assignmentResultBlockSchema,
   safeErrorBlockSchema,
 ]);
 
@@ -106,17 +132,24 @@ export const assistantTurnAcceptedSchema = strict({
   status: z.literal("QUEUED"),
 });
 
+const cardActionSchema = z.discriminatedUnion("kind", [
+  strict({ kind: z.literal("PLANNING_INPUT"), workflow_run_id: uuid }),
+  strict({ kind: z.literal("PLANNING_REVISE"), workflow_run_id: uuid, proposal_id: uuid }),
+  strict({
+    kind: z.literal("TEAM_REVISE"),
+    recommendation_id: uuid,
+    recommendation_version: z.number().int().positive(),
+  }),
+]);
+export const postMessageInputSchema = strict({
+  message: z.string().min(1).max(8000),
+  locale: z.enum(["vi", "en"]),
+  card_action: cardActionSchema.optional(),
+});
+
 export type AssistantBlock = z.infer<typeof assistantBlockSchema>;
 export type AssistantConversation = z.infer<typeof conversationSchema>;
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 export type AssistantTurnAccepted = z.infer<typeof assistantTurnAcceptedSchema>;
-export type PostMessageInput = {
-  message: string;
-  locale: "vi" | "en";
-  card_action?: {
-    kind: "PLANNING_INPUT" | "PLANNING_REVISE";
-    workflow_run_id: string;
-    proposal_id?: string;
-  };
-};
+export type PostMessageInput = z.infer<typeof postMessageInputSchema>;

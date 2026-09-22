@@ -208,4 +208,32 @@ describe("Transcript", () => {
     expect(transcript.indexOf("Proposal v1")).toBeLessThan(transcript.indexOf("Extend the plan"));
     expect(transcript.indexOf("Extend the plan")).toBeLessThan(transcript.indexOf("Proposal v2"));
   });
+
+  it("renders team decisions and explicit assignments as assistant transcript blocks", () => {
+    const recommendationId = "40000000-0000-4000-8000-000000000001";
+    const messages: AssistantMessage[] = [{
+      id: "40000000-0000-4000-8000-000000000002",
+      sequence: 1,
+      role: "ASSISTANT",
+      content_blocks: [{
+        kind: "team_decision_result",
+        recommendation_id: recommendationId,
+        recommendation_version: 2,
+        decision: "APPROVE",
+      }, {
+        kind: "assignment_result",
+        task_id: "40000000-0000-4000-8000-000000000003",
+        task_version: 5,
+        membership_id: "40000000-0000-4000-8000-000000000004",
+        warning_codes: ["CAPACITY_EXCEEDED"],
+      }],
+      created_at: "2026-08-18T00:00:01Z",
+    }];
+
+    renderWithAppProviders(<Transcript messages={messages} canManage {...callbacks} />);
+
+    expect(screen.getByText("Đã phê duyệt đội ngũ · v2")).toBeVisible();
+    expect(screen.getByText("Đã giao Task · v5")).toBeVisible();
+    expect(screen.getByText("Khối lượng vượt capacity đã biết")).toBeVisible();
+  });
 });

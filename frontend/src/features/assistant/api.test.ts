@@ -90,6 +90,32 @@ describe("Assistant API", () => {
     expect(headers.get("If-Match")).toBe('"2"');
   });
 
+  it("sends the exact recommendation identity for a team revision", async () => {
+    const recommendationId = "55555555-5555-4555-8555-555555555555";
+    const fetchMock = vi.fn().mockResolvedValue(response(accepted, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await postAssistantMessage(conversationId, {
+      message: "Replace Lan with Minh because week 2 is overloaded",
+      locale: "en",
+      card_action: {
+        kind: "TEAM_REVISE",
+        recommendation_id: recommendationId,
+        recommendation_version: 3,
+      },
+    }, "team-revision-key", 3);
+
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(new Headers(request?.headers).get("If-Match")).toBe('"3"');
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      card_action: {
+        kind: "TEAM_REVISE",
+        recommendation_id: recommendationId,
+        recommendation_version: 3,
+      },
+    });
+  });
+
   it("rejects a valid-looking post response unless status is 202", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(accepted, 200)));
 
