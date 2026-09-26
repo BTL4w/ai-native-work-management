@@ -20,6 +20,65 @@ pytestmark = [
 
 
 @pytest.mark.asyncio
+async def test_tool_evidence_can_be_finalized_with_narrow_runtime_grant() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    try:
+        async with engine.connect() as connection:
+            grants = await connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.column_privileges "
+                    "WHERE table_name = 'tool_invocations' AND grantee = 'app_runtime' "
+                    "AND privilege_type = 'UPDATE'"
+                )
+            )
+            assert {row.column_name for row in grants} == {
+                "typed_output",
+                "context_references",
+                "status",
+                "safe_error_code",
+                "completed_at",
+            }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tool_terminal_guard_accepts_evidence_but_keeps_input_immutable() -> None:
+    engine = create_database_engine(Settings(environment="test"))
+    try:
+        async with engine.connect() as connection:
+            transaction = await connection.begin()
+            await connection.execute(text(
+                "CREATE TEMP TABLE tool_invocations "
+                "(id integer, status text, typed_input jsonb, typed_output jsonb, "
+                "context_references jsonb, safe_error_code text, completed_at timestamptz)"
+            ))
+            await connection.execute(text(
+                "CREATE TRIGGER guard BEFORE UPDATE ON tool_invocations "
+                "FOR EACH ROW EXECUTE FUNCTION protect_assistant_invocation_terminal()"
+            ))
+            await connection.execute(text(
+                "INSERT INTO tool_invocations "
+                "(id, status, typed_input, context_references) "
+                "VALUES (1, 'RUNNING', '{\"project_id\":\"exact\"}'::jsonb, '[]'::jsonb)"
+            ))
+            await connection.execute(text(
+                "UPDATE tool_invocations SET status='SUCCEEDED', "
+                "typed_output='{}'::jsonb, "
+                "context_references='[{\"source\":\"verified\"}]'::jsonb, "
+                "completed_at=now() WHERE id=1"
+            ))
+            with pytest.raises(DBAPIError):
+                async with connection.begin_nested():
+                    await connection.execute(text(
+                        "UPDATE tool_invocations SET typed_input='{}'::jsonb WHERE id=1"
+                    ))
+            await transaction.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_all_assistant_tables_force_rls_and_have_no_delete_grant() -> None:
     engine = create_database_engine(Settings(environment="test"))
     try:

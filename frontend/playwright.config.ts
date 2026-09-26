@@ -32,7 +32,7 @@ export default defineConfig({
         "-c \"SELECT id FROM organizations ORDER BY created_at, id LIMIT 1\"); " +
         "test -n \"$org_id\"; " +
         "export APP_DATABASE_URL=postgresql+psycopg://work_management:work_management@localhost:5432/work_management_e2e; " +
-        "export APP_AI_PROVIDER=mock; " +
+        "export APP_AI_PROVIDER=${APP_AI_PROVIDER:-mock}; " +
         "export APP_WORKER_ORGANIZATION_IDS=\"[\\\"$org_id\\\"]\"; " +
         "exec uv run python -m app.worker'",
       reuseExistingServer: false,

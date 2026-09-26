@@ -168,3 +168,50 @@ test("Assistant enforces Employee scope and completes one approval-gated Manager
   const projectsAfterRejection = await getItems<{ name: string }>(page, "/api/v1/projects");
   expect(projectsAfterRejection.filter((item) => item.name === "Proposed project")).toHaveLength(1);
 });
+
+test("combined Project and team request checkpoints approval before recommending a team", async ({ page }) => {
+  await signIn(page, "manager@example.test");
+  await page.getByRole("button", { name: "Con người & kỹ năng" }).click();
+  await expect(page.getByRole("heading", { name: "Bùi Thảo Nguyên", level: 3 })).toBeVisible();
+  if (await page.getByRole("button", { name: "Sửa Manual Testing của Bùi Thảo Nguyên" }).count() === 0) {
+    await page.getByRole("button", { name: "Thêm skill" }).click();
+    const skillDialog = page.getByRole("dialog", { name: "Thêm kỹ năng đã xác minh" });
+    await skillDialog.getByLabel("Thành viên").selectOption({ label: "Bùi Thảo Nguyên" });
+    await skillDialog.getByLabel("Skill").selectOption({ label: "Manual Testing" });
+    await skillDialog.getByLabel("Mức độ").selectOption("5");
+    await skillDialog.getByLabel("Evidence").fill("E2E verified test experience");
+    await skillDialog.getByRole("button", { name: "Lưu skill" }).click();
+  }
+  await expect(page.getByRole("button", { name: "Sửa Manual Testing của Bùi Thảo Nguyên" })).toBeVisible();
+  await openNewConversation(page);
+  await send(page, "Lập kế hoạch dự án và đề xuất đội ngũ thực hiện");
+
+  const question = page.getByRole("heading", { name: "Cần thêm thông tin" });
+  if (await question.isVisible()) {
+    await send(page, "Phạm vi dự án đã xác nhận; dùng kế hoạch minh họa.");
+  }
+  await expect(page.getByText("Proposal v1", { exact: true })).toBeVisible();
+  await expect(page.locator(".assistant-team-recommendation")).toHaveCount(0);
+  await page.getByRole("button", { name: "Phê duyệt kế hoạch" }).click();
+  await expect(page.getByRole("heading", { name: "Kết quả quyết định" })).toBeVisible();
+  await expect(page.locator(".assistant-team-recommendation")).toBeVisible();
+
+  await page.getByRole("button", { name: "Yêu cầu chỉnh đội" }).click();
+  await expect(page.getByText("Đang chỉnh đề xuất đội ngũ từ v1")).toBeVisible();
+  const selectedNam = await page.locator(".assistant-team-recommendation").getByText("Đỗ Ngọc Nam").count() > 0;
+  const oldName = selectedNam ? "Đỗ Ngọc Nam" : "Bùi Thảo Nguyên";
+  const newName = selectedNam ? "Bùi Thảo Nguyên" : "Đỗ Ngọc Nam";
+  await send(page, `Thay ${oldName} bằng ${newName} vì cần điều chỉnh đội cho kiểm thử.`);
+  await expect(page.getByRole("heading", { name: "Phiên bản 2" })).toBeVisible();
+  await expect(page.getByText("Đề xuất v1 chỉ đọc vì đã có phiên bản mới hơn.")).toBeVisible();
+  await page.getByRole("button", { name: "Phê duyệt đội ngũ" }).click();
+  await page.getByRole("button", { name: "Xác nhận" }).click();
+  await expect(page.locator(".assistant-team-recommendation").last().getByText("Đã duyệt")).toBeVisible();
+
+  const projects = await getItems<{ id: string; name: string }>(page, "/api/v1/projects");
+  const project = projects.find((item) => item.name === "Proposed project");
+  expect(project).toBeDefined();
+  const tasks = await getItems<{ assignee: unknown }>(page, `/api/v1/tasks?project_id=${project!.id}`);
+  expect(tasks.length).toBeGreaterThan(0);
+  expect(tasks.every((task) => task.assignee === null)).toBe(true);
+});

@@ -164,7 +164,7 @@ def _mock_plan() -> dict[str, object]:
                 "description": None,
                 "due_date": "2026-09-04",
                 "assignee_membership_id": None,
-                "required_skill_labels": ["planning"],
+                "required_skill_labels": ["Project Management"],
                 "estimated_effort_hours": 8,
                 "acceptance_criteria": ["Launch package is ready for review"],
             },
@@ -176,7 +176,7 @@ def _mock_plan() -> dict[str, object]:
                 "description": None,
                 "due_date": "2026-09-07",
                 "assignee_membership_id": None,
-                "required_skill_labels": ["quality review"],
+                "required_skill_labels": ["Manual Testing"],
                 "estimated_effort_hours": 4,
                 "acceptance_criteria": ["Readiness review is recorded"],
             },
@@ -306,6 +306,21 @@ class _Phase2MockModelGateway:
             )
 
         planning_available = any(is_planning_entry(item) for item in catalog)
+        def is_assignment_entry(item: object) -> bool:
+            if not isinstance(item, dict):
+                return False
+            entry = cast(dict[str, object], item)
+            capabilities = entry.get("capabilities")
+            return (
+                entry.get("agent_id") == "assignment"
+                and isinstance(capabilities, list)
+                and "assignment.recommend_team" in cast(list[object], capabilities)
+            )
+
+        assignment_available = any(is_assignment_entry(item) for item in catalog)
+        asks_for_team = any(signal in message for signal in ("project", "dự án")) and any(
+            signal in message for signal in ("team", "đội ngũ", "nhóm", "nhân sự")
+        )
         asks_for_planning = any(
             signal in message
             for signal in (
@@ -326,20 +341,34 @@ class _Phase2MockModelGateway:
                 "response_language": locale,
             }
         if asks_for_planning:
-            return {
-                "objectives": [message or "create a Project plan"],
-                "steps": [
+            steps: list[dict[str, object]] = [
+                {
+                    "step_id": "create_plan",
+                    "target_agent_id": "planning",
+                    "target_agent_version": "1.0.0",
+                    "capability": "planning.create",
+                    "objective": message or "create a Project plan",
+                    "typed_input": {},
+                    "depends_on": [],
+                    "mode": "PROPOSAL",
+                }
+            ]
+            if asks_for_team and assignment_available:
+                steps.append(
                     {
-                        "step_id": "create_plan",
-                        "target_agent_id": "planning",
+                        "step_id": "recommend_team",
+                        "target_agent_id": "assignment",
                         "target_agent_version": "1.0.0",
-                        "capability": "planning.create",
-                        "objective": message or "create a Project plan",
+                        "capability": "assignment.recommend_team",
+                        "objective": "Recommend a Project Team after Project approval",
                         "typed_input": {},
-                        "depends_on": [],
+                        "depends_on": ["create_plan"],
                         "mode": "PROPOSAL",
                     }
-                ],
+                )
+            return {
+                "objectives": [message or "create a Project plan"],
+                "steps": steps,
                 "unavailable_capabilities": [],
                 "response_language": locale,
             }

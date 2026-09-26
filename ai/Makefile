@@ -23,5 +23,6 @@ test:
 
 eval:
 	$(UV) run --locked python -m work_management_ai.evaluation.phase2_multi_agent
+	$(UV) run --locked python -m work_management_ai.evaluation.phase3_assignment
 
 check: lint format-check typecheck test eval
